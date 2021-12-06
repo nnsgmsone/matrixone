@@ -130,6 +130,7 @@ Warning: The pipeline is the multi-thread environment. The getDataFromPipeline w
 	access the shared data. Be careful when it writes the shared data.
 */
 func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
+	return nil
 	rt := obj.(*Routine)
 	ses := rt.GetSession()
 
