@@ -2103,11 +2103,14 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) error {
 	//step1: check roles exists or not.
 	//handle "IF EXISTS"
 	for _, role := range dr.Roles {
-		if role.UserName == "role_r2" || role.UserName == "role_u2" {
+		if role.UserName == "role_r2" || role.UserName == "role_r1" {
 			old := bh.(*BackgroundHandler)
 			fmt.Printf("old: %v\n", old.ses.GetTxnHandler().GetTxnOperator().Txn().SnapshotTS)
 			bh.Exec(ctx, "select * from mo_catalog.mo_role where role_name = 'role_r2';")
 			results := bh.GetExecResultSet()
+			{
+				fmt.Printf("+++results: %v\n", len(results))
+			}
 			for i, r := range results {
 				mr := r.(*MysqlResultSet)
 				fmt.Printf("\t[%v] = %v\n", i, mr.Name2Index)
