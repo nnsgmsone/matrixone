@@ -2155,7 +2155,11 @@ handleFailed:
 			bh.Exec(ctx, "select * from mo_catalog.mo_role")
 			results := bh.GetExecResultSet()
 			for i, r := range results {
-				fmt.Printf("\t[%v] = %T, %v\n", i, r, r)
+				mr := r.(*MysqlResultSet)
+				fmt.Printf("\t[%v] = %v\n", i, mr.Name2Index)
+				for j, d := range mr.Data {
+					fmt.Printf("\t\t[%v] = %v\n", j, d)
+				}
 			}
 			if role.UserName == "role_r2" || role.UserName == "role_u2" {
 				os.Exit(0)
