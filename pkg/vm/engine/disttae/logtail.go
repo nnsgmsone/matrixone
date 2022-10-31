@@ -100,7 +100,9 @@ func consumerEntry(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 			}
 			vs := vector.MustTCols[uint64](vec)
 			{
-				fmt.Printf("++++insert block: %v: %v\n", e.TableName, vs)
+				vec0, _ := vector.ProtoVectorToVector(e.Bat.Vecs[0])
+				ids := vector.MustTCols[types.Rowid](vec0)
+				fmt.Printf("++++insert block: %v: %v\n\tids: %v\n", e.TableName, vs, ids)
 			}
 			timestamps := vector.MustTCols[types.TS](timeVec)
 			for i, v := range vs {
@@ -137,6 +139,9 @@ func consumerEntry(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 		return mvcc.Insert(ctx, primaryIdx, e.Bat, false)
 	}
 	if isMetaTable(e.TableName) {
+		vec0, _ := vector.ProtoVectorToVector(e.Bat.Vecs[0])
+		ids := vector.MustTCols[types.Rowid](vec0)
+		fmt.Printf("++++delete block %v\n", ids)
 		return db.getMetaPartitions(e.TableName)[idx].Delete(ctx, e.Bat)
 	}
 	{
