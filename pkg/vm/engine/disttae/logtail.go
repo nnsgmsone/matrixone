@@ -16,10 +16,12 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -105,6 +107,20 @@ func consumerEntry(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 			}
 			return db.getMetaPartitions(e.TableName)[idx].Insert(ctx, -1, e.Bat, false)
 		}
+		{
+			if e.TableName == "mo_role" {
+				bat, _ := batch.ProtoBatchToBatch(e.Bat)
+				fmt.Printf("++++insert %v\n", bat.Attrs)
+				for i, vec := range bat.Vecs {
+					if vec.Typ.IsVarlen() {
+						vs := vector.MustStrCols(vec)
+						fmt.Printf("\t[%v] = %v", i, vs)
+					} else {
+						fmt.Printf("\t[%v] = %v", i, vec)
+					}
+				}
+			}
+		}
 		if primaryIdx >= 0 {
 			return mvcc.Insert(ctx, MO_PRIMARY_OFF+primaryIdx, e.Bat, false)
 		}
@@ -112,6 +128,20 @@ func consumerEntry(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 	}
 	if isMetaTable(e.TableName) {
 		return db.getMetaPartitions(e.TableName)[idx].Delete(ctx, e.Bat)
+	}
+	{
+		if e.TableName == "mo_role" {
+			bat, _ := batch.ProtoBatchToBatch(e.Bat)
+			fmt.Printf("++++delete %v\n", bat.Attrs)
+			for i, vec := range bat.Vecs {
+				if vec.Typ.IsVarlen() {
+					vs := vector.MustStrCols(vec)
+					fmt.Printf("\t[%v] = %v", i, vs)
+				} else {
+					fmt.Printf("\t[%v] = %v", i, vec)
+				}
+			}
+		}
 	}
 	return mvcc.Delete(ctx, e.Bat)
 }

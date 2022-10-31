@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"math/rand"
 	"strconv"
 
@@ -278,6 +279,11 @@ func (tbl *table) Update(ctx context.Context, bat *batch.Batch) error {
 }
 
 func (tbl *table) Delete(ctx context.Context, bat *batch.Batch, name string) error {
+	{
+		if tbl.tableName == "mo_role" {
+			fmt.Printf("+++begin delete: %v\n", bat.Vecs[0])
+		}
+	}
 
 	bat.SetAttributes([]string{catalog.Row_ID})
 	bat = tbl.db.txn.deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
