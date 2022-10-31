@@ -141,7 +141,7 @@ func consumerEntry(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 	if isMetaTable(e.TableName) {
 		vec0, _ := vector.ProtoVectorToVector(e.Bat.Vecs[0])
 		ids := vector.MustTCols[types.Rowid](vec0)
-		fmt.Printf("++++delete block %v\n", ids)
+		fmt.Printf("++++delete %v block %v\n", e.TableName, ids)
 		return db.getMetaPartitions(e.TableName)[idx].Delete(ctx, e.Bat)
 	}
 	{
