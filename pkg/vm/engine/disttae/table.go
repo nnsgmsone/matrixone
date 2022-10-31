@@ -126,6 +126,9 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 		tbl.meta.modifedBlocks[i] = genModifedBlocks(ctx, deletes,
 			tbl.meta.blocks[i], blks, expr, tbl.getTableDef(), tbl.proc)
 	}
+	if tbl.tableName == "mo_role" {
+		fmt.Printf("++++ranges: %v\n", ranges)
+	}
 	return ranges, nil
 }
 
