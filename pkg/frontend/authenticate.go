@@ -2103,6 +2103,10 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) error {
 	//step1: check roles exists or not.
 	//handle "IF EXISTS"
 	for _, role := range dr.Roles {
+		if role.UserName == "role_r2" || role.UserName == "role_u2" {
+			old := bh.(*BackgroundHandler)
+			fmt.Printf("old: %v\n", old.ses.GetTxnHandler().GetTxnOperator().Txn().SnapshotTS)
+		}
 		sql := getSqlForRoleIdOfRole(role.UserName)
 		vr, err = verifyRoleFunc(ctx, bh, sql, role.UserName, roleType)
 		if err != nil {
@@ -2153,11 +2157,9 @@ handleFailed:
 		fmt.Printf("+++++failed to drop role: %v\n", err)
 		for _, role := range dr.Roles {
 			if role.UserName == "role_r2" || role.UserName == "role_u2" {
-				old := bh.(*BackgroundHandler)
-				fmt.Printf("old: %v\n", old.ses.GetTxnHandler().GetTxnOperator().Txn().SnapshotTS)
 				bh0 := ses.GetBackgroundExec(ctx)
 				old1 := bh0.(*BackgroundHandler)
-				fmt.Printf("old1: %v\n", old1.ses.GetTxnHandler().GetTxnOperator().Txn().SnapshotTS)
+				fmt.Printf("new: %v\n", old1.ses.GetTxnHandler().GetTxnOperator().Txn().SnapshotTS)
 				bh0.Exec(ctx, "select * from mo_catalog.mo_role where role_name = 'role_r2'")
 				results := bh0.GetExecResultSet()
 				for i, r := range results {
