@@ -2153,8 +2153,12 @@ handleFailed:
 		fmt.Printf("+++++failed to drop role: %v\n", err)
 		for _, role := range dr.Roles {
 			if role.UserName == "role_r2" || role.UserName == "role_u2" {
+				old := bh.(*BackgroundHandler)
+				fmt.Printf("old: %v\n", old.ses.GetTxnHandler().GetTxnOperator().Txn().SnapshotTS)
 				bh0 := ses.GetBackgroundExec(ctx)
-				bh0.Exec(ctx, "select * from mo_catalog.mo_role")
+				old1 := bh0.(*BackgroundHandler)
+				fmt.Printf("old1: %v\n", old1.ses.GetTxnHandler().GetTxnOperator().Txn().SnapshotTS)
+				bh0.Exec(ctx, "select * from mo_catalog.mo_role where role_name = 'role_r2'")
 				results := bh0.GetExecResultSet()
 				for i, r := range results {
 					mr := r.(*MysqlResultSet)
