@@ -2106,6 +2106,24 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) error {
 		if role.UserName == "role_r2" || role.UserName == "role_u2" {
 			old := bh.(*BackgroundHandler)
 			fmt.Printf("old: %v\n", old.ses.GetTxnHandler().GetTxnOperator().Txn().SnapshotTS)
+			bh.Exec(ctx, "select * from mo_catalog.mo_role where role_name = 'role_r2';")
+			results := bh.GetExecResultSet()
+			for i, r := range results {
+				mr := r.(*MysqlResultSet)
+				fmt.Printf("\t[%v] = %v\n", i, mr.Name2Index)
+				for j, d := range mr.Data {
+					vs := make([]any, len(d))
+					for k, v := range d {
+						if _, ok := v.([]byte); ok {
+							vs[k] = string(v.([]byte))
+						} else {
+							vs[k] = v
+						}
+					}
+					fmt.Printf("\t\t[%v] = %v\n", j, vs)
+				}
+			}
+
 		}
 		sql := getSqlForRoleIdOfRole(role.UserName)
 		vr, err = verifyRoleFunc(ctx, bh, sql, role.UserName, roleType)
