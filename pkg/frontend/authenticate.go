@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -1606,6 +1607,9 @@ func verifyRoleFunc(ctx context.Context, bh BackgroundExec, sql, name string, ty
 	}
 
 	erArray, err = getResultSet(bh)
+	{
+		fmt.Printf("++++erArry: %v: %v\n", erArray, err)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -2141,6 +2145,7 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) error {
 handleFailed:
 	{
 		fmt.Printf("+++++failed to drop role: %v\n", err)
+		os.Exit(0)
 	}
 	//ROLLBACK the transaction
 	rbErr := bh.Exec(ctx, "rollback;")
