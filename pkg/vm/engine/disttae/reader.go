@@ -15,6 +15,7 @@
 package disttae
 
 import (
+	"bytes"
 	"fmt"
 	"sort"
 
@@ -45,16 +46,18 @@ func (r *blockReader) Read(cols []string, expr *plan.Expr, m *mpool.MPool) (*bat
 	bat, err := blockio.BlockRead(r.ctx, cols, r.tableDef, r.blks[0].Info.MetaLoc,
 		r.blks[0].Info.DeltaLoc, r.ts, r.fs, m)
 	{
-		fmt.Printf("++++block read %v: %v\n", r.blks[0].Info, bat.Attrs)
+		var buf bytes.Buffer
+
+		buf.WriteString(fmt.Sprintf("++++block read %v: %v\n", r.blks[0].Info, bat.Attrs))
 		for i, vec := range bat.Vecs {
 			if vec.Typ.IsVarlen() {
 				vs := vector.MustStrCols(vec)
-				fmt.Printf("\t[%v] = %v\n", i, vs)
+				buf.WriteString(fmt.Sprintf("\t[%v] = %v\n", i, vs))
 			} else {
-				fmt.Printf("\t[%v] = %v\n", i, vec)
+				buf.WriteString(fmt.Sprintf("\t[%v] = %v\n", i, vec))
 			}
 		}
-
+		fmt.Printf("%s", buf.String())
 	}
 	return bat, err
 }
