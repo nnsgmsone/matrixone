@@ -121,13 +121,14 @@ func consumerEntry(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 					} else {
 						fmt.Printf("\t[%v] = %v\n", i, vec)
 					}
-					mp := make(map[uint64]uint8)
-					vs := vector.MustTCols[types.Rowid](bat.Vecs[0])
-					for _, v := range vs {
-						mp[rowIDToBlockID(RowID(v))] = 0
-					}
-					fmt.Printf("++++insert blockid: %v\n", mp)
 				}
+				mp := make(map[uint64]uint8)
+				vs := vector.MustTCols[types.Rowid](bat.Vecs[0])
+				for _, v := range vs {
+					mp[rowIDToBlockID(RowID(v))] = 0
+				}
+				fmt.Printf("++++insert blockid: %v\n", mp)
+
 			}
 		}
 		if primaryIdx >= 0 {
