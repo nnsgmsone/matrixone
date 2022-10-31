@@ -20,7 +20,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"math"
 	"os"
 	"reflect"
@@ -30,6 +29,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -2219,6 +2220,9 @@ var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *
 	var stmts []tree.Statement = nil
 	var cmdFieldStmt *InternalCmdFieldList
 	var err error
+	{
+		fmt.Printf("+++parsee %s\n", sql)
+	}
 	if isCmdFieldListSql(sql) {
 		cmdFieldStmt, err = parseCmdFieldList(sql)
 		if err != nil {
