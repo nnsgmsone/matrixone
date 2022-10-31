@@ -99,6 +99,9 @@ func consumerEntry(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 				return err
 			}
 			vs := vector.MustTCols[uint64](vec)
+			{
+				fmt.Printf("++++insert block: %v: %v\n", e.TableName, vs)
+			}
 			timestamps := vector.MustTCols[types.TS](timeVec)
 			for i, v := range vs {
 				if err := tbl.parts[idx].DeleteByBlockID(ctx, timestamps[i].ToTimestamp(), v); err != nil {
@@ -110,14 +113,20 @@ func consumerEntry(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 		{
 			if e.TableName == "mo_role" {
 				bat, _ := batch.ProtoBatchToBatch(e.Bat)
-				fmt.Printf("++++insert %v\n", bat.Attrs)
+				fmt.Printf("++++insert %v: %v\n", bat.Attrs, e.TableId)
 				for i, vec := range bat.Vecs {
 					if vec.Typ.IsVarlen() {
 						vs := vector.MustStrCols(vec)
-						fmt.Printf("\t[%v] = %v", i, vs)
+						fmt.Printf("\t[%v] = %v\n", i, vs)
 					} else {
-						fmt.Printf("\t[%v] = %v", i, vec)
+						fmt.Printf("\t[%v] = %v\n", i, vec)
 					}
+					mp := make(map[uint64]uint8)
+					vs := vector.MustTCols[types.Rowid](bat.Vecs[0])
+					for _, v := range vs {
+						mp[rowIDToBlockID(RowID(v))] = 0
+					}
+					fmt.Printf("++++insert blockid: %v\n", mp)
 				}
 			}
 		}
@@ -136,11 +145,17 @@ func consumerEntry(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 			for i, vec := range bat.Vecs {
 				if vec.Typ.IsVarlen() {
 					vs := vector.MustStrCols(vec)
-					fmt.Printf("\t[%v] = %v", i, vs)
+					fmt.Printf("\t[%v] = %v\n", i, vs)
 				} else {
-					fmt.Printf("\t[%v] = %v", i, vec)
+					fmt.Printf("\t[%v] = %v\n", i, vec)
 				}
 			}
+			mp := make(map[uint64]uint8)
+			vs := vector.MustTCols[types.Rowid](bat.Vecs[0])
+			for _, v := range vs {
+				mp[rowIDToBlockID(RowID(v))] = 0
+			}
+			fmt.Printf("++++delete blockid: %v\n", mp)
 		}
 	}
 	return mvcc.Delete(ctx, e.Bat)
