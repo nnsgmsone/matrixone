@@ -2151,7 +2151,11 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) error {
 handleFailed:
 	{
 		fmt.Printf("+++++failed to drop role: %v\n", err)
-		os.Exit(0)
+		for _, role := range dr.Roles {
+			if role.UserName == "role_r2" || role.UserName == "role_u2" {
+				os.Exit(0)
+			}
+		}
 	}
 	//ROLLBACK the transaction
 	rbErr := bh.Exec(ctx, "rollback;")
