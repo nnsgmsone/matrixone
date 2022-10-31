@@ -2220,9 +2220,6 @@ var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *
 	var stmts []tree.Statement = nil
 	var cmdFieldStmt *InternalCmdFieldList
 	var err error
-	{
-		fmt.Printf("+++parsee %s\n", sql)
-	}
 	if isCmdFieldListSql(sql) {
 		cmdFieldStmt, err = parseCmdFieldList(sql)
 		if err != nil {

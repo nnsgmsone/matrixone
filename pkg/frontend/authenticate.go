@@ -2152,6 +2152,11 @@ handleFailed:
 	{
 		fmt.Printf("+++++failed to drop role: %v\n", err)
 		for _, role := range dr.Roles {
+			bh.Exec(ctx, "select * from mo_catalog.mo_role")
+			results := bh.GetExecResultSet()
+			for i, r := range results {
+				fmt.Printf("\t[%v] = %v\n", i, r)
+			}
 			if role.UserName == "role_r2" || role.UserName == "role_u2" {
 				os.Exit(0)
 			}
