@@ -17,6 +17,7 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -357,6 +358,9 @@ func (p *Partition) DeleteByBlockID(ctx context.Context, ts timestamp.Timestamp,
 	defer iter.Close()
 	for ok := iter.First(); ok; ok = iter.Next() {
 		entry := iter.Item()
+		{
+			fmt.Printf("\t++++deletebyblkid: %v: %v\n", blockID, entry.Key)
+		}
 		if err := p.data.Delete(tx, entry.Key); err != nil {
 			return err
 		}
