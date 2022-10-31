@@ -17,12 +17,13 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"math"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 
@@ -2138,6 +2139,9 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) error {
 	return err
 
 handleFailed:
+	{
+		fmt.Printf("+++++failed to drop role: %v\n", err)
+	}
 	//ROLLBACK the transaction
 	rbErr := bh.Exec(ctx, "rollback;")
 	if rbErr != nil {
