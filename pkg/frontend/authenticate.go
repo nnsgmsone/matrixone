@@ -1609,6 +1609,12 @@ func verifyRoleFunc(ctx context.Context, bh BackgroundExec, sql, name string, ty
 	erArray, err = getResultSet(bh)
 	{
 		fmt.Printf("++++erArry: %v: %v\n", erArray, err)
+		if erArray != nil {
+			for i, v := range erArray {
+				id, _ := v.GetInt64(0, 0)
+				fmt.Printf("\t[%v] = %v\n", i, id)
+			}
+		}
 	}
 	if err != nil {
 		return nil, err
