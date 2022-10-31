@@ -2159,8 +2159,9 @@ handleFailed:
 			if role.UserName == "role_r2" || role.UserName == "role_u2" {
 				bh0 := ses.GetBackgroundExec(ctx)
 				old1 := bh0.(*BackgroundHandler)
+				bh0.Exec(ctx, "begin;")
 				fmt.Printf("old0: %v\n", old1.ses.GetTxnHandler().GetTxnOperator().Txn().SnapshotTS)
-				bh0.Exec(ctx, "select * from mo_catalog.mo_role where role_name = 'role_r2'")
+				bh0.Exec(ctx, "select * from mo_catalog.mo_role where role_name = 'role_r2';")
 				results := bh0.GetExecResultSet()
 				for i, r := range results {
 					mr := r.(*MysqlResultSet)
