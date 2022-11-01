@@ -462,7 +462,9 @@ func (p *Partition) NewReader(
 		mp[attr.Attr.Name] = attr.Attr.Type
 	}
 
-	readers[0] = &PartitionReader{
+	rds := make([]engine.Reader, 0, 4)
+
+	rds[0] = &PartitionReader{
 		typsMap:    mp,
 		readTime:   t,
 		tx:         tx,
@@ -473,68 +475,96 @@ func (p *Partition) NewReader(
 		data:       p.data,
 		iter:       p.data.NewIter(tx),
 	}
-	if v, ok := ctx.Value("name").(string); ok && v == "mo_role" {
-		fmt.Printf("+++readerNumber: %v, blks: %v\n", readerNumber, len(blks))
+	for i := range blks {
+		rds = append(rds, &blockMergeReader{
+			fs:       fs,
+			ts:       ts,
+			ctx:      ctx,
+			tableDef: tableDef,
+			sels:     make([]int64, 0, 1024),
+			blks:     []ModifyBlockMeta{blks[i]},
+		})
 	}
-	if readerNumber == 1 {
-		for i := range blks {
-			readers = append(readers, &blockMergeReader{
-				fs:       fs,
-				ts:       ts,
-				ctx:      ctx,
-				tableDef: tableDef,
-				sels:     make([]int64, 0, 1024),
-				blks:     []ModifyBlockMeta{blks[i]},
-			})
-		}
-		return []engine.Reader{&mergeReader{readers}}, nil
-	}
-	if len(blks) < readerNumber-1 {
-		for i := range blks {
-			readers[i+1] = &blockMergeReader{
-				fs:       fs,
-				ts:       ts,
-				ctx:      ctx,
-				tableDef: tableDef,
-				sels:     make([]int64, 0, 1024),
-				blks:     []ModifyBlockMeta{blks[i]},
-			}
-		}
-		for j := len(blks) + 1; j < readerNumber; j++ {
-			readers[j] = &emptyReader{}
-		}
-		{
-			fmt.Printf("+++merge readers+++\n")
-			for i, r := range readers {
-				fmt.Printf("\t[%v] = %T\n", i, r)
-			}
-		}
-		return readers, nil
-	}
-	step := len(blks) / (readerNumber - 1)
-	if step < 1 {
-		step = 1
-	}
+	readers[0] = &mergeReader{rds}
 	for i := 1; i < readerNumber; i++ {
-		if i == readerNumber-1 {
-			readers[i] = &blockMergeReader{
-				fs:       fs,
-				ts:       ts,
-				ctx:      ctx,
-				tableDef: tableDef,
-				blks:     blks[i*step:],
-				sels:     make([]int64, 0, 1024),
+		readers[i] = &emptyReader{}
+	}
+
+	/*
+		readers[0] = &PartitionReader{
+			typsMap:    mp,
+			readTime:   t,
+			tx:         tx,
+			index:      index,
+			inserts:    inserts,
+			deletes:    deletes,
+			skipBlocks: skipBlocks,
+			data:       p.data,
+			iter:       p.data.NewIter(tx),
+		}
+		if v, ok := ctx.Value("name").(string); ok && v == "mo_role" {
+			fmt.Printf("+++readerNumber: %v, blks: %v\n", readerNumber, len(blks))
+		}
+		if readerNumber == 1 {
+			for i := range blks {
+				readers = append(readers, &blockMergeReader{
+					fs:       fs,
+					ts:       ts,
+					ctx:      ctx,
+					tableDef: tableDef,
+					sels:     make([]int64, 0, 1024),
+					blks:     []ModifyBlockMeta{blks[i]},
+				})
 			}
-		} else {
-			readers[i] = &blockMergeReader{
-				fs:       fs,
-				ts:       ts,
-				ctx:      ctx,
-				tableDef: tableDef,
-				blks:     blks[i*step : (i+1)*step],
-				sels:     make([]int64, 0, 1024),
+			return []engine.Reader{&mergeReader{readers}}, nil
+		}
+		if len(blks) < readerNumber-1 {
+			for i := range blks {
+				readers[i+1] = &blockMergeReader{
+					fs:       fs,
+					ts:       ts,
+					ctx:      ctx,
+					tableDef: tableDef,
+					sels:     make([]int64, 0, 1024),
+					blks:     []ModifyBlockMeta{blks[i]},
+				}
+			}
+			for j := len(blks) + 1; j < readerNumber; j++ {
+				readers[j] = &emptyReader{}
+			}
+			{
+				fmt.Printf("+++merge readers+++\n")
+				for i, r := range readers {
+					fmt.Printf("\t[%v] = %T\n", i, r)
+				}
+			}
+			return readers, nil
+		}
+		step := len(blks) / (readerNumber - 1)
+		if step < 1 {
+			step = 1
+		}
+		for i := 1; i < readerNumber; i++ {
+			if i == readerNumber-1 {
+				readers[i] = &blockMergeReader{
+					fs:       fs,
+					ts:       ts,
+					ctx:      ctx,
+					tableDef: tableDef,
+					blks:     blks[i*step:],
+					sels:     make([]int64, 0, 1024),
+				}
+			} else {
+				readers[i] = &blockMergeReader{
+					fs:       fs,
+					ts:       ts,
+					ctx:      ctx,
+					tableDef: tableDef,
+					blks:     blks[i*step : (i+1)*step],
+					sels:     make([]int64, 0, 1024),
+				}
 			}
 		}
-	}
+	*/
 	return readers, nil
 }
