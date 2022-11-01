@@ -78,6 +78,10 @@ func (r *blockMergeReader) Read(cols []string, expr *plan.Expr, m *mpool.MPool) 
 	}
 	r.sels = r.sels[:0]
 	sort.Ints(r.blks[0].deletes)
+	var deletes []int
+	{
+		deletes = append(deletes, r.blks[0].deletes...)
+	}
 	for i := 0; i < bat.Length(); i++ {
 		if len(r.blks[0].deletes) > 0 && i == r.blks[0].deletes[0] {
 			r.blks[0].deletes = r.blks[0].deletes[1:]
@@ -85,6 +89,22 @@ func (r *blockMergeReader) Read(cols []string, expr *plan.Expr, m *mpool.MPool) 
 		}
 		r.sels = append(r.sels, int64(i))
 	}
+	{
+		var buf bytes.Buffer
+
+		buf.WriteString(fmt.Sprintf("++++block merge read %v: %v\n", r.blks[0].meta.Info, bat.Attrs))
+		buf.WriteString(fmt.Sprintf("\tsels: %v, deletes: %v\n", r.sels, deletes))
+		for i, vec := range bat.Vecs {
+			if vec.Typ.IsVarlen() {
+				vs := vector.MustStrCols(vec)
+				buf.WriteString(fmt.Sprintf("\t[%v] = %v\n", i, vs))
+			} else {
+				buf.WriteString(fmt.Sprintf("\t[%v] = %v\n", i, vec))
+			}
+		}
+		fmt.Printf("%s", buf.String())
+	}
+
 	bat.Shrink(r.sels)
 	return bat, nil
 }
