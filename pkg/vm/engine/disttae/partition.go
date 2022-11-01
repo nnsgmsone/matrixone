@@ -500,6 +500,12 @@ func (p *Partition) NewReader(
 		for j := len(blks) + 1; j < readerNumber; j++ {
 			readers[j] = &emptyReader{}
 		}
+		{
+			fmt.Printf("+++merge readers+++\n")
+			for i, r := range readers {
+				fmt.Printf("\t[%v] = %T\n", i, r)
+			}
+		}
 		return readers, nil
 	}
 	step := len(blks) / (readerNumber - 1)
