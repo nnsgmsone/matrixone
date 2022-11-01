@@ -422,6 +422,9 @@ func (tbl *table) newMergeReader(ctx context.Context, num int,
 		if tbl.meta != nil {
 			blks = tbl.meta.modifedBlocks[i]
 		}
+		if tbl.tableName == "mo_role" {
+			fmt.Printf("++++merge blocks: %v\n", len(blks))
+		}
 		rds0, err := tbl.parts[i].NewReader(ctx, num, index, tbl.defs, tbl.tableDef,
 			tbl.skipBlocks, blks, tbl.db.txn.meta.SnapshotTS, tbl.db.fs, writes)
 		if err != nil {
