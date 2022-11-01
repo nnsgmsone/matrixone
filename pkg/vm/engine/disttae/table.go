@@ -130,7 +130,7 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 		parts := tbl.db.txn.db.getPartitions(tbl.db.databaseId, tbl.tableId)
 		fmt.Printf("++++ranges: %v: %v-%v\n", len(ranges), parts[0].ts, tbl.db.txn.meta.SnapshotTS)
 		fmt.Printf("++++ranges-blocks: %v\n", len(tbl.meta.blocks[0]))
-		fmt.Printf("++++ranges-modify-blocks: %v\n", len(tbl.meta.modifedBlocks[0]))
+		fmt.Printf("++++ranges-modif-blocks: %v\n", len(tbl.meta.modifedBlocks[0]))
 	}
 	return ranges, nil
 }
