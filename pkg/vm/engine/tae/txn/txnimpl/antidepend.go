@@ -152,7 +152,7 @@ func (checker *warChecker) check() (err error) {
 			if entry.DeleteBefore(commitTs) {
 				entry.RUnlock()
 				{
-					fmt.Printf("+++++++find rw conflict\n")
+					fmt.Printf("+++++++find rw conflict++\n")
 				}
 				return moerr.NewTxnRWConflict()
 			}
