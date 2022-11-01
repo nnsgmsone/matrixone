@@ -127,7 +127,8 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 			tbl.meta.blocks[i], blks, expr, tbl.getTableDef(), tbl.proc)
 	}
 	if tbl.tableName == "mo_role" {
-		fmt.Printf("++++ranges: %v\n", ranges)
+		parts := tbl.db.txn.db.getPartitions(tbl.db.databaseId, tbl.tableId)
+		fmt.Printf("++++ranges: %v: %v-%v\n", len(ranges), parts[0].ts, tbl.db.txn.meta.SnapshotTS)
 	}
 	return ranges, nil
 }
