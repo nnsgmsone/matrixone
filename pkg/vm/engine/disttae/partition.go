@@ -473,8 +473,8 @@ func (p *Partition) NewReader(
 		data:       p.data,
 		iter:       p.data.NewIter(tx),
 	}
-	{
-		fmt.Printf("+++readNumber: %v, blks: %v\n", readerNumber, len(blks))
+	if v, ok := ctx.Value("name").(string); ok && v == "mo_role" {
+		fmt.Printf("+++readerNumber: %v, blks: %v\n", readerNumber, len(blks))
 	}
 	if readerNumber == 1 {
 		for i := range blks {
