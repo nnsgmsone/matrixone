@@ -2126,7 +2126,6 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) error {
 					fmt.Printf("\t\t[%v] = %v\n", j, vs)
 				}
 			}
-
 		}
 		sql := getSqlForRoleIdOfRole(role.UserName)
 		vr, err = verifyRoleFunc(ctx, bh, sql, role.UserName, roleType)

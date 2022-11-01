@@ -102,10 +102,20 @@ func (r *blockMergeReader) Read(cols []string, expr *plan.Expr, m *mpool.MPool) 
 				buf.WriteString(fmt.Sprintf("\t[%v] = %v\n", i, vec))
 			}
 		}
+		bat.Shrink(r.sels)
+		buf.WriteString(fmt.Sprintf("+++++after shinkr\n"))
+		for i, vec := range bat.Vecs {
+			if vec.Typ.IsVarlen() {
+				vs := vector.MustStrCols(vec)
+				buf.WriteString(fmt.Sprintf("\t[%v] = %v\n", i, vs))
+			} else {
+				buf.WriteString(fmt.Sprintf("\t[%v] = %v\n", i, vec))
+			}
+		}
 		fmt.Printf("%s", buf.String())
 	}
 
-	bat.Shrink(r.sels)
+	//	bat.Shrink(r.sels)
 	return bat, nil
 }
 
