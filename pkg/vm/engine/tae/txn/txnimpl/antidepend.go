@@ -15,8 +15,6 @@
 package txnimpl
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -151,9 +149,6 @@ func (checker *warChecker) check() (err error) {
 			}
 			if entry.DeleteBefore(commitTs) {
 				entry.RUnlock()
-				{
-					fmt.Printf("+++++++find rw conflict++\n")
-				}
 				return moerr.NewTxnRWConflict()
 			}
 			entry.RUnlock()
