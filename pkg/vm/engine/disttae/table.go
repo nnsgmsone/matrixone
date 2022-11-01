@@ -106,6 +106,7 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 			return nil, err
 		}
 		tbl.meta = meta
+		tbl.updated = true
 	}
 	ranges := make([][]byte, 0, 1)
 	ranges = append(ranges, []byte{})
