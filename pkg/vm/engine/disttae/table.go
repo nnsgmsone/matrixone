@@ -299,17 +299,19 @@ func (tbl *table) Update(ctx context.Context, bat *batch.Batch) error {
 }
 
 func (tbl *table) Delete(ctx context.Context, bat *batch.Batch, name string) error {
-	{
-		if tbl.tableName == "mo_role" {
-			mp := make(map[uint64]uint8)
-			vs := vector.MustTCols[types.Rowid](bat.Vecs[0])
-			fmt.Printf("+++begin table delete %v: %v\n", tbl.tableId, bat.Vecs[0])
-			for _, v := range vs {
-				mp[rowIDToBlockID(RowID(v))] = 0
+	/*
+		{
+			if tbl.tableName == "mo_role" {
+				mp := make(map[uint64]uint8)
+				vs := vector.MustTCols[types.Rowid](bat.Vecs[0])
+				fmt.Printf("+++begin table delete %v: %v\n", tbl.tableId, bat.Vecs[0])
+				for _, v := range vs {
+					mp[rowIDToBlockID(RowID(v))] = 0
+				}
+				fmt.Printf("+++++table delete blockid: %v\n", mp)
 			}
-			fmt.Printf("+++++table delete blockid: %v\n", mp)
 		}
-	}
+	*/
 
 	bat.SetAttributes([]string{catalog.Row_ID})
 	bat = tbl.db.txn.deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
