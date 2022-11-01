@@ -16,6 +16,7 @@ package colexec
 
 import (
 	"context"
+	"fmt"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -57,6 +58,9 @@ func UpdateInsertBatch(e engine.Engine, ctx context.Context, proc *process.Proce
 
 	offset, step, err := getRangeFromAutoIncrTable(incrParam, bat, tableID)
 	if err != nil {
+		{
+			fmt.Printf("+++++failed to update auto: %v.%v: %v\n", dbName, tblName, err)
+		}
 		return err
 	}
 
