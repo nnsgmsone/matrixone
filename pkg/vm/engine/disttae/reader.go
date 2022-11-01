@@ -89,21 +89,21 @@ func (r *blockMergeReader) Read(cols []string, expr *plan.Expr, m *mpool.MPool) 
 		}
 		r.sels = append(r.sels, int64(i))
 	}
-	{
-		var buf bytes.Buffer
+	fmt.Printf("++++block merge read %v: %v: %v\n", r.blks[0].meta.Info, bat.Attrs, r.sels)
+	/*
+		{
+			var buf bytes.Buffer
 
-		buf.WriteString(fmt.Sprintf("++++block merge read %v: %v\n", r.blks[0].meta.Info, bat.Attrs))
-		buf.WriteString(fmt.Sprintf("\tsels: %v, deletes: %v\n", r.sels, deletes))
-		for i, vec := range bat.Vecs {
-			if vec.Typ.IsVarlen() {
-				vs := vector.MustStrCols(vec)
-				buf.WriteString(fmt.Sprintf("\t[%v] = %v\n", i, vs))
-			} else {
-				buf.WriteString(fmt.Sprintf("\t[%v] = %v\n", i, vec))
+			buf.WriteString(fmt.Sprintf("++++block merge read %v: %v\n", r.blks[0].meta.Info, bat.Attrs))
+			buf.WriteString(fmt.Sprintf("\tsels: %v, deletes: %v\n", r.sels, deletes))
+			for i, vec := range bat.Vecs {
+				if vec.Typ.IsVarlen() {
+					vs := vector.MustStrCols(vec)
+					buf.WriteString(fmt.Sprintf("\t[%v] = %v\n", i, vs))
+				} else {
+					buf.WriteString(fmt.Sprintf("\t[%v] = %v\n", i, vec))
+				}
 			}
-		}
-		bat.Shrink(r.sels)
-		/*
 			buf.WriteString(fmt.Sprintf("+++++after shinkr\n"))
 			for i, vec := range bat.Vecs {
 				if vec.Typ.IsVarlen() {
@@ -113,11 +113,11 @@ func (r *blockMergeReader) Read(cols []string, expr *plan.Expr, m *mpool.MPool) 
 					buf.WriteString(fmt.Sprintf("\t[%v] = %v\n", i, vec))
 				}
 			}
-		*/
-		fmt.Printf("%s", buf.String())
-	}
+			fmt.Printf("%s", buf.String())
+		}
+	*/
 
-	//	bat.Shrink(r.sels)
+	bat.Shrink(r.sels)
 	return bat, nil
 }
 
