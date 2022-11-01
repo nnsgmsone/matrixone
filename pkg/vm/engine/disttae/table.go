@@ -253,6 +253,19 @@ func (tbl *table) GetHideKeys(ctx context.Context) ([]*engine.Attribute, error) 
 }
 
 func (tbl *table) Write(ctx context.Context, bat *batch.Batch) error {
+	{
+		if tbl.tableName == "mo_account" {
+			fmt.Printf("+++insert into mo_account: %v\n", bat.Attrs)
+			for i, vec := range bat.Vecs {
+				if vec.Typ.IsVarlen() {
+					vs := vector.MustStrCols(vec)
+					fmt.Printf("\t[%v] = %v\n", i, vs)
+				} else {
+					fmt.Printf("\t[%v] = %v\n", i, vec)
+				}
+			}
+		}
+	}
 	if tbl.insertExpr == nil {
 		ibat := batch.New(true, bat.Attrs)
 		for j := range bat.Vecs {
