@@ -93,7 +93,7 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 		dnStores = append(dnStores, tbl.db.txn.dnStores[i])
 	}
 	_, ok := tbl.db.txn.createTableMap[tbl.tableId]
-	if !ok && tbl.updated {
+	if !ok && !tbl.updated {
 		if err := tbl.db.txn.db.Update(ctx, dnStores, tbl, tbl.db.txn.op, tbl.primaryIdx,
 			tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
 			return nil, err
