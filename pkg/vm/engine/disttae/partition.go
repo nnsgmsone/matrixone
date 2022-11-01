@@ -108,6 +108,9 @@ func (p *Partition) BlockList(ctx context.Context, ts timestamp.Timestamp,
 			}
 		}
 	}
+	{
+		fmt.Printf("\tdeletes: %v\n", deletes)
+	}
 	for i := range blocks {
 		if _, ok := deletes[blocks[i].Info.BlockID]; !ok {
 			blks = append(blks, blocks[i])
