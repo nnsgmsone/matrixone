@@ -27,6 +27,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
@@ -89,6 +90,10 @@ func main() {
 		}
 	}
 
+	for {
+		time.Sleep(5 * time.Minute)
+		return
+	}
 	waitSignalToStop(stopper)
 	logutil.GetGlobalLogger().Info("Shutdown complete")
 }
