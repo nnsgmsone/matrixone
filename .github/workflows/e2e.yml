@@ -79,7 +79,7 @@ jobs:
           mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/
 
       - uses: actions/upload-artifact@v2
-        if: ${{ failure() || cancelled()}}
+        if: ${{ always() }}
         continue-on-error: true
         with:
           name: e2e_linux_x86_reports
