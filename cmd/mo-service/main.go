@@ -27,7 +27,6 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
@@ -87,12 +86,6 @@ func main() {
 		}
 		if err := startService(cfg, stopper); err != nil {
 			panic(err)
-		}
-	}
-	{
-		for {
-			time.Sleep(5 * time.Minute)
-			return
 		}
 	}
 
