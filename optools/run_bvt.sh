@@ -22,7 +22,7 @@ LAUNCH=$2
 
 function launch_mo() {
     cd $MO_WORKSPACE
-    ./mo-service -launch ./etc/$LAUNCH/launch.toml &>mo-service.log &
+    ./mo-service -launch ./etc/$LAUNCH/launch.toml -cpu-profile cpu.prof &>mo-service.log &
 }
 
 # this will wait mo all system init completed
