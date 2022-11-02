@@ -91,7 +91,7 @@ func main() {
 	}
 
 	for {
-		time.Sleep(5 * time.Minute)
+		time.Sleep(30 * time.Minute)
 		return
 	}
 	waitSignalToStop(stopper)
