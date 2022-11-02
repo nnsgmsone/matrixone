@@ -15,7 +15,9 @@
 package rpc
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"syscall"
 
@@ -23,8 +25,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -362,6 +366,19 @@ func (h *Handle) HandleDropOrTruncateRelation(
 	return err
 }
 
+func debugMoBatch(moBat *batch.Batch) string {
+	buf := new(bytes.Buffer)
+	for i, vec := range moBat.Vecs {
+		if vec.Typ.IsVarlen() {
+			vs := vector.MustStrCols(vec)
+			fmt.Fprintf(buf, "[%v] = %v\n", moBat.Attrs[i], vs)
+		} else {
+			fmt.Fprintf(buf, "[%v] = %v\n", moBat.Attrs[i], vec)
+		}
+	}
+	return buf.String()
+}
+
 // HandleWrite Handle DML commands
 func (h *Handle) HandleWrite(
 	ctx context.Context,
@@ -384,6 +401,16 @@ func (h *Handle) HandleWrite(
 	if err != nil {
 		return
 	}
+
+	defer func() {
+		if err != nil {
+			logutil.Infof("---- handle write err: %v, typ: %v, tbl: %d-%s, db: %d-%s\n %s\n", err, req.Type, req.TableID, req.TableName, req.DatabaseId, req.DatabaseName, debugMoBatch(req.Batch))
+			reader, _ := tb.NewReader(context.Background(), 1, nil, nil)
+			pool, _ := mpool.NewMPool("debug", 0, mpool.NoFixed)
+			bat, _ := reader[0].Read(req.Batch.Attrs, nil, pool)
+			logutil.Infof("---- target table data: %s\n", debugMoBatch(bat))
+		}
+	}()
 
 	if req.Type == db.EntryInsert {
 		//Append a block had been bulk-loaded into S3
