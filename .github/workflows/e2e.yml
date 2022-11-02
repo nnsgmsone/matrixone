@@ -74,6 +74,7 @@ jobs:
           mkdir -p ${{ github.workspace }}/upload
           rm -rf ./mo-tester/.git
           rm -rf ./mo-tester/lib
+          mv ${{ github.workspace }}/head/cpu.prof ${{ github.workspace }}/upload/
           mv ${{ github.workspace }}/head/mo-service.log ${{ github.workspace }}/upload/
           mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/
 
