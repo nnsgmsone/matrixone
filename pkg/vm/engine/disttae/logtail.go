@@ -16,10 +16,12 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -98,6 +100,14 @@ func consumerEntry(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 			}
 			vs := vector.MustTCols[uint64](vec)
 			timestamps := vector.MustTCols[types.TS](timeVec)
+			{
+				vec0, _ := vector.ProtoVectorToVector(e.Bat.Vecs[0])
+				ids := vector.MustTCols[types.Rowid](vec0)
+				fmt.Printf("++++insert %v: %v\n\tids: %v\n\ttimestamps:\n", e.TableName, vs, ids)
+				for i, t := range timestamps {
+					fmt.Printf("\t\t[%v] = %v\n", i, t.ToTimestamp())
+				}
+			}
 			for i, v := range vs {
 				if err := tbl.parts[idx].DeleteByBlockID(ctx, timestamps[i].ToTimestamp(), v); err != nil {
 					return err
@@ -105,12 +115,34 @@ func consumerEntry(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 			}
 			return db.getMetaPartitions(e.TableName)[idx].Insert(ctx, -1, e.Bat, false)
 		}
+		{
+			if e.TableName == "t" {
+				bat, _ := batch.ProtoBatchToBatch(e.Bat)
+				fmt.Printf("++++insert %v: %v\n", e.TableId, bat.Attrs)
+				for i, vec := range bat.Vecs {
+					if vec.Typ.IsVarlen() {
+						vs := vector.MustStrCols(vec)
+						fmt.Printf("\t[%v] = %v\n", i, vs)
+					} else {
+						fmt.Printf("\t[%v] = %v\n", i, vec)
+					}
+				}
+			}
+		}
 		if primaryIdx >= 0 {
 			return mvcc.Insert(ctx, MO_PRIMARY_OFF+primaryIdx, e.Bat, false)
 		}
 		return mvcc.Insert(ctx, primaryIdx, e.Bat, false)
 	}
 	if isMetaTable(e.TableName) {
+		vec0, _ := vector.ProtoVectorToVector(e.Bat.Vecs[0])
+		ids := vector.MustTCols[types.Rowid](vec0)
+		timeVec, _ := vector.ProtoVectorToVector(e.Bat.Vecs[1])
+		timestamps := vector.MustTCols[types.TS](timeVec)
+		fmt.Printf("++++delete %v\n\tids: %v\n\ttimestamps:\n", e.TableName, ids)
+		for i, t := range timestamps {
+			fmt.Printf("\t\t[%v] = %v\n", i, t.ToTimestamp())
+		}
 		return db.getMetaPartitions(e.TableName)[idx].Delete(ctx, e.Bat)
 	}
 	return mvcc.Delete(ctx, e.Bat)

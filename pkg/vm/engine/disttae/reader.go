@@ -15,10 +15,12 @@
 package disttae
 
 import (
+	"fmt"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 )
@@ -40,8 +42,20 @@ func (r *blockReader) Read(cols []string, expr *plan.Expr, m *mpool.MPool) (*bat
 		return nil, nil
 	}
 	defer func() { r.blks = r.blks[1:] }()
-	return blockio.BlockRead(r.ctx, cols, r.tableDef, r.blks[0].Info.MetaLoc,
-		r.blks[0].Info.DeltaLoc, r.ts, r.fs, m)
+	info := &r.blks[0].Info
+	bat, err := blockio.BlockRead(r.ctx, info, cols, r.tableDef, r.ts, r.fs, m)
+	if bat != nil && len(cols) == 2 {
+		fmt.Printf("++++blockread %v\n", bat.Attrs)
+		for i, vec := range bat.Vecs {
+			if vec.Typ.IsVarlen() {
+				vs := vector.MustStrCols(vec)
+				fmt.Printf("\t[%v] = %v\n", i, vs)
+			} else {
+				fmt.Printf("\t[%v] = %v\n", i, vec)
+			}
+		}
+	}
+	return bat, err
 }
 
 func (r *blockMergeReader) Close() error {
@@ -53,8 +67,20 @@ func (r *blockMergeReader) Read(cols []string, expr *plan.Expr, m *mpool.MPool) 
 		return nil, nil
 	}
 	defer func() { r.blks = r.blks[1:] }()
-	bat, err := blockio.BlockRead(r.ctx, cols, r.tableDef,
-		r.blks[0].meta.Info.MetaLoc, r.blks[0].meta.Info.DeltaLoc, r.ts, r.fs, m)
+	info := &r.blks[0].meta.Info
+	bat, err := blockio.BlockRead(r.ctx, info, cols, r.tableDef, r.ts, r.fs, m)
+	if bat != nil && len(cols) == 2 {
+		fmt.Printf("++++mergeblockread %v\n", bat.Attrs)
+		for i, vec := range bat.Vecs {
+			if vec.Typ.IsVarlen() {
+				vs := vector.MustStrCols(vec)
+				fmt.Printf("\t[%v] = %v\n", i, vs)
+			} else {
+				fmt.Printf("\t[%v] = %v\n", i, vec)
+			}
+		}
+	}
+
 	if err != nil {
 		return nil, err
 	}

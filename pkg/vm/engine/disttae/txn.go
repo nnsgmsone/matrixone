@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -176,12 +177,28 @@ func (txn *Transaction) getDatabaseId(ctx context.Context, name string) (uint64,
 func (txn *Transaction) getTableMeta(ctx context.Context, databaseId uint64,
 	name string, needUpdated bool, columnLength int) (*tableMeta, error) {
 	blocks := make([][]BlockMeta, len(txn.dnStores))
+	{
+		if columnLength == 2 {
+			fmt.Printf("++++begin update meta: %v, %v: %v\n", name, needUpdated, len(txn.dnStores))
+		}
+	}
 	if needUpdated {
 		for i, dnStore := range txn.dnStores {
 			rows, err := txn.getRows(ctx, name, databaseId, 0,
 				[]DNStore{dnStore}, catalog.MoTableMetaDefs, catalog.MoTableMetaSchema, nil)
+			{
+				if columnLength == 2 && err != nil {
+					fmt.Printf("\t\t++++%v: read rows: %v\n", name, err)
+				}
+			}
+
 			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 				continue
+			}
+			{
+				if columnLength == 2 {
+					fmt.Printf("\t\t++++%v: read rows: %v\n", name, len(rows))
+				}
 			}
 			if err != nil {
 				return nil, err

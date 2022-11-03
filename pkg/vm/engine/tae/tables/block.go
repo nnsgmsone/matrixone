@@ -20,7 +20,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 
@@ -790,7 +789,6 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 			deduplicate := func(v1 any, _ int) error {
 				return sortKey.GetData().Foreach(func(v2 any, row int) error {
 					if compute.CompareGeneric(v1, v2, pks.GetType()) == 0 {
-						logutil.Infof("table %d-%v,val %v pk %v", blk.meta.GetSegment().GetTable().ID, blk.meta.GetSchema().Name, v1, blk.pkIndex)
 						return moerr.NewDuplicate()
 					}
 					return nil
@@ -822,7 +820,6 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 	defer sortKey.Close()
 	deduplicate := func(v any, _ int) error {
 		if _, existed := compute.GetOffsetByVal(sortKey.GetData(), v, sortKey.DeleteMask); existed {
-			logutil.Infof("table %d-%v,val %v pk %v", blk.meta.GetSegment().GetTable().ID, blk.meta.GetSchema().Name, v, blk.pkIndex)
 			return moerr.NewDuplicate()
 		}
 		return nil

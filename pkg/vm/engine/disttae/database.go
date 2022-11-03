@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -146,6 +147,9 @@ func (db *database) Create(ctx context.Context, name string, defs []engine.Table
 	tableId, err := db.txn.allocateID(ctx)
 	if err != nil {
 		return err
+	}
+	if name == "t" {
+		fmt.Printf("++++create table: %v\n", tableId)
 	}
 	tbl := new(table)
 	{
