@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -39,9 +40,28 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func getAccessInfo(ctx context.Context) (uint32, uint32, uint32) {
+	var accountId, userId, roleId uint32
+
+	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
+		accountId = v.(uint32)
+	}
+	if v := ctx.Value(defines.UserIDKey{}); v != nil {
+		userId = v.(uint32)
+	}
+	if v := ctx.Value(defines.RoleIDKey{}); v != nil {
+		roleId = v.(uint32)
+	}
+	return accountId, userId, roleId
+}
+
 // New is used to new an object of compile
 func New(db string, sql string, uid string, ctx context.Context,
 	e engine.Engine, proc *process.Process, stmt tree.Statement) *Compile {
+	if db != "mo_task" {
+		accountId, userId, roleId := getAccessInfo(ctx)
+		fmt.Printf("++++run %s: %v, %v, %v\n", sql, accountId, userId, roleId)
+	}
 	return &Compile{
 		e:    e,
 		db:   db,
