@@ -1057,19 +1057,8 @@ func genColumnPrimaryKey(tableId uint64, name string) string {
 
 func inParttion(v types.Rowid, part *Partition,
 	ts timestamp.Timestamp, blocks []BlockMeta) bool {
-	if part.Get(v, ts) {
-		return true
-	}
-	if len(blocks) == 0 {
-		return false
-	}
-	blkId := rowIDToBlockID(RowID(v))
-	for _, blk := range blocks {
-		if blk.Info.BlockID == blkId {
-			return true
-		}
-	}
-	return false
+	//TODO
+	return true
 }
 
 // transfer DataValue to rows
