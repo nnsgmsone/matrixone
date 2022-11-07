@@ -617,11 +617,11 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 		var err error
 		var cols []*plan.ColDef
 
-		db, err := c.e.Database(c.ctx, s.DataSource.SchemaName, s.Proc.TxnOperator)
+		db, err := c.e.Database(c.ctx, n.ObjRef.SchemaName, s.Proc.TxnOperator)
 		if err != nil {
 			panic(err)
 		}
-		rel, err := db.Relation(c.ctx, s.DataSource.RelationName)
+		rel, err := db.Relation(c.ctx, n.TableDef.Name)
 		if err != nil {
 			panic(err)
 		}
@@ -655,7 +655,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 		tblDef = &plan.TableDef{
 			Cols:          cols,
 			Name2ColIndex: name2index,
-			Name:          s.DataSource.RelationName,
+			Name:          n.TableDef.Name,
 		}
 	}
 	s = &Scope{
