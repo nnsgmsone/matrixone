@@ -49,7 +49,8 @@ func (r *blockReader) Read(cols []string, _ *plan.Expr, m *mpool.MPool) (*batch.
 	if len(cols) != len(r.colIdxs) {
 		if len(r.colIdxs) == 0 {
 			{
-				fmt.Printf("+++cols: %v, r.tableDef.Cols: %v\n", len(cols), len(r.tableDef.Cols))
+				fmt.Printf("+++cols: %v, r.tableDef.Cols: %v\nnames2ColIndx: %v\ncols: %v\n",
+					len(cols), len(r.tableDef.Cols), r.tableDef.Name2ColIndex, cols)
 			}
 			r.colIdxs = make([]uint16, len(cols))
 			r.colTypes = make([]types.Type, len(cols))
