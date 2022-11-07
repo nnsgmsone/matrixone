@@ -612,7 +612,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 		var err error
 		var cols []*plan.ColDef
 
-		db, err := c.e.Database(c.ctx, n.ObjRef.SchemaName, s.Proc.TxnOperator)
+		db, err := c.e.Database(c.ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 		if err != nil {
 			panic(err)
 		}
