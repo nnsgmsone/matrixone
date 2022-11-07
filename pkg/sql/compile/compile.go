@@ -30,7 +30,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
@@ -604,14 +603,10 @@ func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scope {
 	var s *Scope
 	var tblDef *plan.TableDef
-	var ts timestamp.Timestamp
 
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
-	}
-	if c.proc != nil && c.proc.TxnOperator != nil {
-		ts = c.proc.TxnOperator.Txn().SnapshotTS
 	}
 	{
 		var err error
@@ -662,11 +657,11 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 		Magic:    Remote,
 		NodeInfo: node,
 		DataSource: &Source{
-			Timestamp:    ts,
 			Attributes:   attrs,
 			TableDef:     tblDef,
 			RelationName: n.TableDef.Name,
 			SchemaName:   n.ObjRef.SchemaName,
+			Timestamp:    c.proc.TxnOperator.Txn().SnapshotTS,
 			Expr:         colexec.RewriteFilterExprList(n.FilterList),
 		},
 	}

@@ -2151,6 +2151,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		}
 	}
 	cwft.proc.FileService = cwft.ses.GetParameterUnit().FileService
+	cwft.proc.TxnOperator = cwft.ses.GetTxnHandler().GetTxnOperator()
 	cwft.compile = compile.New(cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), requestCtx, cwft.ses.GetStorage(), cwft.proc, cwft.stmt)
 
 	if _, ok := cwft.stmt.(*tree.ExplainAnalyze); ok {
