@@ -15,6 +15,7 @@
 package disttae
 
 import (
+	"fmt"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -47,6 +48,9 @@ func (r *blockReader) Read(cols []string, _ *plan.Expr, m *mpool.MPool) (*batch.
 
 	if len(cols) != len(r.colIdxs) {
 		if len(r.colIdxs) == 0 {
+			{
+				fmt.Printf("+++cols: %v, r.tableDef.Cols: %v\n", len(cols), len(r.tableDef.Cols))
+			}
 			r.colIdxs = make([]uint16, len(cols))
 			r.colTypes = make([]types.Type, len(cols))
 			r.colNulls = make([]bool, len(cols))
