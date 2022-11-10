@@ -345,7 +345,7 @@ func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, range
 		}
 		return rds, nil
 	}
-	step := (len(ranges) + num - 1) / num
+	step := len(ranges) / num
 	for i := 0; i < num; i++ {
 		if i == num-1 {
 			rds[i] = &blockReader{
