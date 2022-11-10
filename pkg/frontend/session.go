@@ -1262,6 +1262,10 @@ func (th *TxnHandler) NewTxn() error {
 		storage.Hints().CommitOrRollbackTimeout,
 	)
 	defer cancel()
+	{
+		t, ok := ctx.Deadline()
+		fmt.Printf("++++timeout: %v: %v\n", t, ok)
+	}
 	err = storage.New(ctx, th.GetTxnOperator())
 	return err
 }
