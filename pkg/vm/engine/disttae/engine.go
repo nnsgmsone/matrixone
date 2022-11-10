@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"container/heap"
 	"context"
+	"fmt"
 	"math"
 	"sync"
 	"time"
@@ -253,18 +254,33 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	table.tableName = catalog.MO_DATABASE
 	if err := e.db.Update(ctx, txn.dnStores[:1], table, op, catalog.MO_TABLES_REL_ID_IDX,
 		catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, txn.meta.SnapshotTS); err != nil {
+		e.delTransaction(txn)
+		{
+			tm, ok := ctx.Deadline()
+			fmt.Printf("+++++failed to update database: %v, %v: %v\n", tm.Sub(time.Now()), ok, err)
+		}
 		return err
 	}
 	table.tableId = catalog.MO_TABLES_ID
 	table.tableName = catalog.MO_TABLES
 	if err := e.db.Update(ctx, txn.dnStores[:1], table, op, catalog.MO_TABLES_REL_ID_IDX,
 		catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, txn.meta.SnapshotTS); err != nil {
+		e.delTransaction(txn)
+		{
+			tm, ok := ctx.Deadline()
+			fmt.Printf("+++++failed to update table: %v, %v: %v\n", tm.Sub(time.Now()), ok, err)
+		}
 		return err
 	}
 	table.tableId = catalog.MO_COLUMNS_ID
 	table.tableName = catalog.MO_COLUMNS
 	if err := e.db.Update(ctx, txn.dnStores[:1], table, op, catalog.MO_TABLES_REL_ID_IDX,
 		catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID, txn.meta.SnapshotTS); err != nil {
+		e.delTransaction(txn)
+		{
+			tm, ok := ctx.Deadline()
+			fmt.Printf("+++++failed to update column: %v, %v: %v\n", tm.Sub(time.Now()), ok, err)
+		}
 		return err
 	}
 	return nil

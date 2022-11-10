@@ -1264,7 +1264,7 @@ func (th *TxnHandler) NewTxn() error {
 	defer cancel()
 	{
 		t, ok := ctx.Deadline()
-		fmt.Printf("++++timeout: %v: %v\n", time.Now().Sub(t), ok)
+		fmt.Printf("++++timeout: %v: %v\n", t.Sub(time.Now()), ok)
 	}
 	err = storage.New(ctx, th.GetTxnOperator())
 	return err
