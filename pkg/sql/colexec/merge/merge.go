@@ -16,8 +16,6 @@ package merge
 
 import (
 	"bytes"
-	"fmt"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -32,6 +30,7 @@ func Prepare(_ *process.Process, arg any) error {
 	return nil
 }
 
+/*
 func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
@@ -72,5 +71,39 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			}
 			continue
 		}
+	}
+}
+*/
+
+func Call(idx int, proc *process.Process, arg any) (bool, error) {
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
+	defer anal.Stop()
+	ap := arg.(*Argument)
+	for {
+		if len(proc.Reg.MergeReceivers) == 0 {
+			proc.SetInputBatch(nil)
+			return true, nil
+		}
+		reg := proc.Reg.MergeReceivers[ap.ctr.i]
+
+		bat, ok := <-reg.Ch
+		if !ok || bat == nil {
+			proc.Reg.MergeReceivers = append(proc.Reg.MergeReceivers[:ap.ctr.i], proc.Reg.MergeReceivers[ap.ctr.i+1:]...)
+			if ap.ctr.i >= len(proc.Reg.MergeReceivers) {
+				ap.ctr.i = 0
+			}
+			continue
+		}
+		if bat.Length() == 0 {
+			continue
+		}
+		anal.Input(bat)
+		anal.Output(bat)
+		proc.SetInputBatch(bat)
+		if ap.ctr.i = ap.ctr.i + 1; ap.ctr.i >= len(proc.Reg.MergeReceivers) {
+			ap.ctr.i = 0
+		}
+		return false, nil
 	}
 }
