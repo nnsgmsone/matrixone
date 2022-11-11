@@ -15,7 +15,6 @@
 package pipeline
 
 import (
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
@@ -34,12 +33,7 @@ func (m *Message) SetID(id uint64) {
 }
 
 func (m *Message) DebugString() string {
-	if len(m.Err) > 0 {
-		me := moerr.Error{}
-		errStr := me.UnmarshalBinary(m.Err).Error()
-		return fmt.Sprintf("sid: %v, cmd: %v, data: %s, err: %s", m.Sid, m.Cmd, m.Data, errStr)
-	}
-	return fmt.Sprintf("sid: %v, cmd: %v, data: %s", m.Sid, m.Cmd, m.Data)
+	return ""
 }
 
 func (m *Message) IsEndMessage() bool {
