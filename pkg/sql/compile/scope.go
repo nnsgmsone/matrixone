@@ -126,6 +126,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	if len(s.NodeInfo.Addr) == 0 || !cnclient.IsCNClientReady() || s.NodeInfo.Addr == Address {
 		return s.ParallelRun(c, s.IsRemote)
 	}
+	return s.ParallelRun(c, s.IsRemote)
 
 	err := s.remoteRun(c)
 	// tell connect operator that it's over
