@@ -2220,6 +2220,9 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 		opt := plan2.NewBaseOptimizer(ctx)
 		optimized, err := opt.Optimize(stmt)
 		if err != nil {
+			{
+				fmt.Printf("+++build stmt: %s: %v\n", tree.String(stmt, dialect.MYSQL), err)
+			}
 			return nil, err
 		}
 		ret = &plan2.Plan{
