@@ -90,6 +90,9 @@ func (c *Compile) GetAffectedRows() uint64 {
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *Compile) Run(_ uint64) (err error) {
+	{
+		fmt.Printf("++++run %s\n", c.sql)
+	}
 	if c.scope == nil {
 		return nil
 	}

@@ -306,6 +306,9 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 		return err
 	}
 	_, err = op.Write(ctx, reqs)
+	if err != nil {
+		fmt.Printf("+++failed to commit %s: %v\n", string(op.Txn().ID), err)
+	}
 	if err == nil {
 		for _, name := range txn.deleteMetaTables {
 			txn.db.delMetaTable(name)
