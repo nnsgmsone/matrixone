@@ -16,6 +16,9 @@ package merge
 
 import (
 	"bytes"
+	"fmt"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -41,23 +44,33 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		}
 		reg := proc.Reg.MergeReceivers[ap.ctr.i]
 
-		bat, ok := <-reg.Ch
-		if !ok || bat == nil {
-			proc.Reg.MergeReceivers = append(proc.Reg.MergeReceivers[:ap.ctr.i], proc.Reg.MergeReceivers[ap.ctr.i+1:]...)
-			if ap.ctr.i >= len(proc.Reg.MergeReceivers) {
+		select {
+		case bat := <-reg.Ch:
+			if bat == nil {
+				proc.Reg.MergeReceivers = append(proc.Reg.MergeReceivers[:ap.ctr.i], proc.Reg.MergeReceivers[ap.ctr.i+1:]...)
+				if ap.ctr.i >= len(proc.Reg.MergeReceivers) {
+					ap.ctr.i = 0
+				}
+				continue
+			}
+			if bat.Length() == 0 {
+				continue
+			}
+			anal.Input(bat)
+			anal.Output(bat)
+			proc.SetInputBatch(bat)
+			if ap.ctr.i = ap.ctr.i + 1; ap.ctr.i >= len(proc.Reg.MergeReceivers) {
+				ap.ctr.i = 0
+			}
+			return false, nil
+		case <-time.After(time.Second):
+			{
+				fmt.Printf("++++++in time out\n")
+			}
+			if ap.ctr.i = ap.ctr.i + 1; ap.ctr.i >= len(proc.Reg.MergeReceivers) {
 				ap.ctr.i = 0
 			}
 			continue
 		}
-		if bat.Length() == 0 {
-			continue
-		}
-		anal.Input(bat)
-		anal.Output(bat)
-		proc.SetInputBatch(bat)
-		if ap.ctr.i = ap.ctr.i + 1; ap.ctr.i >= len(proc.Reg.MergeReceivers) {
-			ap.ctr.i = 0
-		}
-		return false, nil
 	}
 }
