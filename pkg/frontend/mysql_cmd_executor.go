@@ -2157,7 +2157,13 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		}
 	}
 	cwft.proc.FileService = cwft.ses.GetParameterUnit().FileService
-	cwft.compile = compile.New(cwft.ses.GetParameterUnit().ClusterNodes[0].Addr, cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), requestCtx, cwft.ses.GetStorage(), cwft.proc, cwft.stmt)
+	addr := ""
+	{
+		if len(cwft.ses.GetParameterUnit().ClusterNodes) > 0 {
+			addr = cwft.ses.GetParameterUnit().ClusterNodes[0].Addr
+		}
+	}
+	cwft.compile = compile.New(addr, cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), requestCtx, cwft.ses.GetStorage(), cwft.proc, cwft.stmt)
 
 	if _, ok := cwft.stmt.(*tree.ExplainAnalyze); ok {
 		fill = func(obj interface{}, bat *batch.Batch) error { return nil }
