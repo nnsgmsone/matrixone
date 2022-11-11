@@ -123,6 +123,8 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
+replace github.com/fagongzi/goetty/v2 v2.0.3-0.20221103025002-a4c7a0d38815 => ./goetty
+
 // required until memberlist issue 272 is resolved
 // see https://github.com/hashicorp/memberlist/pull/273 for progress
 replace github.com/hashicorp/memberlist => github.com/matrixorigin/memberlist v0.4.1-0.20221101065119-bb7bce164406
