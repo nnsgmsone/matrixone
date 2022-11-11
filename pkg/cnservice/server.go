@@ -90,7 +90,9 @@ func NewService(
 		&cfg.Frontend,
 		nil,
 		nil,
-		nil,
+		engine.Nodes{engine.Node{
+			Addr: cfg.ServiceAddress,
+		}},
 		memoryengine.GetClusterDetailsFromHAKeeper(ctx, hakeeper),
 	)
 	cfg.Frontend.SetDefaultValues()

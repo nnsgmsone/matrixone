@@ -46,7 +46,7 @@ func InitAddress(addr string) {
 }
 
 // New is used to new an object of compile
-func New(db string, sql string, uid string, ctx context.Context,
+func New(addr, db string, sql string, uid string, ctx context.Context,
 	e engine.Engine, proc *process.Process, stmt tree.Statement) *Compile {
 	{
 		fmt.Printf("++++new %s\n", sql)
@@ -59,6 +59,7 @@ func New(db string, sql string, uid string, ctx context.Context,
 		sql:  sql,
 		proc: proc,
 		stmt: stmt,
+		addr: addr,
 	}
 }
 
