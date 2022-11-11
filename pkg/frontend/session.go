@@ -305,7 +305,7 @@ func (ses *Session) makeProfile(profileTyp profileType) {
 }
 
 func (ses *Session) MakeProfile() {
-	ses.makeProfile(profileTypeAll)
+	//	ses.makeProfile(profileTypeAll)
 }
 
 func (ses *Session) getProfile(profileTyp profileType) string {
