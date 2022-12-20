@@ -100,7 +100,7 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 		proc.SetInputBatch(nil)
 		return true, nil
 	}
-	defer bat.Clean(proc.Mp())
+	defer bat.Free(proc.Mp())
 	if len(bat.Vecs) == 0 {
 		return false, nil
 	}
@@ -175,7 +175,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 	if bat.Length() == 0 {
 		return false, nil
 	}
-	defer bat.Clean(proc.Mp())
+	defer bat.Free(proc.Mp())
 	anal.Input(bat)
 	proc.SetInputBatch(&batch.Batch{})
 	if len(ctr.aggVecs) == 0 {

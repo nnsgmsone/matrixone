@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -27,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"strconv"
 )
 
 func unnestString(arg any, buf *bytes.Buffer) {
@@ -86,7 +87,7 @@ func unnestCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	)
 	defer func() {
 		if err != nil && rbat != nil {
-			rbat.Clean(proc.Mp())
+			rbat.Free(proc.Mp())
 		}
 		if jsonVec != nil {
 			jsonVec.Free(proc.Mp())

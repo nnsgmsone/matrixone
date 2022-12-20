@@ -273,7 +273,7 @@ func (bat *Batch) Append(ctx context.Context, mp *mpool.MPool, b *Batch) (*Batch
 			return nil, err
 		}
 		for j := 0; j < length; j++ {
-			if err := bat.Vecs[i].UnionOne(vec, int64(j), false, mp); err != nil {
+			if err := bat.Vecs[i].UnionOne(vec, int64(j), bat.Vecs[i].Length() == 0, mp); err != nil {
 				return nil, err
 			}
 		}
@@ -290,7 +290,7 @@ func (bat *Batch) SetZs(len int, m *mpool.MPool) {
 }
 
 // initZsOne init Batch.Zs and values are all 1
-func (bat *Batch) initZsOne(len int) {
+func (bat *Batch) InitZsOne(len int) {
 	bat.Zs = make([]int64, len)
 	for i := range bat.Zs {
 		bat.Zs[i]++

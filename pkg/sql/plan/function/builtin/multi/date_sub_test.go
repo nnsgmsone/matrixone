@@ -46,7 +46,7 @@ func TestDateSub(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.want, date.Col.([]types.Date)[0].String())
+			require.Equal(t, c.want, vector.MustTCols[types.Date](date))
 		})
 	}
 
@@ -73,7 +73,7 @@ func TestDatetimeSub(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.want, date.Col.([]types.Datetime)[0].String())
+			require.Equal(t, c.want, vector.MustTCols[types.Datetime](date))
 		})
 	}
 
@@ -120,7 +120,7 @@ func TestDateStringSub(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			date, err := DateStringSub(c.vecs, c.proc)
-			require.Equal(t, c.want, date.Col.([]types.Datetime)[0].String())
+			require.Equal(t, c.want, vector.MustTCols[types.Datetime](date))
 			require.True(t, moerr.IsMoErrCode(err, c.err))
 		})
 	}

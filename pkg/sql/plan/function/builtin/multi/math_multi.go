@@ -41,7 +41,7 @@ func generalMathMulti[T mathMultiT](funName string, vecs []*vector.Vector, proc 
 		if !vecs[1].IsConst() || vecs[1].GetType().Oid != types.T_int64 {
 			return nil, moerr.NewInvalidArgNoCtx(fmt.Sprintf("the second argument of the %s", funName), "not const")
 		}
-		digits = vecs[1].Col.([]int64)[0]
+		digits = vector.MustTCols[int64](vecs[1])[0]
 	}
 	vs := vector.MustTCols[T](vecs[0])
 	if vecs[0].IsConstNull() {
@@ -53,14 +53,14 @@ func generalMathMulti[T mathMultiT](funName string, vecs []*vector.Vector, proc 
 		ret_rs := cb(vs, rs, digits)
 
 		vec := vector.NewConstFixed(typ, 1, ret_rs[0], proc.Mp())
-		nulls.Set(vec.Nsp, vecs[0].Nsp)
+		nulls.Set(vec.GetNulls(), vecs[0].GetNulls())
 		return vec, nil
 	} else {
 		rs := make([]T, len(vs))
 		ret_rs := cb(vs, rs, digits)
 
 		vec := vector.NewWithFixed(typ, ret_rs, nulls.NewWithSize(len(ret_rs)), proc.Mp())
-		nulls.Set(vec.Nsp, vecs[0].Nsp)
+		nulls.Set(vec.GetNulls(), vecs[0].GetNulls())
 
 		return vec, nil
 	}

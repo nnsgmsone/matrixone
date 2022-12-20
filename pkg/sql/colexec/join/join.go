@@ -66,7 +66,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 				continue
 			}
 			if ctr.bat == nil || ctr.bat.Length() == 0 {
-				bat.Clean(proc.Mp())
+				bat.Free(proc.Mp())
 				continue
 			}
 			if err := ctr.probe(bat, ap, proc, anal); err != nil {
@@ -93,29 +93,29 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
-	defer bat.Clean(proc.Mp())
+	defer bat.Free(proc.Mp())
 	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
 	rbat.Zs = proc.Mp().GetSels()
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
-			rbat.Vecs[i] = vector.New(bat.Vecs[rp.Pos].GetType())
+			rbat.Vecs[i] = vector.New(0, bat.Vecs[rp.Pos].GetType())
 		} else {
-			rbat.Vecs[i] = vector.New(ctr.bat.Vecs[rp.Pos].GetType())
+			rbat.Vecs[i] = vector.New(0, ctr.bat.Vecs[rp.Pos].GetType())
 		}
 	}
 
 	idxFlg := false
 	ctr.cleanEvalVectors(proc.Mp())
 	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc, &idxFlg); err != nil {
-		rbat.Clean(proc.Mp())
+		rbat.Free(proc.Mp())
 		return err
 	}
 
 	mSels := ctr.mp.Sels()
 	if idxFlg {
 		if err := ctr.indexProbe(ap, bat, rbat, mSels, proc); err != nil {
-			rbat.Clean(proc.Mp())
+			rbat.Free(proc.Mp())
 			return err
 		}
 		rbat.ExpandNulls()
@@ -142,10 +142,10 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				for _, sel := range sels {
 					vec, err := colexec.JoinFilterEvalExprInBucket(bat, ctr.bat, i+k, int(sel), proc, ap.Cond)
 					if err != nil {
-						rbat.Clean(proc.Mp())
+						rbat.Free(proc.Mp())
 						return err
 					}
-					bs := vec.Col.([]bool)
+					bs := vector.MustTCols[bool](vec)
 					if !bs[0] {
 						vec.Free(proc.Mp())
 						continue
@@ -153,13 +153,13 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					vec.Free(proc.Mp())
 					for j, rp := range ap.Result {
 						if rp.Rel == 0 {
-							if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), proc.Mp()); err != nil {
-								rbat.Clean(proc.Mp())
+							if err := rbat.Vecs[j].UnionOne(bat.Vecs[rp.Pos], int64(i+k), rbat.Vecs[j].Length() == 0, proc.Mp()); err != nil {
+								rbat.Free(proc.Mp())
 								return err
 							}
 						} else {
-							if err := vector.UnionOne(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], sel, proc.Mp()); err != nil {
-								rbat.Clean(proc.Mp())
+							if err := rbat.Vecs[j].UnionOne(ctr.bat.Vecs[rp.Pos], sel, rbat.Vecs[j].Length() == 0, proc.Mp()); err != nil {
+								rbat.Free(proc.Mp())
 								return err
 							}
 						}
@@ -170,12 +170,12 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				for j, rp := range ap.Result {
 					if rp.Rel == 0 {
 						if err := vector.UnionMulti(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), len(sels), proc.Mp()); err != nil {
-							rbat.Clean(proc.Mp())
+							rbat.Free(proc.Mp())
 							return err
 						}
 					} else {
 						if err := vector.Union(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], sels, true, proc.Mp()); err != nil {
-							rbat.Clean(proc.Mp())
+							rbat.Free(proc.Mp())
 							return err
 						}
 					}
@@ -214,14 +214,14 @@ func (ctr *container) indexProbe(ap *Argument, bat, rbat *batch.Batch, mSels [][
 			}
 			for j, rp := range ap.Result {
 				if rp.Rel == 0 {
-					if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
+					if err := rbat.Vecs[j].UnionOne(bat.Vecs[rp.Pos], int64(i), rbat.Vecs[j].Length() == 0, proc.Mp()); err != nil {
 						return err
 					}
 					if err := populateIndex(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
 						return err
 					}
 				} else {
-					if err := vector.UnionOne(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], sel, proc.Mp()); err != nil {
+					if err := rbat.Vecs[j].UnionOne(ctr.bat.Vecs[rp.Pos], sel, rbat.Vecs[j].Length() == 0, proc.Mp()); err != nil {
 						return err
 					}
 					if err := populateIndex(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], sel, proc.Mp()); err != nil {
@@ -321,5 +321,5 @@ func populateIndex(result, selected *vector.Vector, row int64, m *mpool.MPool) e
 
 	resultIdx := result.Index().(*index.LowCardinalityIndex)
 	dst, src := resultIdx.GetPoses(), idx.GetPoses()
-	return vector.UnionOne(dst, src, row, m)
+	return dst.UnionOne(src, row, m)
 }

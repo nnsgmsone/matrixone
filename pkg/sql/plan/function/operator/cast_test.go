@@ -232,7 +232,7 @@ func TestCastSameType(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.wantValues, castRes.Col)
+			require.Equal(t, c.wantValues, castRes.GetRawData())
 			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
 	}
@@ -311,7 +311,7 @@ func TestCastSameType2(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.wantValues, castRes.Col)
+			require.Equal(t, c.wantValues, castRes.GetRawData())
 			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
 	}
@@ -1053,7 +1053,7 @@ func TestCastLeftToRight(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			require.Equal(t, c.wantValues, castRes.Col)
+			require.Equal(t, c.wantValues, castRes.GetRawData())
 			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
 	}
@@ -1422,7 +1422,7 @@ func TestCastSpecials1Int(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.wantValues, castRes.Col)
+			require.Equal(t, c.wantValues, castRes.GetRawData())
 			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
 	}
@@ -1566,7 +1566,7 @@ func TestCastSpecials1Float(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.wantValues, castRes.Col)
+			require.Equal(t, c.wantValues, castRes.GetRawData())
 			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
 	}
@@ -2041,7 +2041,7 @@ func TestCastSpecial4(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.wantValues, decimalres.Col)
+			require.Equal(t, c.wantValues, decimalres.GetRawData())
 			require.Equal(t, c.wantType, decimalres.GetType())
 			require.Equal(t, c.wantScalar, decimalres.IsConst())
 		})
@@ -2290,7 +2290,7 @@ func TestCastFloatAsDecimal(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			result, _ := Cast(c.vecs, c.proc)
-			require.Equal(t, c.wantBytes, result.Col.([]types.Decimal64))
+			require.Equal(t, c.wantBytes, vector.MustTCols[types.Decimal64](result))
 		})
 	}
 }
@@ -2299,7 +2299,7 @@ func TestCastDecimalAsString(t *testing.T) {
 	makeTempVectors := func(leftVal []types.Decimal64, leftType types.Type, rightType types.Type) []*vector.Vector {
 		vecs := make([]*vector.Vector, 2)
 		vecs[0] = vector.NewConstFixed(leftType, 1, leftVal[0], testutil.TestUtilMp)
-		vecs[1] = vector.New(rightType)
+		vecs[1] = vector.New(0, 0, rightType)
 		return vecs
 	}
 	leftType := types.Type{Oid: types.T_decimal64, Size: 8}
@@ -2360,7 +2360,7 @@ func TestCastTimestampAsDate(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			result, _ := Cast(c.vecs, c.proc)
-			require.Equal(t, c.wantBytes, result.Col.([]types.Date))
+			require.Equal(t, c.wantBytes, vector.MustTCols[types.Date](result))
 		})
 	}
 }
@@ -2374,7 +2374,7 @@ func TestCastDecimal64AsDecimal128(t *testing.T) {
 		} else {
 			vectors[0] = vector.NewWithFixed(leftType, []types.Decimal64{left}, nil, testutil.TestUtilMp)
 		}
-		vectors[1] = vector.New(destType)
+		vectors[1] = vector.New(0, 0, destType)
 		return vectors
 	}
 	// decimal(10,5)
@@ -2418,7 +2418,7 @@ func TestCastDecimal64AsDecimal128(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.wantBytes, castRes.Col)
+			require.Equal(t, c.wantBytes, castRes.GetRawData())
 			require.Equal(t, c.wantType, castRes.GetType().Oid)
 			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
@@ -2436,7 +2436,7 @@ func TestCastDecimal64AsDecimal64(t *testing.T) {
 			vectors[0] = vector.NewWithFixed(leftType, []types.Decimal64{left}, nil, testutil.TestUtilMp)
 		}
 
-		vectors[1] = vector.New(destType)
+		vectors[1] = vector.New(0, 0, destType)
 		return vectors
 	}
 	// decimal(10,5)
@@ -2477,7 +2477,7 @@ func TestCastDecimal64AsDecimal64(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.wantBytes, castRes.Col)
+			require.Equal(t, c.wantBytes, castRes.GetRawData())
 			require.Equal(t, c.wantType.Oid, castRes.GetType().Oid)
 			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
@@ -2494,7 +2494,7 @@ func TestCastDecimal128AsDecimal128(t *testing.T) {
 			vectors[0] = vector.NewWithFixed(leftType, []types.Decimal128{left}, nil, testutil.TestUtilMp)
 		}
 
-		vectors[1] = vector.New(destType)
+		vectors[1] = vector.New(0, destType)
 		return vectors
 	}
 
@@ -2534,7 +2534,7 @@ func TestCastDecimal128AsDecimal128(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.wantBytes, castRes.Col)
+			require.Equal(t, c.wantBytes, castRes.GetRawData())
 			require.Equal(t, c.wantType.Oid, castRes.GetType().Oid)
 			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
@@ -2553,9 +2553,9 @@ func TestCastStringAsDecimal64(t *testing.T) {
 			Width: width,
 			Scale: scale,
 		}
-		vec := vector.New(d64)
+		vec := vector.New(0, d64)
 		for _, n := range nsp {
-			nulls.Add(vec.Nsp, n)
+			nulls.Add(vec.GetNulls(), n)
 		}
 		ptr := (*[]types.Decimal64)(unsafe.Pointer(&values))
 		vec.Col = *ptr
@@ -4422,7 +4422,7 @@ func TestCastDateAsDatetimeAndString(t *testing.T) {
 				got := vector.MustStrCols(castRes)
 				require.Equal(t, c.wantValues, got)
 			} else {
-				require.Equal(t, c.wantValues, castRes.Col)
+				require.Equal(t, c.wantValues, castRes.GetRawData())
 			}
 			require.Equal(t, c.wantType, castRes.GetType().Oid)
 			require.Equal(t, c.wantScalar, castRes.IsConst())
@@ -4494,7 +4494,7 @@ func TestCastDatetimeAsDateAndString(t *testing.T) {
 				got := vector.MustStrCols(castRes)
 				require.Equal(t, c.wantValues, got)
 			} else {
-				require.Equal(t, c.wantValues, castRes.Col)
+				require.Equal(t, c.wantValues, castRes.GetRawData())
 			}
 			require.Equal(t, c.wantType, castRes.GetType().Oid)
 			require.Equal(t, c.wantScalar, castRes.IsConst())
@@ -4686,7 +4686,7 @@ func TestCastTimeToString(t *testing.T) {
 				got := vector.MustStrCols(castRes)
 				require.Equal(t, c.wantValues, got)
 			} else {
-				require.Equal(t, c.wantValues, castRes.Col)
+				require.Equal(t, c.wantValues, castRes.GetRawData())
 			}
 
 			require.Equal(t, c.wantType, castRes.GetType().Oid)
@@ -4775,7 +4775,7 @@ func TestCastStringToTime(t *testing.T) {
 			c.vecs[1].GetType().Precision = c.precision
 			castRes, err := Cast(c.vecs, c.proc)
 			require.NoError(t, err)
-			require.Equal(t, c.wantValues, castRes.Col)
+			require.Equal(t, c.wantValues, castRes.GetRawData())
 			require.Equal(t, c.wantType, castRes.GetType().Oid)
 			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
@@ -4827,7 +4827,7 @@ func TestCastInt64ToTime(t *testing.T) {
 			c.vecs[1].GetType().Precision = c.precision
 			castRes, err := Cast(c.vecs, c.proc)
 			require.NoError(t, err)
-			require.Equal(t, c.wantValues, castRes.Col)
+			require.Equal(t, c.wantValues, castRes.GetNulls())
 			require.Equal(t, c.wantType, castRes.GetType().Oid)
 			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
@@ -4885,7 +4885,7 @@ func TestCastDecimal128ToTime(t *testing.T) {
 			c.vecs[1].GetType().Precision = c.precision
 			castRes, err := Cast(c.vecs, c.proc)
 			require.NoError(t, err)
-			require.Equal(t, c.wantValues, castRes.Col)
+			require.Equal(t, c.wantValues, castRes.GetNulls())
 			require.Equal(t, c.wantType, castRes.GetType().Oid)
 			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
@@ -4953,7 +4953,7 @@ func TestCastDateAndDatetimeToTime(t *testing.T) {
 			c.vecs[1].GetType().Precision = c.precision
 			castRes, err := Cast(c.vecs, c.proc)
 			require.NoError(t, err)
-			require.Equal(t, c.wantValues, castRes.Col)
+			require.Equal(t, c.wantValues, castRes.GetNulls())
 			require.Equal(t, types.T_time, castRes.GetType().Oid)
 			require.Equal(t, c.wantScalar, castRes.IsConst())
 		})
@@ -4962,7 +4962,7 @@ func TestCastDateAndDatetimeToTime(t *testing.T) {
 }
 
 func makeTypeVector(t types.T) *vector.Vector {
-	return vector.New(t.ToType())
+	return vector.New(0, t.ToType())
 }
 
 // make vector for type of int8,int16,int32,int64,uint8,uint16,uint32,uint64,date,datetime,timestamp,bool

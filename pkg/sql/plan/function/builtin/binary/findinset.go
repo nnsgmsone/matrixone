@@ -42,7 +42,7 @@ func FindInSet(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		rlen := len(rightValues)
 		resultVector := vector.PreAllocType(resultType, rlen, rlen, proc.Mp())
 		resultValues := vector.MustTCols[uint64](resultVector)
-		nulls.Set(resultVector.Nsp, right.Nsp)
+		nulls.Set(resultVector.Nsp, right.GetNulls())
 		findinset.FindInSetWithLeftConst(leftValues[0], rightValues, resultValues)
 		return resultVector, nil
 	case !left.IsConst() && right.IsConst():
@@ -52,14 +52,14 @@ func FindInSet(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		resLen := len(leftValues)
 		resultVector := vector.PreAllocType(resultType, resLen, resLen, proc.Mp())
 		resultValues := vector.MustTCols[uint64](resultVector)
-		nulls.Set(resultVector.Nsp, left.Nsp)
+		nulls.Set(resultVector.Nsp, left.GetNulls())
 		findinset.FindInSetWithRightConst(leftValues, rightValues[0], resultValues)
 		return resultVector, nil
 	}
 	resLen := len(leftValues)
 	resultVector := vector.PreAllocType(resultType, resLen, resLen, proc.Mp())
 	resultValues := vector.MustTCols[uint64](resultVector)
-	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
+	nulls.Or(left.GetNulls(), right.GetNulls(), resultVector.Nsp)
 	vector.SetCol(resultVector, findinset.FindInSet(leftValues, rightValues, resultValues))
 	return resultVector, nil
 }

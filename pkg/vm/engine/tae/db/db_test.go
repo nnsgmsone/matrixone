@@ -3354,8 +3354,8 @@ func TestLogtailBasic(t *testing.T) {
 	check_same_rows(resp.Commands[0].Bat, 2)                                 // 2 db
 	datname, err := vector.ProtoVectorToVector(resp.Commands[0].Bat.Vecs[3]) // datname column
 	assert.NoError(t, err)
-	assert.Equal(t, "todrop", datname.GetString(0))
-	assert.Equal(t, "db", datname.GetString(1))
+	assert.Equal(t, "todrop", datname.String())
+	assert.Equal(t, "db", datname.String())
 
 	assert.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
 	assert.Equal(t, fixedColCnt, len(resp.Commands[1].Bat.Vecs))
@@ -3374,8 +3374,8 @@ func TestLogtailBasic(t *testing.T) {
 	check_same_rows(resp.Commands[0].Bat, 2)                                 // 2 tables
 	relname, err := vector.ProtoVectorToVector(resp.Commands[0].Bat.Vecs[3]) // relname column
 	assert.NoError(t, err)
-	assert.Equal(t, schema.Name, relname.GetString(0))
-	assert.Equal(t, schema.Name, relname.GetString(1))
+	assert.Equal(t, schema.Name, relname.String())
+	assert.Equal(t, schema.Name, relname.String())
 
 	// get columns catalog change
 	resp, err = logtail.HandleSyncLogTailReq(new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
@@ -3430,7 +3430,7 @@ func TestLogtailBasic(t *testing.T) {
 		rowidMap[id] = 1
 	}
 	for i := int64(0); i < 10; i++ {
-		id := vector.GetValueAt[types.Rowid](rowids, i)
+		id := vector.MustTCols[types.Rowid](rowids)[i]
 		rowidMap[id] = rowidMap[id] + 1
 	}
 	assert.Equal(t, 10, len(rowidMap))

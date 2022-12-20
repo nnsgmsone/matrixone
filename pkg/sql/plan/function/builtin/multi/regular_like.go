@@ -29,9 +29,9 @@ func RegularLike(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 	resultType := types.T_bool.ToType()
 
 	//maxLen
-	maxLen := vector.Length(vectors[0])
+	maxLen := vectors[0].Length()
 	for i := range vectors {
-		val := vector.Length(vectors[i])
+		val := vectors[i].Length()
 		if val > maxLen {
 			maxLen = val
 		}
@@ -54,7 +54,7 @@ func RegularLike(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 		return nil, err
 	}
 	resultValues := vector.MustTCols[bool](resultVector)
-	err = regular.RegularLikeWithArrays(firstValues, secondValues, match_type, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues, maxLen)
+	err = regular.RegularLikeWithArrays(firstValues, secondValues, match_type, firstVector.GetNulls(), secondVector.GetNulls(), resultVector.Nsp, resultValues, maxLen)
 	if err != nil {
 		return nil, err
 	}

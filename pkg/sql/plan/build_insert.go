@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -146,7 +147,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 		// hasExplicitCols maybe true or false
 		binders := make([]*DefaultBinder, 0, len(explicitCols))
 		for _, col := range explicitCols {
-			binders = append(binders, NewDefaultBinder(nil, nil, col.GetType(), nil))
+			binders = append(binders, NewDefaultBinder(nil, nil, col.Typ, nil))
 		}
 		for i, row := range rows {
 			if row == nil || explicitCount != len(row) {
@@ -164,12 +165,12 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 				} else {
 					planExpr, err := binders[j].BindExpr(row[idx], 0, false)
 					if err != nil {
-						err = MakeInsertError(ctx.GetContext(), types.T(col.GetType().Id), col, rows, j, i, err)
+						err = MakeInsertError(ctx.GetContext(), types.T(col.Typ.Id), col, rows, j, i, err)
 						return nil, err
 					}
-					resExpr, err := makePlan2CastExpr(planExpr, col.GetType())
+					resExpr, err := makePlan2CastExpr(planExpr, col.Typ)
 					if err != nil {
-						err = MakeInsertError(ctx.GetContext(), types.T(col.GetType().Id), col, rows, j, i, err)
+						err = MakeInsertError(ctx.GetContext(), types.T(col.Typ.Id), col, rows, j, i, err)
 						return nil, err
 					}
 					columns[idx].Column = append(columns[idx].Column, resExpr)
@@ -277,7 +278,7 @@ func buildInsertSelect(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 
 	// do type cast if needed
 	for i := range tableDef.Cols {
-		exprs[i], err = makePlan2CastExpr(exprs[i], tableDef.Cols[i].GetType())
+		exprs[i], err = makePlan2CastExpr(exprs[i], tableDef.Cols[i].Typ)
 		if err != nil {
 			return nil, err
 		}
@@ -303,7 +304,7 @@ func getInsertExprs(ctx CompilerContext, stmt *tree.Insert, cols []*ColDef, tabl
 		exprs = make([]*Expr, len(cols))
 		for i := range exprs {
 			exprs[i] = &plan.Expr{
-				Typ: cols[i].GetType(),
+				Typ: cols[i].Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						ColPos: int32(i),
@@ -330,7 +331,7 @@ func getInsertExprs(ctx CompilerContext, stmt *tree.Insert, cols []*ColDef, tabl
 		for i := range exprs {
 			if ref, ok := targetMap[tableDef.Cols[i].GetName()]; ok {
 				exprs[i] = &plan.Expr{
-					Typ: cols[ref].GetType(),
+					Typ: cols[ref].Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							ColPos: int32(ref),

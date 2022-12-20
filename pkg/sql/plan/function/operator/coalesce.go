@@ -129,7 +129,7 @@ func CoalesceTypeCheckFn(inputTypes []types.T, _ []types.T, ret types.T) bool {
 // coalesceGeneral is a general evaluate function for coalesce operator
 // when return type is uint / int / float / bool / date / datetime
 func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types.Type) (*vector.Vector, error) {
-	vecLen := vector.Length(vs[0])
+	vecLen := vs[0].Length()
 	startIdx := 0
 	for i := 0; i < len(vs); i++ {
 		input := vs[i]
@@ -180,7 +180,7 @@ func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t
 			rs.GetNulls().Np = nil
 			return rs, nil
 		} else {
-			nullsLength := nulls.Length(input.Nsp)
+			nullsLength := nulls.Length(input.GetNulls())
 			if nullsLength == vecLen {
 				// all null do nothing
 				continue
@@ -196,7 +196,7 @@ func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t
 			} else {
 				// some nulls
 				for j := 0; j < vecLen; j++ {
-					if rs.GetNulls().Contains(uint64(j)) && !input.Nsp.Contains(uint64(j)) {
+					if rs.GetNulls().Contains(uint64(j)) && !input.GetNulls().Contains(uint64(j)) {
 						rsCols[j] = cols[j]
 						rs.GetNulls().Np.Remove(uint64(j))
 					}
@@ -216,7 +216,7 @@ func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t
 // coalesceGeneral is a general evaluate function for coalesce operator
 // when return type is char / varchar
 func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vector.Vector, error) {
-	vecLen := vector.Length(vs[0])
+	vecLen := vs[0].Length()
 	startIdx := 0
 
 	// If leading expressions are non null scalar, return.   Otherwise startIdx
@@ -253,7 +253,7 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 			nsp = nil
 			break
 		} else {
-			nullsLength := nulls.Length(input.Nsp)
+			nullsLength := nulls.Length(input.GetNulls())
 			if nullsLength == vecLen {
 				// all null do nothing
 				continue
@@ -269,7 +269,7 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 			} else {
 				// some nulls
 				for j := 0; j < vecLen; j++ {
-					if nsp.Contains(uint64(j)) && !input.Nsp.Contains(uint64(j)) {
+					if nsp.Contains(uint64(j)) && !input.GetNulls().Contains(uint64(j)) {
 						rs[j] = cols[j]
 						nsp.Np.Remove(uint64(j))
 					}

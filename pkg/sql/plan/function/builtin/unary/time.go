@@ -35,7 +35,7 @@ func TimeToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		vector.SetCol(resultVector, resultValues)
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -59,7 +59,7 @@ func DatetimeToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 		vector.SetCol(resultVector, time.DatetimeToTime(inputValues, resultValues, inputPrecision))
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -82,7 +82,7 @@ func DateToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		vector.SetCol(resultVector, time.DateToTime(inputValues, resultValues))
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -107,7 +107,7 @@ func DateStringToTime(vectors []*vector.Vector, proc *process.Process) (*vector.
 		vector.SetCol(resultVector, result)
 		return resultVector, err
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -157,7 +157,7 @@ func Decimal128ToTime(vectors []*vector.Vector, proc *process.Process) (*vector.
 		vector.SetCol(resultVector, result)
 		return resultVector, err
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}

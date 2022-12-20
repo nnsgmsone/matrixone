@@ -92,12 +92,12 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 }
 
 func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
-	defer bat.Clean(proc.Mp())
+	defer bat.Free(proc.Mp())
 	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
 	rbat.Zs = proc.Mp().GetSels()
 	for i, pos := range ap.Result {
-		rbat.Vecs[i] = vector.New(bat.Vecs[pos].GetType())
+		rbat.Vecs[i] = vector.New(0, bat.Vecs[pos].GetType())
 	}
 	count := bat.Length()
 	for i := 0; i < count; i += hashmap.UnitLimit {
@@ -107,8 +107,8 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 		}
 		for k := 0; k < n; k++ {
 			for j, pos := range ap.Result {
-				if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[pos], int64(i+k), proc.Mp()); err != nil {
-					rbat.Clean(proc.Mp())
+				if err := rbat.Vecs[j].UnionOne(bat.Vecs[pos], int64(i+k), rbat.Vecs[j].Length() == 0, proc.Mp()); err != nil {
+					rbat.Free(proc.Mp())
 					return err
 				}
 			}
@@ -122,12 +122,12 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
-	defer bat.Clean(proc.Mp())
+	defer bat.Free(proc.Mp())
 	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
 	rbat.Zs = proc.Mp().GetSels()
 	for i, pos := range ap.Result {
-		rbat.Vecs[i] = vector.New(bat.Vecs[pos].GetType())
+		rbat.Vecs[i] = vector.New(0, bat.Vecs[pos].GetType())
 	}
 	if (ctr.bat.Length() == 1 && ctr.hasNull) || ctr.bat.Length() == 0 {
 		anal.Output(rbat)
@@ -168,7 +168,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					if err != nil {
 						return err
 					}
-					bs := vec.Col.([]bool)
+					bs := vector.MustTCols[bool](vec)
 					if bs[0] {
 						matched = true
 						vec.Free(proc.Mp())
@@ -184,8 +184,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			}
 		}
 		for j, pos := range ap.Result {
-			if err := vector.Union(rbat.Vecs[j], bat.Vecs[pos], eligible, true, proc.Mp()); err != nil {
-				rbat.Clean(proc.Mp())
+			if err := rbat.Vecs[j].UnionOne(bat.Vecs[pos], eligible, true, proc.Mp()); err != nil {
+				rbat.Free(proc.Mp())
 				return err
 			}
 		}

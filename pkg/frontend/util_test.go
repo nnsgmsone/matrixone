@@ -18,17 +18,18 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
+	"os"
+	"sort"
+	"testing"
+	"time"
+
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"math"
-	"os"
-	"sort"
-	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -610,8 +611,8 @@ func TestConvertValueBat2Str(t *testing.T) {
 	rbat, err := convertValueBat2Str(context.TODO(), bat, testutil.TestUtilMp, time.Local)
 	require.Nil(t, err)
 	require.NotNil(t, rbat)
-	bat.Clean(testutil.TestUtilMp)
-	rbat.Clean(testutil.TestUtilMp)
+	bat.Free(testutil.TestUtilMp)
+	rbat.Free(testutil.TestUtilMp)
 	after := testutil.TestUtilMp.CurrNB()
 	require.Equal(t, before, after)
 }

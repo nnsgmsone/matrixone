@@ -37,7 +37,7 @@ func ToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, er
 	if vectors[0].IsConst() && vectors[1].IsConst() {
 		results := make([]string, 1)
 		format := inputBytes1[0]
-		inputNsp := vectors[0].Nsp
+		inputNsp := vectors[0].GetNulls()
 		result, resultNsp, err := ToDateInputBytes(inputBytes0, format, inputNsp, results)
 		if err != nil {
 			return nil, err
@@ -48,7 +48,7 @@ func ToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, er
 	} else {
 		results := make([]string, len(inputBytes0))
 		format := inputBytes1[0]
-		inputNsp := vectors[0].Nsp
+		inputNsp := vectors[0].GetNulls()
 		results, resultNsp, err := ToDateInputBytes(inputBytes0, format, inputNsp, results)
 		if err != nil {
 			return nil, err

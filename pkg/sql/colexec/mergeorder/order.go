@@ -61,7 +61,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	// output the sort result.
 	if ctr.bat != nil {
 		for i := ctr.n; i < len(ctr.bat.Vecs); i++ {
-			vector.Clean(ctr.bat.Vecs[i], proc.Mp())
+			ctr.bat.Vecs[i].Free(proc.Mp())
 		}
 		ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
 		ctr.bat.ExpandNulls()
@@ -138,10 +138,10 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 				}
 			} else {
 				if err := ctr.processBatch(bat, proc); err != nil {
-					bat.Clean(proc.Mp())
+					bat.Free(proc.Mp())
 					return err
 				}
-				bat.Clean(proc.Mp())
+				bat.Free(proc.Mp())
 			}
 		}
 	}
@@ -153,7 +153,7 @@ func (ctr *container) processBatch(bat2 *batch.Batch, proc *process.Process) err
 	if bat1 == nil {
 		bat1 = batch.NewWithSize(len(bat1.Vecs))
 		for i, vec := range bat2.Vecs {
-			bat1.Vecs[i] = vector.New(vec.GetType())
+			bat1.Vecs[i] = vector.New(0, vec.GetType())
 		}
 	}
 	// union bat1 and bat2

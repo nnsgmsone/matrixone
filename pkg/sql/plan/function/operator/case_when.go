@@ -165,7 +165,7 @@ type NormalType interface {
 // cwGeneral is a general evaluate function for case-when operator
 // whose return type is uint / int / float / bool / date / datetime
 func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types.Type) (*vector.Vector, error) {
-	l := vector.Length(vs[0])
+	l := vs[0].Length()
 
 	rs, err := proc.AllocVector(t, int64(l*t.Oid.TypeLen()))
 	if err != nil {
@@ -203,7 +203,7 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 			rs.GetType().Scale = thenv.GetType().Scale
 			if !whenv.IsConstNull() && whencols[0] {
 				copy(rscols, thencols)
-				rs.GetNulls().Or(thenv.Nsp)
+				rs.GetNulls().Or(thenv.GetNulls())
 				return rs, nil
 			}
 		case !whenv.IsConst() && thenv.IsConst():
@@ -238,7 +238,7 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 			rs.GetType().Precision = thenv.GetType().Precision
 			rs.GetType().Width = thenv.GetType().Width
 			rs.GetType().Scale = thenv.GetType().Scale
-			if nulls.Any(thenv.Nsp) {
+			if nulls.Any(thenv.GetNulls()) {
 				var j uint64
 				temp := make([]uint64, 0, l)
 				for j = 0; j < uint64(l); j++ {
@@ -246,7 +246,7 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 						if flag[j] {
 							continue
 						}
-						if nulls.Contains(thenv.Nsp, j) {
+						if nulls.Contains(thenv.GetNulls(), j) {
 							temp = append(temp, j)
 						} else {
 							rscols[j] = thencols[j]
@@ -281,7 +281,7 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 		nulls.Add(rs.GetNulls(), temp...)
 	} else {
 		ev := vs[len(vs)-1]
-		ecols := ev.Col.([]T)
+		ecols := vector.MustTCols[T](ev)
 		if ev.IsConst() {
 			for i := 0; i < l; i++ {
 				if !flag[i] {
@@ -289,12 +289,12 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 				}
 			}
 		} else {
-			if nulls.Any(ev.Nsp) {
+			if nulls.Any(ev.GetNulls()) {
 				var i uint64
 				temp := make([]uint64, 0, l)
 				for i = 0; i < uint64(l); i++ {
 					if !flag[i] {
-						if nulls.Contains(ev.Nsp, i) {
+						if nulls.Contains(ev.GetNulls(), i) {
 							temp = append(temp, i)
 						} else {
 							rscols[i] = ecols[i]
@@ -318,7 +318,7 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 // cwString is an evaluate function for case-when operator
 // whose return type is char / varchar
 func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vector.Vector, error) {
-	nres := vector.Length(vs[0])
+	nres := vs[0].Length()
 	results := make([]string, nres)
 	nsp := nulls.NewWithSize(nres)
 	flag := make([]bool, nres)
@@ -351,7 +351,7 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 			if !whenv.IsConstNull() && whencols[0] {
 				for idx := range results {
 					if !flag[idx] {
-						if nulls.Contains(thenv.Nsp, uint64(idx)) {
+						if nulls.Contains(thenv.GetNulls(), uint64(idx)) {
 							nsp.Np.Add(uint64(idx))
 						} else {
 							results[idx] = thencols[idx]
@@ -364,7 +364,7 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 			if thenv.IsConstNull() {
 				for idx := range results {
 					if !flag[idx] {
-						if !nulls.Contains(whenv.Nsp, uint64(idx)) && whencols[idx] {
+						if !nulls.Contains(whenv.GetNulls(), uint64(idx)) && whencols[idx] {
 							nsp.Np.Add(uint64(idx))
 							flag[idx] = true
 						}
@@ -373,7 +373,7 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 			} else {
 				for idx := range results {
 					if !flag[idx] {
-						if !nulls.Contains(whenv.Nsp, uint64(idx)) && whencols[idx] {
+						if !nulls.Contains(whenv.GetNulls(), uint64(idx)) && whencols[idx] {
 							results[idx] = thencols[0]
 							flag[idx] = true
 						}
@@ -383,8 +383,8 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 		case !whenv.IsConst() && !thenv.IsConst():
 			for idx := range results {
 				if !flag[idx] {
-					if !nulls.Contains(whenv.Nsp, uint64(idx)) && whencols[idx] {
-						if nulls.Contains(thenv.Nsp, uint64(idx)) {
+					if !nulls.Contains(whenv.GetNulls(), uint64(idx)) && whencols[idx] {
+						if nulls.Contains(thenv.GetNulls(), uint64(idx)) {
 							nsp.Np.Add(uint64(idx))
 						} else {
 							results[idx] = thencols[idx]
@@ -417,7 +417,7 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 		} else {
 			for idx := range results {
 				if !flag[idx] {
-					if nulls.Contains(ev.Nsp, uint64(idx)) {
+					if nulls.Contains(ev.GetNulls(), uint64(idx)) {
 						nulls.Add(nsp, uint64(idx))
 					} else {
 						results[idx] = ecols[idx]

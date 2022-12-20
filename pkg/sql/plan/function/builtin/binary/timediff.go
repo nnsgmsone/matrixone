@@ -51,7 +51,7 @@ func TimeDiff[T timediff.DiffT](vectors []*vector.Vector, proc *process.Process)
 	}
 
 	rs := vector.MustTCols[types.Time](resultVector)
-	nulls.Or(firstVector.Nsp, secondVector.Nsp, resultVector.Nsp)
+	nulls.Or(firstVector.GetNulls(), secondVector.GetNulls(), resultVector.Nsp)
 	if err = timediff.TimeDiffWithTimeFn(firstValues, secondValues, rs); err != nil {
 		return nil, err
 	}

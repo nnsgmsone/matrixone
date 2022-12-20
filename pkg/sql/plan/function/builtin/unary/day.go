@@ -34,7 +34,7 @@ func DateToDay(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		vector.SetCol(resultVector, day.DateToDay(inputValues, resultValues))
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -57,7 +57,7 @@ func DatetimeToDay(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		vector.SetCol(resultVector, day.DatetimeToDay(inputValues, resultValues))
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}

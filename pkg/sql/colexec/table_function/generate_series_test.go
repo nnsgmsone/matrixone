@@ -17,6 +17,10 @@ package table_function
 import (
 	"bytes"
 	"context"
+	"math"
+	"strings"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -25,9 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
-	"math"
-	"strings"
-	"testing"
 )
 
 type Kase[T int32 | int64] struct {
@@ -464,7 +465,7 @@ func TestGenerateSeriesCall(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, false, end)
 	require.Equal(t, 3, proc.InputBatch().GetVector(0).Length())
-	proc.InputBatch().Clean(proc.Mp())
+	proc.InputBatch().Free(proc.Mp())
 
 	arg.Args = makeDatetimeList("2020-01-01 00:00:00", "2020-01-01 00:00:59", "1 second", 0)
 	proc.SetInputBatch(bat)
@@ -472,7 +473,7 @@ func TestGenerateSeriesCall(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, false, end)
 	require.Equal(t, 60, proc.InputBatch().GetVector(0).Length())
-	proc.InputBatch().Clean(proc.Mp())
+	proc.InputBatch().Free(proc.Mp())
 
 	arg.Args = makeVarcharList("2020-01-01 00:00:00", "2020-01-01 00:00:59", "1 second")
 	proc.SetInputBatch(bat)
@@ -480,7 +481,7 @@ func TestGenerateSeriesCall(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, false, end)
 	require.Equal(t, 60, proc.InputBatch().GetVector(0).Length())
-	proc.InputBatch().Clean(proc.Mp())
+	proc.InputBatch().Free(proc.Mp())
 
 	arg.Args = makeVarcharList("1", "10", "3")
 	proc.SetInputBatch(bat)
@@ -488,13 +489,13 @@ func TestGenerateSeriesCall(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, false, end)
 	require.Equal(t, 4, proc.InputBatch().GetVector(0).Length())
-	proc.InputBatch().Clean(proc.Mp())
+	proc.InputBatch().Free(proc.Mp())
 
 	arg.Args = arg.Args[:2]
 	proc.SetInputBatch(bat)
 	_, err = generateSeriesCall(0, proc, arg)
 	require.NotNil(t, err)
-	bat.Clean(proc.Mp())
+	bat.Free(proc.Mp())
 	require.Equal(t, beforeCall, proc.Mp().CurrNB())
 
 }

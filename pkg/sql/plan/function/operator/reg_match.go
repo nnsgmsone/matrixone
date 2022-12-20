@@ -52,7 +52,7 @@ func generalRegMatch(vectors []*vector.Vector, proc *process.Process, isReg bool
 		if left.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(rightValues)), right.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(rightValues)), right.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -66,7 +66,7 @@ func generalRegMatch(vectors []*vector.Vector, proc *process.Process, isReg bool
 		if right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(leftValues)), left.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(leftValues)), left.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -82,7 +82,7 @@ func generalRegMatch(vectors []*vector.Vector, proc *process.Process, isReg bool
 		return nil, err
 	}
 	resultValues := vector.MustTCols[bool](resultVector)
-	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
+	nulls.Or(left.GetNulls(), right.GetNulls(), resultVector.GetNulls())
 	err = RegMatchWithALL(leftValues, rightValues, resultValues, isReg)
 	if err != nil {
 		return nil, moerr.NewInvalidInputNoCtx("The Regular Expression have invalid parameter")

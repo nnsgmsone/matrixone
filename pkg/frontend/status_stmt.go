@@ -388,13 +388,13 @@ type GrantExecutor struct {
 }
 
 func (ge *GrantExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	switch ge.g.GetType() {
+	switch ge.g.Typ {
 	case tree.GrantTypeRole:
 		return doGrantRole(ctx, ses, &ge.g.GrantRole)
 	case tree.GrantTypePrivilege:
 		return doGrantPrivilege(ctx, ses, &ge.g.GrantPrivilege)
 	}
-	return moerr.NewInternalError(ctx, "no such grant type %v", ge.g.GetType())
+	return moerr.NewInternalError(ctx, "no such grant type %v", ge.g.Typ)
 }
 
 type RevokeExecutor struct {
@@ -403,13 +403,13 @@ type RevokeExecutor struct {
 }
 
 func (re *RevokeExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	switch re.r.GetType() {
+	switch re.r.Typ {
 	case tree.RevokeTypeRole:
 		return doRevokeRole(ctx, ses, &re.r.RevokeRole)
 	case tree.RevokeTypePrivilege:
 		return doRevokePrivilege(ctx, ses, &re.r.RevokePrivilege)
 	}
-	return moerr.NewInternalError(ctx, "no such revoke type %v", re.r.GetType())
+	return moerr.NewInternalError(ctx, "no such revoke type %v", re.r.Typ)
 }
 
 type CreateTableExecutor struct {

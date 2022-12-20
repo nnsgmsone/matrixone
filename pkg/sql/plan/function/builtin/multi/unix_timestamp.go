@@ -47,7 +47,7 @@ func UnixTimestamp(lv []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		}
 	}
 
-	vec, err := proc.AllocVectorOfRows(types.T_int64.ToType(), int64(len(times)), inVec.Nsp)
+	vec, err := proc.AllocVectorOfRows(types.T_int64.ToType(), int64(len(times)), inVec.GetRawData())
 	if err != nil {
 		return nil, err
 	}
@@ -55,13 +55,13 @@ func UnixTimestamp(lv []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	for i := 0; i < len(times); i++ {
 		// XXX This is simply wrong.  We should raise error.
 		if times[i] < 0 {
-			nulls.Add(vec.Nsp, uint64(i))
+			nulls.Add(vec.GetNulls(), uint64(i))
 		}
 	}
 	unixtimestamp.UnixTimestampToInt(times, rs)
 	for i, r := range rs {
 		if r < 0 {
-			nulls.Add(vec.Nsp, uint64(i))
+			nulls.Add(vec.GetNulls(), uint64(i))
 		}
 	}
 	return vec, nil
@@ -92,7 +92,7 @@ func UnixTimestampVarcharToInt64(lv []*vector.Vector, proc *process.Process) (*v
 	for i := 0; i < vlen; i++ {
 		times[i] = MustTimestamp(proc.SessionInfo.TimeZone, inVec.GetString(int64(i)))
 	}
-	vec, err := proc.AllocVectorOfRows(resultType, int64(vlen), inVec.Nsp)
+	vec, err := proc.AllocVectorOfRows(resultType, int64(vlen), inVec.GetRawData())
 	if err != nil {
 		return nil, err
 	}
@@ -100,7 +100,7 @@ func UnixTimestampVarcharToInt64(lv []*vector.Vector, proc *process.Process) (*v
 	unixtimestamp.UnixTimestampToInt(times, rs)
 	for i, r := range rs {
 		if r < 0 {
-			nulls.Add(vec.Nsp, uint64(i))
+			nulls.Add(vec.GetNulls(), uint64(i))
 		}
 	}
 	return vec, nil
@@ -130,7 +130,7 @@ func UnixTimestampVarcharToFloat64(lv []*vector.Vector, proc *process.Process) (
 	for i := 0; i < vlen; i++ {
 		times[i] = MustTimestamp(proc.SessionInfo.TimeZone, inVec.GetString(int64(i)))
 	}
-	vec, err := proc.AllocVectorOfRows(resultType, int64(vlen), inVec.Nsp)
+	vec, err := proc.AllocVectorOfRows(resultType, int64(vlen), inVec.GetRawData())
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +138,7 @@ func UnixTimestampVarcharToFloat64(lv []*vector.Vector, proc *process.Process) (
 	unixtimestamp.UnixTimestampToFloat(times, rs)
 	for i, r := range rs {
 		if r < 0 {
-			nulls.Add(vec.Nsp, uint64(i))
+			nulls.Add(vec.GetNulls(), uint64(i))
 		}
 	}
 	return vec, nil
@@ -172,7 +172,7 @@ func UnixTimestampVarcharToDecimal128(lv []*vector.Vector, proc *process.Process
 	for i := 0; i < vlen; i++ {
 		times[i] = MustTimestamp(proc.SessionInfo.TimeZone, inVec.GetString(int64(i)))
 	}
-	vec, err := proc.AllocVectorOfRows(resultType, int64(vlen), inVec.Nsp)
+	vec, err := proc.AllocVectorOfRows(resultType, int64(vlen), inVec.GetRawData())
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +180,7 @@ func UnixTimestampVarcharToDecimal128(lv []*vector.Vector, proc *process.Process
 	unixtimestamp.UnixTimestampToDecimal128(times, rs)
 	for i, r := range rs {
 		if r.Lt(Decimal128Zero) {
-			nulls.Add(vec.Nsp, uint64(i))
+			nulls.Add(vec.GetNulls(), uint64(i))
 		}
 	}
 	return vec, nil

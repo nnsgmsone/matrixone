@@ -100,7 +100,7 @@ loop:
 
 	offset, step := make([]uint64, 0), make([]uint64, 0)
 	for i, col := range param.colDefs {
-		if !col.GetType().AutoIncr {
+		if !col.Typ.AutoIncr {
 			continue
 		}
 		var d, s uint64
@@ -126,7 +126,7 @@ func getMaxnum[T constraints.Integer](vec *vector.Vector, length, maxNum, step u
 	vs := vector.MustTCols[T](vec)
 	rowIndex := uint64(0)
 	for rowIndex = 0; rowIndex < length; rowIndex++ {
-		if nulls.Contains(vec.Nsp, rowIndex) {
+		if nulls.Contains(vec.GetNulls(), rowIndex) {
 			maxNum += step
 		} else {
 			if vs[rowIndex] < 0 {
@@ -144,8 +144,8 @@ func updateVector[T constraints.Integer](vec *vector.Vector, length, curNum, ste
 	vs := vector.MustTCols[T](vec)
 	rowIndex := uint64(0)
 	for rowIndex = 0; rowIndex < length; rowIndex++ {
-		if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
-			nulls.Del(vec.Nsp, rowIndex)
+		if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) {
+			nulls.Del(vec.GetNulls(), rowIndex)
 			curNum += stepNum
 			vs[rowIndex] = T(curNum)
 		} else {
@@ -219,7 +219,7 @@ func getOneColRangeFromAutoIncrTable(ctx context.Context, param *AutoIncrParam, 
 func updateBatchImpl(ctx context.Context, ColDefs []*plan.ColDef, bat *batch.Batch, offset, step []uint64) error {
 	pos := 0
 	for i, col := range ColDefs {
-		if !col.GetType().AutoIncr {
+		if !col.Typ.AutoIncr {
 			continue
 		}
 		vec := bat.Vecs[i]
@@ -298,16 +298,16 @@ func getCurrentIndex(ctx context.Context, param *AutoIncrParam, colName string, 
 		vs3 := vector.MustTCols[uint64](bat.Vecs[3])
 		var rowIndex int64
 		for rowIndex = 0; rowIndex < int64(bat.Length()); rowIndex++ {
-			str := bat.Vecs[1].GetString(rowIndex)
+			str := bat.Vecs[1].String()
 			if str == colName {
 				break
 			}
 		}
 		if rowIndex < int64(bat.Length()) {
-			bat.Clean(mp)
+			bat.Free(mp)
 			return vs2[rowIndex], vs3[rowIndex], nil
 		}
-		bat.Clean(mp)
+		bat.Free(mp)
 	}
 	return 0, 0, nil
 }
@@ -320,12 +320,12 @@ func updateAutoIncrTable(ctx context.Context, param *AutoIncrParam, curNum uint6
 	bat.SetZs(bat.GetVector(0).Length(), mp)
 	err := param.rel.Delete(param.ctx, bat, AUTO_INCR_TABLE_COLNAME[0])
 	if err != nil {
-		bat.Clean(mp)
+		bat.Free(mp)
 		return err
 	}
 	bat = makeAutoIncrBatch(name, curNum, 1, mp)
 	if err = param.rel.Write(param.ctx, bat); err != nil {
-		bat.Clean(mp)
+		bat.Free(mp)
 		return err
 	}
 	param.proc.SetLastInsertID(curNum)
@@ -371,7 +371,7 @@ func GetDeleteBatch(rel engine.Relation, ctx context.Context, colName string, mp
 	for len(rds) > 0 {
 		bat, err := rds[0].Read(ctx, AUTO_INCR_TABLE_COLNAME, nil, mp)
 		if err != nil {
-			bat.Clean(mp)
+			bat.Free(mp)
 			return nil, 0
 		}
 		if bat == nil {
@@ -384,17 +384,17 @@ func GetDeleteBatch(rel engine.Relation, ctx context.Context, colName string, mp
 		}
 		var rowIndex int64
 		for rowIndex = 0; rowIndex < int64(bat.Length()); rowIndex++ {
-			str := bat.Vecs[1].GetString(rowIndex)
+			str := bat.Vecs[1].String()
 			if str == colName {
 				currentNum := vector.MustTCols[uint64](bat.Vecs[2])[rowIndex : rowIndex+1]
 				retbat.Vecs = append(retbat.Vecs, bat.Vecs[0])
 				retbat.Vecs[0].Col = retbat.Vecs[0].Col.([]types.Rowid)[rowIndex : rowIndex+1]
 				retbat.SetZs(1, mp)
-				bat.Clean(mp)
+				bat.Free(mp)
 				return retbat, currentNum[0]
 			}
 		}
-		bat.Clean(mp)
+		bat.Free(mp)
 	}
 	return nil, 0
 }
@@ -425,7 +425,7 @@ func CreateAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database
 	}
 
 	for _, attr := range cols {
-		if !attr.GetType().AutoIncr {
+		if !attr.Typ.AutoIncr {
 			continue
 		}
 		rel2, err := GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
@@ -473,13 +473,13 @@ func DeleteAutoIncrCol(eg engine.Engine, ctx context.Context, rel engine.Relatio
 				return moerr.NewInternalError(ctx, "the deleted batch is nil")
 			}
 			if err = rel2.Delete(ctx, bat, AUTO_INCR_TABLE_COLNAME[0]); err != nil {
-				bat.Clean(proc.Mp())
+				bat.Free(proc.Mp())
 				if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
 					return err2
 				}
 				return err
 			}
-			bat.Clean(proc.Mp())
+			bat.Free(proc.Mp())
 		}
 	}
 	if err = CommitTxn(eg, txn, ctx); err != nil {

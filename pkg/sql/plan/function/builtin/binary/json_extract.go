@@ -42,7 +42,7 @@ func JsonExtractByString(vectors []*vector.Vector, proc *process.Process) (*vect
 		if err != nil {
 			return nil, err
 		}
-		ret = vector.New(types.Type{Oid: resultType})
+		ret = vector.New(0, types.Type{Oid: resultType})
 		for _, v := range resultValues {
 			dt, _ := v.Marshal()
 			err = ret.Append(dt, v.IsNull(), proc.Mp())
@@ -63,7 +63,7 @@ func JsonExtractByString(vectors []*vector.Vector, proc *process.Process) (*vect
 	if err != nil {
 		return nil, err
 	}
-	ret = vector.New(types.Type{Oid: resultType})
+	ret = vector.New(0, types.Type{Oid: resultType})
 	for _, v := range resultValues {
 		dt, _ := v.Marshal()
 		err = ret.Append(dt, v.IsNull(), proc.Mp())
@@ -94,7 +94,7 @@ func JsonExtractByJson(vectors []*vector.Vector, proc *process.Process) (*vector
 		if err != nil {
 			return nil, err
 		}
-		ret = vector.New(types.Type{Oid: resultType})
+		ret = vector.New(0, types.Type{Oid: resultType})
 		for _, v := range resultValues {
 			dt, _ := v.Marshal()
 			err = ret.Append(dt, v.IsNull(), proc.Mp())
@@ -115,7 +115,7 @@ func JsonExtractByJson(vectors []*vector.Vector, proc *process.Process) (*vector
 	if err != nil {
 		return nil, err
 	}
-	ret = vector.New(types.Type{Oid: resultType})
+	ret = vector.New(0, types.Type{Oid: resultType})
 	for _, v := range resultValues {
 		dt, _ := v.Marshal()
 		err = ret.Append(dt, v.IsNull(), proc.Mp())

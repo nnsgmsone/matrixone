@@ -228,7 +228,7 @@ func (h *HashShard) Vector(
 		shard := shards[n%len(shards)]
 		shardVec, ok := m[shard]
 		if !ok {
-			shardVec = vector.New(shardAttr.Type)
+			shardVec = vector.New(0, shardAttr.Type)
 			m[shard] = shardVec
 		}
 		v := getNullableValueFromVector(vec, i)
@@ -302,7 +302,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]bool)[i],
+			Value:  vector.MustTCols[bool](vec)[i],
 		}
 		return
 
@@ -316,7 +316,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]int8)[i],
+			Value:  vector.MustTCols[int8](vec)[i],
 		}
 		return
 
@@ -330,7 +330,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]int16)[i],
+			Value:  vector.MustTCols[int16](vec)[i],
 		}
 		return
 
@@ -344,7 +344,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]int32)[i],
+			Value:  vector.MustTCols[int32](vec)[i],
 		}
 		return
 
@@ -358,7 +358,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]int64)[i],
+			Value:  vector.MustTCols[int64](vec)[i],
 		}
 		return
 
@@ -372,7 +372,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]uint8)[i],
+			Value:  vector.MustTCols[uint8](vec)[i],
 		}
 		return
 
@@ -386,7 +386,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]uint16)[i],
+			Value:  vector.MustTCols[uint16](vec)[i],
 		}
 		return
 
@@ -400,7 +400,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]uint32)[i],
+			Value:  vector.MustTCols[uint32](vec)[i],
 		}
 		return
 
@@ -414,7 +414,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]uint64)[i],
+			Value:  vector.MustTCols[uint64](vec)[i],
 		}
 		return
 
@@ -428,7 +428,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]float32)[i],
+			Value:  vector.MustTCols[float32](vec)[i],
 		}
 		return
 
@@ -442,7 +442,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]float64)[i],
+			Value:  vector.MustTCols[float64](vec)[i],
 		}
 		return
 
@@ -456,7 +456,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([][]any)[i],
+			Value:  vector.MustTCols[[]any](vec)[i],
 		}
 		return
 
@@ -485,7 +485,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]types.Date)[i],
+			Value:  vector.MustTCols[types.Date](vec)[i],
 		}
 		return
 
@@ -500,7 +500,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]types.Time)[i],
+			Value:  vector.MustTCols[types.Time](vec)[i],
 		}
 		return
 
@@ -515,7 +515,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]types.Datetime)[i],
+			Value:  vector.MustTCols[types.Datetime](vec)[i],
 		}
 		return
 
@@ -530,7 +530,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]types.Timestamp)[i],
+			Value:  vector.MustTCols[types.Timestamp](vec)[i],
 		}
 		return
 
@@ -545,7 +545,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]types.Decimal64)[i],
+			Value:  vector.MustTCols[types.Decimal64](vec)[i],
 		}
 		return
 
@@ -560,7 +560,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]types.Decimal128)[i],
+			Value:  vector.MustTCols[types.Decimal128](vec)[i],
 		}
 		return
 
@@ -575,7 +575,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]types.Rowid)[i],
+			Value:  vector.MustTCols[types.Rowid](vec)[i],
 		}
 		return
 
@@ -590,7 +590,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
-			Value:  vec.Col.([]types.Uuid)[i],
+			Value:  vector.MustTCols[types.Uuid](vec)[i],
 		}
 		return
 
@@ -604,7 +604,7 @@ func appendNullableValueToVector(vec *vector.Vector, value Nullable, mp *mpool.M
 	if ok {
 		value.Value = []byte(str)
 	}
-	vec.Append(value.Value, false, mp)
+	vector.Append(vec, value.Value, false, mp)
 	if value.IsNull {
 		vec.GetNulls().Set(uint64(vec.Length() - 1))
 	}

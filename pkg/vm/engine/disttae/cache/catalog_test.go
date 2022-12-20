@@ -74,9 +74,9 @@ func TestGC(t *testing.T) {
 			require.Equal(t, false, ok)
 		}
 	}
-	dbBat.Clean(mp)
-	tblBat.Clean(mp)
-	colBat.Clean(mp)
+	dbBat.Free(mp)
+	tblBat.Free(mp)
+	colBat.Free(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
@@ -101,7 +101,7 @@ func TestTables(t *testing.T) {
 		PhysicalTime: 100,
 	})
 	require.Equal(t, 10, len(tblList))
-	bat.Clean(mp)
+	bat.Free(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
@@ -121,7 +121,7 @@ func TestDatabases(t *testing.T) {
 		PhysicalTime: 100,
 	})
 	require.Equal(t, 10, len(dbList))
-	bat.Clean(mp)
+	bat.Free(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
@@ -148,7 +148,7 @@ func TestDatabasesWithMultiVersion(t *testing.T) {
 		PhysicalTime: 100,
 	})
 	require.Equal(t, 1, len(dbList)) // only one version can be see
-	bat.Clean(mp)
+	bat.Free(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
@@ -183,7 +183,7 @@ func TestDatabaseCache(t *testing.T) {
 		ok := cc.GetDatabase(key)
 		require.Equal(t, false, ok)
 	}
-	bat.Clean(mp)
+	bat.Free(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
@@ -224,8 +224,8 @@ func TestTableInsert(t *testing.T) {
 		ok := cc.GetTable(key)
 		require.Equal(t, false, ok)
 	}
-	bat.Clean(mp)
-	colBat.Clean(mp)
+	bat.Free(mp)
+	colBat.Free(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
@@ -252,60 +252,60 @@ func newTestColumnBatch(t *testing.T, ibat *batch.Batch, mp *mpool.MPool) *batch
 	bat := batch.NewWithSize(len(typs))
 	bat.SetZs(Rows, mp)
 	for i := range bat.Vecs {
-		bat.Vecs[i] = vector.New(typs[i])
+		bat.Vecs[i] = vector.New(0, typs[i])
 	}
 	for i, account := range accounts {
 		for j, typ := range typs {
 			switch j {
 			case MO_TIMESTAMP_IDX:
-				vec = vector.New(typ)
+				vec = vector.New(0, typ)
 				for k := 0; k < Rows; k++ {
-					err := vec.Append(timestamps[i], false, mp)
+					err := vector.Append(vec, timestamps[i], false, mp)
 					require.NoError(t, err)
 				}
 			case catalog.MO_COLUMNS_ACCOUNT_ID_IDX + MO_OFF:
-				vec = vector.New(typ)
+				vec = vector.New(0, typ)
 				for k := 0; k < Rows; k++ {
-					err := vec.Append(account, false, mp)
+					err := vector.Append(vec, account, false, mp)
 					require.NoError(t, err)
 				}
 			case catalog.MO_COLUMNS_ATT_DATABASE_ID_IDX + MO_OFF:
-				vec = vector.New(typ)
+				vec = vector.New(0, typ)
 				for k := 0; k < Rows; k++ {
-					err := vec.Append(databaseIds[i], false, mp)
+					err := vector.Append(vec, databaseIds[i], false, mp)
 					require.NoError(t, err)
 				}
 			case catalog.MO_COLUMNS_ATT_RELNAME_IDX + MO_OFF:
-				vec = vector.New(typ)
+				vec = vector.New(0, typ)
 				for k := 0; k < Rows; k++ {
-					err := vec.Append(names[i], false, mp)
+					err := vector.Append(vec, names[i], false, mp)
 					require.NoError(t, err)
 				}
 			case catalog.MO_COLUMNS_ATTTYP_IDX + MO_OFF:
 				data, err := types.Encode(typ) // reuse the type for test
 				require.NoError(t, err)
-				vec = vector.New(typ)
+				vec = vector.New(0, typ)
 				for k := 0; k < Rows; k++ {
-					err := vec.Append(data, false, mp)
+					err := vector.Append(vec, data, false, mp)
 					require.NoError(t, err)
 				}
 			case catalog.MO_COLUMNS_ATTHASDEF_IDX + MO_OFF:
-				vec = vector.New(typ)
+				vec = vector.New(0, typ)
 				for k := 0; k < Rows; k++ {
-					err := vec.Append(int8(0), false, mp)
+					err := vector.Append(vec, int8(0), false, mp)
 					require.NoError(t, err)
 				}
 			case catalog.MO_COLUMNS_ATT_HAS_UPDATE_IDX + MO_OFF:
-				vec = vector.New(typ)
+				vec = vector.New(0, typ)
 				for k := 0; k < Rows; k++ {
-					err := vec.Append(int8(0), false, mp)
+					err := vector.Append(vec, int8(0), false, mp)
 					require.NoError(t, err)
 				}
 			default:
 				vec = testutil.NewVector(Rows, typ, mp, false, nil)
 			}
 			for k := 0; k < Rows; k++ {
-				err := vector.UnionOne(bat.Vecs[j], vec, int64(k), mp)
+				err := bat.Vecs[j].UnionOne(vec, int64(k), bat.Vecs[j].Length() == 0, mp)
 				require.NoError(t, err)
 			}
 			vec.Free(mp)

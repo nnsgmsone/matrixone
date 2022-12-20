@@ -47,7 +47,7 @@ func TestDateToTimestamp(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.want, result.Col.([]types.Timestamp))
+			require.Equal(t, c.want, vector.MustTCols[types.Timestamp](result))
 		})
 	}
 
@@ -74,7 +74,7 @@ func TestDatetimeToTimestamp(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.want, date.Col.([]types.Timestamp))
+			require.Equal(t, c.want, vector.MustTCols[types.Timestamp](date))
 		})
 	}
 
@@ -117,8 +117,8 @@ func TestDateStringAdd(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.want, date.Col.([]types.Timestamp))
-			require.Equal(t, c.contain, nulls.Contains(date.Nsp, 0))
+			require.Equal(t, c.want, vector.MustTCols[types.Timestamp](date))
+			require.Equal(t, c.contain, nulls.Contains(date.GetNulls(), 0))
 		})
 	}
 

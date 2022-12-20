@@ -30,7 +30,7 @@ func FieldString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, er
 	firstVector := vs[0]
 	firstValues := vector.MustStrCols(firstVector)
 
-	vecLen := vector.Length(firstVector)
+	vecLen := firstVector.Length()
 
 	//return vector
 	returnType := types.T_uint64.ToType()
@@ -101,7 +101,7 @@ func FieldString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, er
 	} else {
 
 		//if the first vector is null
-		nullsLength := nulls.Length(firstVector.Nsp)
+		nullsLength := nulls.Length(firstVector.GetNulls())
 		if nullsLength == vecLen {
 			return resultVector, nil
 		}
@@ -145,7 +145,7 @@ func FieldNumber[T number](vs []*vector.Vector, proc *process.Process) (*vector.
 	firstVector := vs[0]
 	firstValues := vector.MustTCols[T](firstVector)
 
-	vecLen := vector.Length(firstVector)
+	vecLen := firstVector.Length()
 
 	//return vector
 	returnType := types.T_uint64.ToType()
@@ -216,7 +216,7 @@ func FieldNumber[T number](vs []*vector.Vector, proc *process.Process) (*vector.
 	} else {
 
 		//if the first vector is null
-		nullsLength := nulls.Length(firstVector.Nsp)
+		nullsLength := nulls.Length(firstVector.GetNulls())
 		if nullsLength == vecLen {
 			return resultVector, nil
 		}

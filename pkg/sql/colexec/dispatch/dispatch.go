@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -44,9 +43,9 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	// source vectors should be cloned and instead before it was sent.
 	for i, vec := range bat.Vecs {
 		if vec.IsOriginal() {
-			cloneVec, err := vector.Dup(vec, proc.Mp())
+			cloneVec, err := vec.Dup(proc.Mp())
 			if err != nil {
-				bat.Clean(proc.Mp())
+				bat.Free(proc.Mp())
 				return false, err
 			}
 			bat.Vecs[i] = cloneVec
@@ -83,7 +82,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 				if bat == nil {
 					break
 				}
-				bat.Clean(proc.Mp())
+				bat.Free(proc.Mp())
 			}
 			ap.Regs = append(ap.Regs[:ap.ctr.i], ap.Regs[ap.ctr.i+1:]...)
 			if ap.ctr.i >= len(ap.Regs) {

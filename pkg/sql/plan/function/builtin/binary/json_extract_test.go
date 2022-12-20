@@ -96,8 +96,8 @@ var (
 func makeTestVector1(json, path string) []*vector.Vector {
 	vec := make([]*vector.Vector, 2)
 	//TODO size may not fit
-	vec[0] = vector.New(types.Type{Oid: types.T_varchar, Size: -1})
-	vec[1] = vector.New(types.Type{Oid: types.T_varchar, Size: -1})
+	vec[0] = vector.New(0, types.Type{Oid: types.T_varchar, Size: -1})
+	vec[1] = vector.New(0, types.Type{Oid: types.T_varchar, Size: -1})
 	err := vec[0].Append([]byte(json), false, procs.Mp())
 	if err != nil {
 		panic(err)
@@ -111,8 +111,8 @@ func makeTestVector1(json, path string) []*vector.Vector {
 func makeTestVector2(json, path string) []*vector.Vector {
 	vec := make([]*vector.Vector, 2)
 	//TODO size may not fit
-	vec[0] = vector.New(types.Type{Oid: types.T_json, Size: -1})
-	vec[1] = vector.New(types.Type{Oid: types.T_varchar, Size: -1})
+	vec[0] = vector.New(0, types.Type{Oid: types.T_json, Size: -1})
+	vec[1] = vector.New(0, types.Type{Oid: types.T_varchar, Size: -1})
 	bjson, err := types.ParseStringToByteJson(json)
 	if err != nil {
 		panic(err)

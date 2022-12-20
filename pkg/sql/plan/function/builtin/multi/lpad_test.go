@@ -155,7 +155,7 @@ func TestLpadVarchar(t *testing.T) {
 				t.Fatal(err)
 			}
 			if c.wantBytes == nil {
-				ret := nulls.Contains(lpad.Nsp, 0)
+				ret := nulls.Contains(lpad.GetNulls(), 0)
 				require.Equal(t, ret, true)
 			} else {
 				require.Equal(t, c.wantBytes, lpad.GetBytes(0))
@@ -173,7 +173,7 @@ func makeLpadVectors(src string, length int64, pad string, nils []int) []*vector
 	vec[2] = vector.NewConstString(types.T_varchar.ToType(), 1, pad, testutil.TestUtilMp)
 	for i, n := range nils {
 		if n == 0 {
-			nulls.Add(vec[i].Nsp, uint64(i))
+			nulls.Add(vec[i].GetNulls(), uint64(i))
 		}
 	}
 	return vec

@@ -87,7 +87,7 @@ func TestIntersect(t *testing.T) {
 		if result != nil && len(result.Zs) != 0 {
 			cnt += result.Length()
 			require.Equal(t, 3, len(result.Vecs)) // 3 column
-			c.proc.InputBatch().Clean(c.proc.Mp())
+			c.proc.InputBatch().Free(c.proc.Mp())
 		}
 	}
 	require.Equal(t, 1, cnt) // 1 row

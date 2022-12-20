@@ -36,7 +36,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 				if bat == nil {
 					break
 				}
-				bat.Clean(proc.Mp())
+				bat.Free(proc.Mp())
 			}
 		}
 	}

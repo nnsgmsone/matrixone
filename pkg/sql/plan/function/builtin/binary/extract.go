@@ -128,7 +128,7 @@ func ExtractFromDatetime(vectors []*vector.Vector, proc *process.Process) (*vect
 		if err != nil {
 			return nil, err
 		}
-		return vector.NewWithStrings(resultType, resultValues, right.Nsp, proc.Mp()), nil
+		return vector.NewWithStrings(resultType, resultValues, right.GetNulls(), proc.Mp()), nil
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("invalid input")
 	}

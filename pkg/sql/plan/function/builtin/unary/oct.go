@@ -40,7 +40,7 @@ func Oct[T constraints.Unsigned | constraints.Signed](vectors []*vector.Vector, 
 		vector.SetCol(resultVector, col)
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -70,7 +70,7 @@ func OctFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Proce
 		vector.SetCol(resultVector, col)
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}

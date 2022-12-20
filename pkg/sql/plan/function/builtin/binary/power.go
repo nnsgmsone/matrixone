@@ -38,7 +38,7 @@ func Power(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		if left.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(rightValues)), right.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(rightValues)), right.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -49,7 +49,7 @@ func Power(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		if right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(leftValues)), left.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(leftValues)), left.GetNulls())
 		if err != nil {
 			return nil, err
 		}

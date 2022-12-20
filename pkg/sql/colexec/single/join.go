@@ -36,10 +36,10 @@ func Prepare(proc *process.Process, arg any) error {
 	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.evecs = make([]evalVector, len(ap.Conditions[0]))
 	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
-	ap.ctr.bat = batch.NewWithSize(len(ap.GetType()s))
+	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
 	ap.ctr.bat.Zs = proc.Mp().GetSels()
-	for i, typ := range ap.GetType()s {
-		ap.ctr.bat.Vecs[i] = vector.New(typ)
+	for i, typ := range ap.Typs {
+		ap.ctr.bat.Vecs[i] = vector.New(0, typ)
 	}
 	return nil
 }
@@ -99,7 +99,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 }
 
 func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
-	defer bat.Clean(proc.Mp())
+	defer bat.Free(proc.Mp())
 	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
 	count := bat.Length()
@@ -119,17 +119,17 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
-	defer bat.Clean(proc.Mp())
+	defer bat.Free(proc.Mp())
 	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
 	for i, rp := range ap.Result {
 		if rp.Rel != 0 {
-			rbat.Vecs[i] = vector.New(ctr.bat.Vecs[rp.Pos].GetType())
+			rbat.Vecs[i] = vector.New(0, ctr.bat.Vecs[rp.Pos].GetType())
 		}
 	}
 	ctr.cleanEvalVectors(proc.Mp())
 	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc); err != nil {
-		rbat.Clean(proc.Mp())
+		rbat.Free(proc.Mp())
 		return err
 	}
 
@@ -151,7 +151,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				for j, rp := range ap.Result {
 					if rp.Rel != 0 {
 						if err := vector.UnionNull(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], proc.Mp()); err != nil {
-							rbat.Clean(proc.Mp())
+							rbat.Free(proc.Mp())
 							return err
 						}
 					}
@@ -165,14 +165,14 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				for j, sel := range sels {
 					vec, err := colexec.JoinFilterEvalExprInBucket(bat, ctr.bat, i+k, int(sel), proc, ap.Cond)
 					if err != nil {
-						rbat.Clean(proc.Mp())
+						rbat.Free(proc.Mp())
 						return err
 					}
-					bs := vec.Col.([]bool)
+					bs := vector.MustTCols[bool](vec)
 					if bs[0] {
 						if matched {
 							vec.Free(proc.Mp())
-							rbat.Clean(proc.Mp())
+							rbat.Free(proc.Mp())
 							return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
 						}
 						matched = true
@@ -181,14 +181,14 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					vec.Free(proc.Mp())
 				}
 			} else if len(sels) > 1 {
-				rbat.Clean(proc.Mp())
+				rbat.Free(proc.Mp())
 				return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
 			}
 			if ap.Cond != nil && !matched {
 				for j, rp := range ap.Result {
 					if rp.Rel != 0 {
 						if err := vector.UnionNull(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], proc.Mp()); err != nil {
-							rbat.Clean(proc.Mp())
+							rbat.Free(proc.Mp())
 							return err
 						}
 					}
@@ -198,8 +198,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			sel := sels[idx]
 			for j, rp := range ap.Result {
 				if rp.Rel != 0 {
-					if err := vector.UnionOne(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], sel, proc.Mp()); err != nil {
-						rbat.Clean(proc.Mp())
+					if err := rbat.Vecs[j].UnionOne(ctr.bat.Vecs[rp.Pos], sel, rbat.Vecs[j].Length() == 0, proc.Mp()); err != nil {
+						rbat.Free(proc.Mp())
 						return err
 					}
 				}

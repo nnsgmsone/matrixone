@@ -103,16 +103,16 @@ func (m *MemHandler) HandleGetLogTail(ctx context.Context, meta txn.TxnMeta, req
 
 	// batches
 	insertBatch := batch.New(false, append(prependCols, insertNames...))
-	insertBatch.Vecs[0] = vector.New(types.T_Rowid.ToType()) // row id
-	insertBatch.Vecs[1] = vector.New(types.T_TS.ToType())    // commit time
+	insertBatch.Vecs[0] = vector.New(0, types.T_Rowid.ToType()) // row id
+	insertBatch.Vecs[1] = vector.New(0, types.T_TS.ToType())    // commit time
 	for i, name := range insertNames {
-		insertBatch.Vecs[startOffset+i] = vector.New(attrsMap[name].Type)
+		insertBatch.Vecs[startOffset+i] = vector.New(0, attrsMap[name].Type)
 	}
 	deleteBatch := batch.New(false, append(prependCols, deleteNames...))
-	deleteBatch.Vecs[0] = vector.New(types.T_Rowid.ToType()) // row id
-	deleteBatch.Vecs[1] = vector.New(types.T_TS.ToType())    // commit time
+	deleteBatch.Vecs[0] = vector.New(0, types.T_Rowid.ToType()) // row id
+	deleteBatch.Vecs[1] = vector.New(0, types.T_TS.ToType())    // commit time
 	for i, name := range deleteNames {
-		deleteBatch.Vecs[startOffset+i] = vector.New(attrsMap[name].Type)
+		deleteBatch.Vecs[startOffset+i] = vector.New(0, attrsMap[name].Type)
 	}
 
 	appendRow := func(batch *batch.Batch, row NamedRow, commitTime Time, readTime Time) error {

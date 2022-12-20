@@ -36,14 +36,14 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector, strCol 
 		sz := len(os)
 		if nullsLast { // move null rows to the tail
 			var cursor int
-			for cursor < sz && !nulls.Contains(vec.Nsp, uint64(os[cursor])) {
+			for cursor < sz && !nulls.Contains(vec.GetNulls(), uint64(os[cursor])) {
 				cursor++
 			}
 			if cursor == sz {
 				return
 			}
 			for i := cursor; i < sz; i++ {
-				if !nulls.Contains(vec.Nsp, uint64(os[i])) {
+				if !nulls.Contains(vec.GetNulls(), uint64(os[i])) {
 					os[cursor], os[i] = os[i], os[cursor]
 					cursor++
 				}
@@ -51,14 +51,14 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector, strCol 
 			os = os[:cursor]
 		} else { // move null rows to the head
 			var cursor int
-			for cursor < sz && nulls.Contains(vec.Nsp, uint64(os[cursor])) {
+			for cursor < sz && nulls.Contains(vec.GetNulls(), uint64(os[cursor])) {
 				cursor++
 			}
 			if cursor == sz {
 				return
 			}
 			for i := cursor; i < sz; i++ {
-				if nulls.Contains(vec.Nsp, uint64(os[i])) {
+				if nulls.Contains(vec.GetNulls(), uint64(os[i])) {
 					os[cursor], os[i] = os[i], os[cursor]
 					cursor++
 				}

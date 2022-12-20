@@ -82,12 +82,21 @@ func (v *Vector) GetType() types.Type {
 	return v.typ
 }
 
+func (v *Vector) SetType(typ types.Type) {
+	v.typ = typ
+}
+
 func (v *Vector) GetNulls() *nulls.Nulls {
 	return v.nsp
 }
 
 func (v *Vector) SetNulls(nsp *nulls.Nulls) {
 	v.nsp = nsp
+}
+
+func (v *Vector) GetBytes(i int64) []byte {
+	bs := MustTCols[types.Varlena](v)
+	return bs[i].GetByteSlice(v.area)
 }
 
 func (v *Vector) GetRawData() []byte {

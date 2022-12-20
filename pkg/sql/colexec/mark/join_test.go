@@ -99,7 +99,7 @@ func TestMark(t *testing.T) {
 			if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
 				break
 			}
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+			tc.proc.Reg.InputBatch.Free(tc.proc.Mp())
 		}
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
@@ -118,7 +118,7 @@ func TestMark(t *testing.T) {
 			if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
 				break
 			}
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+			tc.proc.Reg.InputBatch.Free(tc.proc.Mp())
 		}
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
@@ -171,7 +171,7 @@ func BenchmarkMark(b *testing.B) {
 				if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
 					break
 				}
-				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+				tc.proc.Reg.InputBatch.Free(tc.proc.Mp())
 			}
 		}
 	}

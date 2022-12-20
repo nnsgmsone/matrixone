@@ -62,7 +62,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	for i := range bat.Vecs {
 		bat.Vecs[i] = bat.Vecs[i].ConstExpand(proc.Mp())
 	}
-	defer bat.Clean(proc.Mp())
+	defer bat.Free(proc.Mp())
 
 	// do null check
 	for i, updateCtx := range p.UpdateCtxs {
@@ -83,7 +83,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			// Not-null check, for more information, please refer to the comments in func InsertValues
 			if (p.TableDefVec[i].Cols[j].Primary && !p.TableDefVec[i].Cols[j].GetType().AutoIncr) || (p.TableDefVec[i].Cols[j].Default != nil && !p.TableDefVec[i].Cols[j].Default.NullAbility) {
 				if nulls.Any(tmpBat.Vecs[j].Nsp) {
-					tmpBat.Clean(proc.Mp())
+					tmpBat.Free(proc.Mp())
 					return false, moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", tmpBat.Attrs[j]))
 				}
 			}
@@ -95,7 +95,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 				for i := range tmpBat.Vecs {
 					if tmpBat.Attrs[i] == name {
 						if nulls.Any(tmpBat.Vecs[i].Nsp) {
-							tmpBat.Clean(proc.Mp())
+							tmpBat.Free(proc.Mp())
 							return false, moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", updateCtx.OrderAttrs[i]))
 						}
 					}
@@ -103,7 +103,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			}
 		}
 
-		tmpBat.Clean(proc.Mp())
+		tmpBat.Free(proc.Mp())
 	}
 
 	// write data
@@ -143,13 +143,13 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 					if rowNum != 0 {
 						err := rel.Delete(proc.Ctx, oldBatch, updateCtx.UniqueIndexDef.Fields[num].Cols[0].Name)
 						if err != nil {
-							delBat.Clean(proc.Mp())
-							tmpBat.Clean(proc.Mp())
-							oldBatch.Clean(proc.Mp())
+							delBat.Free(proc.Mp())
+							tmpBat.Free(proc.Mp())
+							oldBatch.Free(proc.Mp())
 							return false, err
 						}
 					}
-					oldBatch.Clean(proc.Mp())
+					oldBatch.Free(proc.Mp())
 					relIdx++
 				}
 			}
@@ -158,14 +158,14 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		// delete old rows
 		err := updateCtx.TableSource.Delete(proc.Ctx, delBat, updateCtx.HideKey)
 		if err != nil {
-			delBat.Clean(proc.Mp())
-			tmpBat.Clean(proc.Mp())
+			delBat.Free(proc.Mp())
+			tmpBat.Free(proc.Mp())
 			return false, err
 		}
-		delBat.Clean(proc.Mp())
+		delBat.Free(proc.Mp())
 
 		if err := colexec.UpdateInsertBatch(p.Engine, proc.Ctx, proc, p.TableDefVec[i].Cols, tmpBat, p.TableID[i], p.DBName[i], p.TblName[i]); err != nil {
-			tmpBat.Clean(proc.Mp())
+			tmpBat.Free(proc.Mp())
 			return false, err
 		}
 
@@ -178,12 +178,12 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 					if rowNum != 0 {
 						err = rel.Write(proc.Ctx, b)
 						if err != nil {
-							b.Clean(proc.Mp())
-							tmpBat.Clean(proc.Mp())
+							b.Free(proc.Mp())
+							tmpBat.Free(proc.Mp())
 							return false, err
 						}
 					}
-					b.Clean(proc.Mp())
+					b.Free(proc.Mp())
 				}
 			}
 		}
@@ -192,7 +192,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		if updateCtx.CPkeyColDef != nil {
 			err := util.FillCompositePKeyBatch(tmpBat, updateCtx.CPkeyColDef, proc)
 			if err != nil {
-				tmpBat.Clean(proc.Mp())
+				tmpBat.Free(proc.Mp())
 				return false, err
 			}
 		}
@@ -200,13 +200,13 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 
 		err = updateCtx.TableSource.Write(proc.Ctx, tmpBat)
 		if err != nil {
-			tmpBat.Clean(proc.Mp())
+			tmpBat.Free(proc.Mp())
 			return false, err
 		}
 
 		affectedRows += cnt
 
-		tmpBat.Clean(proc.Mp())
+		tmpBat.Free(proc.Mp())
 	}
 
 	atomic.AddUint64(&p.AffectedRows, affectedRows)
@@ -401,7 +401,7 @@ func FilterBatch(bat *batch.Batch, batLen int, proc *process.Process) (*batch.Ba
 
 		for j, vec := range bat.Vecs {
 			var val any
-			if nulls.Contains(vec.Nsp, uint64(idx)) {
+			if nulls.Contains(vec.GetNulls(), uint64(idx)) {
 				nulls.Add(newBat.Vecs[j].Nsp, uint64(cnt)-1)
 				val = getIndexValue(idx, vec, true)
 			} else {

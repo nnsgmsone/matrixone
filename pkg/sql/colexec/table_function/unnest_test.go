@@ -171,8 +171,8 @@ func TestUnnestCall(t *testing.T) {
 			end, err := unnestCall(0, ut.proc, ut.arg)
 			require.Nil(t, err)
 			require.False(t, end)
-			ut.proc.InputBatch().Clean(ut.proc.Mp())
-			inputBat.Clean(ut.proc.Mp())
+			ut.proc.InputBatch().Free(ut.proc.Mp())
+			inputBat.Free(ut.proc.Mp())
 			afterMem := ut.proc.Mp().CurrNB()
 			require.Equal(t, beforeMem, afterMem)
 		case "json":
@@ -186,8 +186,8 @@ func TestUnnestCall(t *testing.T) {
 			end, err := unnestCall(0, ut.proc, ut.arg)
 			require.Nil(t, err)
 			require.False(t, end)
-			ut.proc.InputBatch().Clean(ut.proc.Mp())
-			inputBat.Clean(ut.proc.Mp())
+			ut.proc.InputBatch().Free(ut.proc.Mp())
+			inputBat.Free(ut.proc.Mp())
 			afterMem := ut.proc.Mp().CurrNB()
 			require.Equal(t, beforeMem, afterMem)
 		}
@@ -210,7 +210,7 @@ func makeUnnestBatch(jsons []string, typ types.T, fn func(str string) ([]byte, e
 		}
 		err = bat.GetVector(0).Append(bjBytes, false, proc.Mp())
 		if err != nil {
-			bat.Clean(proc.Mp())
+			bat.Free(proc.Mp())
 			return nil, err
 		}
 	}

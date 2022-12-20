@@ -406,7 +406,7 @@ func (e *Engine) getTransaction(op client.TxnOperator) *Transaction {
 func (e *Engine) delTransaction(txn *Transaction) {
 	for i := range txn.writes {
 		for j := range txn.writes[i] {
-			txn.writes[i][j].bat.Clean(e.mp)
+			txn.writes[i][j].bat.Free(e.mp)
 		}
 	}
 	e.Lock()

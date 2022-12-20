@@ -17,10 +17,9 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
@@ -611,7 +610,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Ibucket:   t.Ibucket,
 			Nbucket:   t.Nbucket,
 			Expr:      t.Cond,
-			Types:     convertToPlanTypes(t.GetType()s),
+			Types:     convertToPlanTypes(t.Typs),
 			LeftCond:  t.Conditions[0],
 			RightCond: t.Conditions[1],
 			Result:    t.Result,
@@ -651,7 +650,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			RelList:   relList,
 			ColList:   colList,
 			Expr:      t.Cond,
-			Types:     convertToPlanTypes(t.GetType()s),
+			Types:     convertToPlanTypes(t.Typs),
 			LeftCond:  t.Conditions[0],
 			RightCond: t.Conditions[1],
 		}
@@ -663,7 +662,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			RelList:   relList,
 			ColList:   colList,
 			Expr:      t.Cond,
-			Types:     convertToPlanTypes(t.GetType()s),
+			Types:     convertToPlanTypes(t.Typs),
 			LeftCond:  t.Conditions[0],
 			RightCond: t.Conditions[1],
 		}
@@ -673,7 +672,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.Anti = &pipeline.AntiJoin{
 			Result: t.Result,
 			Expr:   t.Cond,
-			Types:  convertToPlanTypes(t.GetType()s),
+			Types:  convertToPlanTypes(t.Typs),
 		}
 	case *loopjoin.Argument:
 		relList, colList := getRelColList(t.Result)
@@ -681,7 +680,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			RelList: relList,
 			ColList: colList,
 			Expr:    t.Cond,
-			Types:   convertToPlanTypes(t.GetType()s),
+			Types:   convertToPlanTypes(t.Typs),
 		}
 	case *loopleft.Argument:
 		relList, colList := getRelColList(t.Result)
@@ -689,13 +688,13 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			RelList: relList,
 			ColList: colList,
 			Expr:    t.Cond,
-			Types:   convertToPlanTypes(t.GetType()s),
+			Types:   convertToPlanTypes(t.Typs),
 		}
 	case *loopsemi.Argument:
 		in.SemiJoin = &pipeline.SemiJoin{
 			Result: t.Result,
 			Expr:   t.Cond,
-			Types:  convertToPlanTypes(t.GetType()s),
+			Types:  convertToPlanTypes(t.Typs),
 		}
 	case *loopsingle.Argument:
 		relList, colList := getRelColList(t.Result)
@@ -703,7 +702,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			RelList: relList,
 			ColList: colList,
 			Expr:    t.Cond,
-			Types:   convertToPlanTypes(t.GetType()s),
+			Types:   convertToPlanTypes(t.Typs),
 		}
 	case *offset.Argument:
 		in.Offset = t.Offset
@@ -714,7 +713,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.Product = &pipeline.Product{
 			RelList: relList,
 			ColList: colList,
-			Types:   convertToPlanTypes(t.GetType()s),
+			Types:   convertToPlanTypes(t.Typs),
 		}
 	case *projection.Argument:
 		in.ProjectList = t.Es
@@ -726,7 +725,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Nbucket:   t.Nbucket,
 			Result:    t.Result,
 			Expr:      t.Cond,
-			Types:     convertToPlanTypes(t.GetType()s),
+			Types:     convertToPlanTypes(t.Typs),
 			LeftCond:  t.Conditions[0],
 			RightCond: t.Conditions[1],
 		}
@@ -738,7 +737,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			RelList:   relList,
 			ColList:   colList,
 			Expr:      t.Cond,
-			Types:     convertToPlanTypes(t.GetType()s),
+			Types:     convertToPlanTypes(t.Typs),
 			LeftCond:  t.Conditions[0],
 			RightCond: t.Conditions[1],
 		}
@@ -794,7 +793,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Result:    t.Result,
 			LeftCond:  t.Conditions[0],
 			RightCond: t.Conditions[1],
-			Types:     convertToPlanTypes(t.GetType()s),
+			Types:     convertToPlanTypes(t.Typs),
 			Cond:      t.Cond,
 			OnList:    t.OnList,
 		}
@@ -812,7 +811,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			NeedHash: t.NeedHashMap,
 			Ibucket:  t.Ibucket,
 			Nbucket:  t.Nbucket,
-			Types:    convertToPlanTypes(t.GetType()s),
+			Types:    convertToPlanTypes(t.Typs),
 			Conds:    t.Conditions,
 		}
 	case *external.Argument:
@@ -1250,7 +1249,7 @@ func decodeBatch(proc *process.Process, data []byte) (*batch.Batch, error) {
 	err := types.Decode(data, bat)
 	// allocated memory of vec from mPool.
 	for i := range bat.Vecs {
-		bat.Vecs[i], err = vector.Dup(bat.Vecs[i], mp)
+		bat.Vecs[i], err = bat.Vecs[i].Dup(mp)
 		if err != nil {
 			for j := 0; j < i; j++ {
 				bat.Vecs[j].Free(mp)

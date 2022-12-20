@@ -37,8 +37,8 @@ func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 
 	switch {
 	case !lv.IsConst() && rv.IsConst():
-		if nulls.Any(lv.Nsp) {
-			rs, err = like.BtSliceNullAndConst(lvs, rvs[0], lv.Nsp, rs)
+		if nulls.Any(lv.GetNulls()) {
+			rs, err = like.BtSliceNullAndConst(lvs, rvs[0], lv.GetNulls(), rs)
 			if err != nil {
 				return nil, err
 			}
@@ -48,7 +48,7 @@ func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 				return nil, err
 			}
 		}
-		return vector.NewWithFixed(rtyp, rs, lv.Nsp, proc.Mp()), nil
+		return vector.NewWithFixed(rtyp, rs, lv.GetNulls(), proc.Mp()), nil
 	case lv.IsConst() && rv.IsConst(): // in our design, this case should deal while pruning extends.
 		ok, err := like.BtConstAndConst(lvs[0], rvs[0])
 		if err != nil {
@@ -56,27 +56,27 @@ func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 		}
 		return vector.NewConstFixed(rtyp, lv.Length(), ok, proc.Mp()), nil
 	case lv.IsConst() && !rv.IsConst():
-		rs, err = like.BtConstAndSliceNull(lvs[0], rvs, rv.Nsp, rs)
+		rs, err = like.BtConstAndSliceNull(lvs[0], rvs, rv.GetNulls(), rs)
 		if err != nil {
 			return nil, err
 		}
-		return vector.NewWithFixed(rtyp, rs, lv.Nsp, proc.Mp()), nil
+		return vector.NewWithFixed(rtyp, rs, lv.GetNulls(), proc.Mp()), nil
 	case !lv.IsConst() && !rv.IsConst():
 		var nsp *nulls.Nulls
-		if nulls.Any(rv.Nsp) && nulls.Any(lv.Nsp) {
-			nsp = lv.Nsp.Or(rv.Nsp)
+		if nulls.Any(rv.GetNulls()) && nulls.Any(lv.GetNulls()) {
+			nsp = lv.GetNulls().Or(rv.GetNulls())
 			rs, err = like.BtSliceNullAndSliceNull(lvs, rvs, nsp, rs)
 			if err != nil {
 				return nil, err
 			}
-		} else if nulls.Any(rv.Nsp) && !nulls.Any(lv.Nsp) {
-			nsp = rv.Nsp
+		} else if nulls.Any(rv.GetNulls()) && !nulls.Any(lv.GetNulls()) {
+			nsp = rv.GetNulls()
 			rs, err = like.BtSliceNullAndSliceNull(lvs, rvs, nsp, rs)
 			if err != nil {
 				return nil, err
 			}
-		} else if !nulls.Any(rv.Nsp) && nulls.Any(lv.Nsp) {
-			nsp = lv.Nsp
+		} else if !nulls.Any(rv.GetNulls()) && nulls.Any(lv.GetNulls()) {
+			nsp = lv.GetNulls()
 			rs, err = like.BtSliceNullAndSliceNull(lvs, rvs, nsp, rs)
 			if err != nil {
 				return nil, err

@@ -93,19 +93,19 @@ func DateFormat(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	if dateVector.IsConst() {
 		// XXX Null handling maybe broken.
 		datetimes := dateVector.Col.([]types.Datetime)
-		resCol, err := CalcDateFromat(datetimes, formatMask, dateVector.Nsp)
+		resCol, err := CalcDateFromat(datetimes, formatMask, dateVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
 		return vector.NewConstString(resultType, 1, resCol[0], proc.Mp()), nil
 	} else {
-		datetimes := dateVector.Col.([]types.Datetime)
-		resCol, err := CalcDateFromat(datetimes, formatMask, dateVector.Nsp)
+		datetimes := vector.MustTCols[types.Datetime](dateVector)
+		resCol, err := CalcDateFromat(datetimes, formatMask, dateVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		resultVector := vector.New(resultType)
-		resultVector.Nsp = dateVector.Nsp
+		resultVector := vector.New(0, resultType)
+		resultVector.SetNulls(dateVector.GetNulls())
 		vector.AppendString(resultVector, resCol, proc.Mp())
 		return resultVector, nil
 	}

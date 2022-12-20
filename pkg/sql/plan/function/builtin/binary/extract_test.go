@@ -99,5 +99,5 @@ func TestExtractFromDatetime(t *testing.T) {
 	require.NoError(t, err)
 	outstr := vector.MustStrCols(outputVector)
 	require.Equal(t, []string{"2020", "2006", "2024"}, outstr[:3])
-	require.True(t, nulls.Contains(outputVector.Nsp, uint64(3)))
+	require.True(t, nulls.Contains(outputVector.GetNulls(), uint64(3)))
 }

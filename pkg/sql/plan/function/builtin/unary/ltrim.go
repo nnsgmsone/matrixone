@@ -36,6 +36,6 @@ func Ltrim(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 	} else {
 		resultValues := make([]string, len(inputValues))
 		ltrim.Ltrim(inputValues, resultValues)
-		return vector.NewWithStrings(resultType, resultValues, inputVector.Nsp, proc.Mp()), nil
+		return vector.NewWithStrings(resultType, resultValues, inputVector.GetNulls(), proc.Mp()), nil
 	}
 }

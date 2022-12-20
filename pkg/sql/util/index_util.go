@@ -16,6 +16,7 @@ package util
 
 import (
 	"context"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -90,179 +91,197 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, p []*plan.ColDef
 		}
 		b.Vecs[0] = v
 	}
-	return b, vector.Length(b.Vecs[0])
+	return b, b.Vecs[0].Length()
 }
 
 func compactUniqueKeyBatch(v *vector.Vector, proc *process.Process) (*vector.Vector, bool) {
-	if !nulls.Any(v.Nsp) {
+	if !nulls.Any(v.GetNulls()) {
 		return v, false
 	}
-	nsp := new(nulls.Nulls)
+	//nsp := new(nulls.Nulls)
 	var vec *vector.Vector
-	length := vector.Length(v)
+	length := v.Length()
 	switch v.GetType().Oid {
 	case types.T_bool:
 		s := vector.MustTCols[bool](v)
 		ns := make([]bool, 0, length)
 		for i, b := range s {
-			if !nulls.Contains(v.Nsp, uint64(i)) {
+			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewWithFixed(v.GetType(), ns, nsp, proc.Mp())
+		vec = vector.New(0, v.GetType())
+		vector.Append(vec, ns, true, proc.Mp())
 	case types.T_int8:
 		s := vector.MustTCols[int8](v)
 		ns := make([]int8, 0)
 		for i, b := range s {
-			if !nulls.Contains(v.Nsp, uint64(i)) {
+			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewWithFixed(v.GetType(), ns, nsp, proc.Mp())
+		vec = vector.New(0, v.GetType())
+		vector.Append(vec, ns, true, proc.Mp())
 	case types.T_int16:
 		s := vector.MustTCols[int16](v)
 		ns := make([]int16, 0)
 		for i, b := range s {
-			if !nulls.Contains(v.Nsp, uint64(i)) {
+			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewWithFixed(v.GetType(), ns, nsp, proc.Mp())
+		vec = vector.New(0, v.GetType())
+		vector.Append(vec, ns, true, proc.Mp())
 	case types.T_int32:
 		s := vector.MustTCols[int32](v)
 		ns := make([]int32, 0)
 		for i, b := range s {
-			if !nulls.Contains(v.Nsp, uint64(i)) {
+			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewWithFixed(v.GetType(), ns, nsp, proc.Mp())
+		vec = vector.New(0, v.GetType())
+		vector.Append(vec, ns, true, proc.Mp())
 	case types.T_int64:
 		s := vector.MustTCols[int64](v)
 		ns := make([]int64, 0)
 		for i, b := range s {
-			if !nulls.Contains(v.Nsp, uint64(i)) {
+			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewWithFixed(v.GetType(), ns, nsp, proc.Mp())
+		vec = vector.New(0, v.GetType())
+		vector.Append(vec, ns, true, proc.Mp())
 	case types.T_uint8:
 		s := vector.MustTCols[uint8](v)
 		ns := make([]uint8, 0)
 		for i, b := range s {
-			if !nulls.Contains(v.Nsp, uint64(i)) {
+			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewWithFixed(v.GetType(), ns, nsp, proc.Mp())
+		vec = vector.New(0, v.GetType())
+		vector.Append(vec, ns, true, proc.Mp())
 	case types.T_uint16:
 		s := vector.MustTCols[uint16](v)
 		ns := make([]uint16, 0)
 		for i, b := range s {
-			if !nulls.Contains(v.Nsp, uint64(i)) {
+			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewWithFixed(v.GetType(), ns, nsp, proc.Mp())
+		vec = vector.New(0, v.GetType())
+		vector.Append(vec, ns, true, proc.Mp())
 	case types.T_uint32:
 		s := vector.MustTCols[uint32](v)
 		ns := make([]uint32, 0)
 		for i, b := range s {
-			if !nulls.Contains(v.Nsp, uint64(i)) {
+			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewWithFixed(v.GetType(), ns, nsp, proc.Mp())
+		vec = vector.New(0, v.GetType())
+		vector.Append(vec, ns, true, proc.Mp())
 	case types.T_uint64:
 		s := vector.MustTCols[uint64](v)
 		ns := make([]uint64, 0)
 		for i, b := range s {
-			if !nulls.Contains(v.Nsp, uint64(i)) {
+			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewWithFixed(v.GetType(), ns, nsp, proc.Mp())
+		vec = vector.New(0, v.GetType())
+		vector.Append(vec, ns, true, proc.Mp())
 	case types.T_float32:
 		s := vector.MustTCols[float32](v)
 		ns := make([]float32, 0)
 		for i, b := range s {
-			if !nulls.Contains(v.Nsp, uint64(i)) {
+			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewWithFixed(v.GetType(), ns, nsp, proc.Mp())
+		vec = vector.New(0, v.GetType())
+		vector.Append(vec, ns, true, proc.Mp())
 	case types.T_float64:
 		s := vector.MustTCols[float64](v)
 		ns := make([]float64, 0)
 		for i, b := range s {
-			if !nulls.Contains(v.Nsp, uint64(i)) {
+			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewWithFixed(v.GetType(), ns, nsp, proc.Mp())
+		vec = vector.New(0, v.GetType())
+		vector.Append(vec, ns, true, proc.Mp())
 	case types.T_date:
 		s := vector.MustTCols[types.Date](v)
 		ns := make([]types.Date, 0)
 		for i, b := range s {
-			if !nulls.Contains(v.Nsp, uint64(i)) {
+			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewWithFixed(v.GetType(), ns, nsp, proc.Mp())
+		vec = vector.New(0, v.GetType())
+		vector.Append(vec, ns, true, proc.Mp())
 	case types.T_time:
 		s := vector.MustTCols[types.Time](v)
 		ns := make([]types.Time, 0)
 		for i, b := range s {
-			if !nulls.Contains(v.Nsp, uint64(i)) {
+			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewWithFixed(v.GetType(), ns, nsp, proc.Mp())
+		vec = vector.New(0, v.GetType())
+		vector.Append(vec, ns, true, proc.Mp())
 	case types.T_datetime:
 		s := vector.MustTCols[types.Datetime](v)
 		ns := make([]types.Datetime, 0)
 		for i, b := range s {
-			if !nulls.Contains(v.Nsp, uint64(i)) {
+			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewWithFixed(v.GetType(), ns, nsp, proc.Mp())
+		vec = vector.New(0, v.GetType())
+		vector.Append(vec, ns, true, proc.Mp())
 	case types.T_timestamp:
 		s := vector.MustTCols[types.Timestamp](v)
 		ns := make([]types.Timestamp, 0)
 		for i, b := range s {
-			if !nulls.Contains(v.Nsp, uint64(i)) {
+			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewWithFixed(v.GetType(), ns, nsp, proc.Mp())
+		vec = vector.New(0, v.GetType())
+		vector.Append(vec, ns, true, proc.Mp())
 	case types.T_decimal64:
 		s := vector.MustTCols[types.Decimal64](v)
 		ns := make([]types.Decimal64, 0)
 		for i, b := range s {
-			if !nulls.Contains(v.Nsp, uint64(i)) {
+			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewWithFixed(v.GetType(), ns, nsp, proc.Mp())
+		vec = vector.New(0, v.GetType())
+		vector.Append(vec, ns, true, proc.Mp())
 	case types.T_decimal128:
 		s := vector.MustTCols[types.Decimal128](v)
 		ns := make([]types.Decimal128, 0)
 		for i, b := range s {
-			if !nulls.Contains(v.Nsp, uint64(i)) {
+			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewWithFixed(v.GetType(), ns, nsp, proc.Mp())
+		vec = vector.New(0, v.GetType())
+		vector.Append(vec, ns, true, proc.Mp())
 	case types.T_json, types.T_char, types.T_varchar, types.T_blob:
 		s := vector.MustStrCols(v)
 		ns := make([]string, 0)
 		for i, b := range s {
-			if !nulls.Contains(v.Nsp, uint64(i)) {
+			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewWithFixed(v.GetType(), ns, nsp, proc.Mp())
+		vec = vector.New(0, v.GetType())
+		vector.Append(vec, ns, true, proc.Mp())
 	}
 	return vec, true
 }

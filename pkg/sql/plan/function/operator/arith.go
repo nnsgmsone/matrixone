@@ -65,7 +65,7 @@ func Arith[T1 arithT, T2 arithT](vectors []*vector.Vector, proc *process.Process
 	if err != nil {
 		return nil, err
 	}
-	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
+	nulls.Or(left.GetNulls(), right.GetNulls(), resultVector.Nsp)
 	if err = afn(left, right, resultVector); err != nil {
 		return nil, err
 	}

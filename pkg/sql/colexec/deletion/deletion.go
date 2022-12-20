@@ -50,8 +50,8 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		return false, nil
 	}
 
-	defer bat.Clean(proc.Mp())
-	batLen := batch.Length(bat)
+	defer bat.Free(proc.Mp())
+	batLen := bat.Length()
 	var affectedRows uint64
 
 	for i := range p.DeleteCtxs {
@@ -67,13 +67,13 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			tmpBat.SetZs(length, proc.Mp())
 			err := p.DeleteCtxs[i].TableSource.Delete(proc.Ctx, tmpBat, p.DeleteCtxs[i].UseDeleteKey)
 			if err != nil {
-				tmpBat.Clean(proc.Mp())
+				tmpBat.Free(proc.Mp())
 				return false, err
 			}
 			affectedRows += cnt
 		}
 
-		tmpBat.Clean(proc.Mp())
+		tmpBat.Free(proc.Mp())
 		if p.DeleteCtxs[i].UniqueIndexDef != nil {
 			idx := 0
 			for num := range p.DeleteCtxs[i].UniqueIndexDef.IndexNames {
@@ -86,7 +86,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 							return false, err
 						}
 					}
-					oldBatch.Clean(proc.Mp())
+					oldBatch.Free(proc.Mp())
 					idx++
 				}
 			}

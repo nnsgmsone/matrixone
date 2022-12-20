@@ -63,7 +63,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			} else {
 				err = ctr.probe(bat, ap, proc, anal)
 			}
-			bat.Clean(proc.Mp())
+			bat.Free(proc.Mp())
 			return false, err
 
 		default:
@@ -101,14 +101,14 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	rbat := batch.NewWithSize(len(ap.Result))
 	rbat.Zs = proc.Mp().GetSels()
 	for i, pos := range ap.Result {
-		rbat.Vecs[i] = vector.New(bat.Vecs[pos].GetType())
+		rbat.Vecs[i] = vector.New(0, bat.Vecs[pos].GetType())
 	}
 	count := bat.Length()
 	for i := 0; i < count; i++ {
 		matched := false
 		vec, err := colexec.JoinFilterEvalExpr(bat, ctr.bat, i, proc, ap.Cond)
 		if err != nil {
-			rbat.Clean(proc.Mp())
+			rbat.Free(proc.Mp())
 			return err
 		}
 		bs := vector.MustTCols[bool](vec)
@@ -118,10 +118,10 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				break
 			}
 		}
-		if !matched && !nulls.Any(vec.Nsp) {
+		if !matched && !nulls.Any(vec.GetNulls()) {
 			for k, pos := range ap.Result {
-				if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[pos], int64(i), proc.Mp()); err != nil {
-					rbat.Clean(proc.Mp())
+				if err := rbat.Vecs[k].UnionOne(bat.Vecs[pos], int64(i), rbat.Vecs[k].Length() == 0, proc.Mp()); err != nil {
+					rbat.Free(proc.Mp())
 					vec.Free(proc.Mp())
 					return err
 				}

@@ -49,7 +49,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	anal.Input(bat)
 	vec, err := colexec.EvalExpr(bat, proc, ap.E)
 	if err != nil {
-		bat.Clean(proc.Mp())
+		bat.Free(proc.Mp())
 		return false, err
 	}
 	defer vec.Free(proc.Mp())
@@ -60,7 +60,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	if !vec.GetType().IsBoolean() {
 		return false, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
 	}
-	bs := vector.GetColumn[bool](vec)
+	bs := vector.MustTCols[bool](vec)
 	if vec.IsConst() {
 		if !bs[0] {
 			bat.Shrink(nil)

@@ -21,14 +21,14 @@ import (
 )
 
 func NotScalar(_, nsv *vector.Vector, col1, col2 []bool, proc *process.Process) (*vector.Vector, error) {
-	length := vector.Length(nsv)
+	length := nsv.Length()
 	vec := allocateBoolVector(length, proc)
-	vcols := vec.Col.([]bool)
+	vcols := vector.MustTCols[bool](vec)
 	value := col1[0]
 	for i := range vcols {
 		vcols[i] = value && col2[i]
 	}
-	nulls.Or(nsv.Nsp, nil, vec.Nsp)
+	nulls.Or(nsv.GetNulls(), nil, vec.GetNulls())
 	return vec, nil
 }
 
@@ -47,12 +47,12 @@ func Not(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		vec.Col.([]bool)[0] = !col1[0]
 		return vec, nil
 	}
-	length := vector.Length(v1)
+	length := v1.Length()
 	vec := allocateBoolVector(length, proc)
-	vcols := vec.Col.([]bool)
+	vcols := vector.MustTCols[bool](vec)
 	for i := range vcols {
 		vcols[i] = !col1[i]
 	}
-	nulls.Or(v1.Nsp, nil, vec.Nsp)
+	nulls.Or(v1.GetNulls(), nil, vec.GetNulls())
 	return vec, nil
 }

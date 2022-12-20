@@ -93,7 +93,7 @@ func init() {
 
 func TestSort(t *testing.T) {
 	for _, tc := range tcs {
-		os := make([]int64, vector.Length(tc.vec))
+		os := make([]int64, tc.vec.Length())
 		for i := range os {
 			os[i] = int64(i)
 		}
@@ -119,7 +119,7 @@ func BenchmarkSortInt(b *testing.B) {
 func BenchmarkSortIntVector(b *testing.B) {
 	m := mpool.MustNewZero()
 	vec := testutil.NewInt32Vector(BenchmarkRows, types.New(types.T_int32, 0, 0, 0), m, true, nil)
-	os := make([]int64, vector.Length(vec))
+	os := make([]int64, vec.Length())
 	for i := range os {
 		os[i] = int64(i)
 	}

@@ -42,15 +42,15 @@ func Lpad(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 	sourceStr := vector.MustStrCols(vecs[ParameterSourceString]) //Get the first arg
 
 	//characters length not bytes length
-	lengthsOfChars := getLensForLpad(vecs[ParameterLengths].Col)
+	lengthsOfChars := getLensForLpad(vecs[ParameterLengths].GetRawData())
 
 	//pad string
 	padStr := vector.MustStrCols(vecs[ParameterPadString])
 
 	constVectors := []bool{vecs[ParameterSourceString].IsConst(), vecs[ParameterLengths].IsConst(), vecs[ParameterPadString].IsConst()}
-	inputNulls := []*nulls.Nulls{vecs[ParameterSourceString].Nsp, vecs[ParameterLengths].Nsp, vecs[ParameterPadString].Nsp}
+	inputNulls := []*nulls.Nulls{vecs[ParameterSourceString].GetNulls(), vecs[ParameterLengths].GetNulls(), vecs[ParameterPadString].GetNulls()}
 	//evaluate bytes space for every row
-	rowCount := vector.Length(vecs[ParameterSourceString])
+	rowCount := vecs[ParameterSourceString].Length()
 
 	var resultVec *vector.Vector = nil
 	resultValues := make([]string, rowCount)

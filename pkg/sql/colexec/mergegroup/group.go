@@ -91,7 +91,7 @@ func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
 		}
 		anal.Input(bat)
 		if err = ctr.process(bat, proc); err != nil {
-			bat.Clean(proc.Mp())
+			bat.Free(proc.Mp())
 			return err
 		}
 	}
@@ -153,7 +153,7 @@ func (ctr *container) processH0(bat *batch.Batch, proc *process.Process) error {
 		ctr.bat = bat
 		return nil
 	}
-	defer bat.Clean(proc.Mp())
+	defer bat.Free(proc.Mp())
 	for _, z := range bat.Zs {
 		ctr.bat.Zs[0] += z
 	}
@@ -171,7 +171,7 @@ func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 	itr := ctr.intHashMap.NewIterator()
 	flg := ctr.bat == nil
 	if !flg {
-		defer bat.Clean(proc.Mp())
+		defer bat.Free(proc.Mp())
 	}
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
@@ -200,7 +200,7 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error
 	itr := ctr.strHashMap.NewIterator()
 	flg := ctr.bat == nil
 	if !flg {
-		defer bat.Clean(proc.Mp())
+		defer bat.Free(proc.Mp())
 	}
 	for i := 0; i < count; i += hashmap.UnitLimit { // batch
 		n := count - i

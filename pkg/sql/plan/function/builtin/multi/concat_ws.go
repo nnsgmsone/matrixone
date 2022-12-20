@@ -90,7 +90,7 @@ func concatWs(inputCleaned []*vector.Vector, separator *vector.Vector, vectorIsC
 				}
 				resultValues[i] += inputCleaned[j].GetString(0)
 			} else {
-				if nulls.Contains(inputCleaned[j].Nsp, uint64(i)) {
+				if nulls.Contains(inputCleaned[j].GetNulls(), uint64(i)) {
 					continue
 				}
 				allNull = false
@@ -169,16 +169,16 @@ func concatWsWithConstSeparator(inputCleaned []*vector.Vector, separator string,
 		allNull := true
 		for j := range inputCleaned {
 			if vectorIsConst[j] {
-				if j > 0 && !nulls.Contains(inputCleaned[j-1].Nsp, uint64(i)) {
+				if j > 0 && !nulls.Contains(inputCleaned[j-1].GetNulls(), uint64(i)) {
 					resultValues[i] += separator
 				}
 				allNull = false
 				resultValues[i] += inputCleaned[j].GetString(0)
 			} else {
-				if nulls.Contains(inputCleaned[j].Nsp, uint64(i)) {
+				if nulls.Contains(inputCleaned[j].GetNulls(), uint64(i)) {
 					continue
 				}
-				if j > 0 && !nulls.Contains(inputCleaned[j-1].Nsp, uint64(i)) {
+				if j > 0 && !nulls.Contains(inputCleaned[j-1].GetNulls(), uint64(i)) {
 					resultValues[i] += separator
 				}
 				allNull = false

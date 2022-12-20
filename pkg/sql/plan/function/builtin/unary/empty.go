@@ -33,7 +33,7 @@ func Empty(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		empty.Empty(inputValues, resultValues)
 		return vector.NewConstFixed(resultType, inputVector.Length(), resultValues[0], proc.Mp()), nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}

@@ -63,7 +63,7 @@ func Prepare(_ *process.Process, _ any) error {
 }
 
 func handleWrite(n *Argument, proc *process.Process, ctx context.Context, bat *batch.Batch) error {
-	defer bat.Clean(proc.Mp())
+	defer bat.Free(proc.Mp())
 	// XXX The original logic was buggy and I had to temporarily circumvent it
 	if bat.Length() == 0 {
 		bat.SetZs(bat.GetVector(0).Length(), proc.Mp())
@@ -81,7 +81,7 @@ func handleWrite(n *Argument, proc *process.Process, ctx context.Context, bat *b
 						return err
 					}
 				}
-				b.Clean(proc.Mp())
+				b.Free(proc.Mp())
 				idx++
 			}
 		}
@@ -199,12 +199,12 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	if len(bat.Zs) == 0 {
 		return false, nil
 	}
-	defer bat.Clean(proc.Mp())
+	defer bat.Free(proc.Mp())
 	{
 		for i := range bat.Vecs {
 			// Not-null check, for more information, please refer to the comments in func InsertValues
-			if (n.TargetColDefs[i].Primary && !n.TargetColDefs[i].GetType().AutoIncr) || (n.TargetColDefs[i].Default != nil && !n.TargetColDefs[i].Default.NullAbility && !n.TargetColDefs[i].GetType().AutoIncr) {
-				if nulls.Any(bat.Vecs[i].Nsp) {
+			if (n.TargetColDefs[i].Primary && !n.TargetColDefs[i].Typ.AutoIncr) || (n.TargetColDefs[i].Default != nil && !n.TargetColDefs[i].Default.NullAbility && !n.TargetColDefs[i].Typ.AutoIncr) {
+				if nulls.Any(bat.Vecs[i].GetNulls()) {
 					return false, moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", n.TargetColDefs[i].GetName()))
 				}
 			}
@@ -229,7 +229,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			for _, name := range names {
 				for i := range bat.Vecs {
 					if n.TargetColDefs[i].Name == name {
-						if nulls.Any(bat.Vecs[i].Nsp) {
+						if nulls.Any(bat.Vecs[i].GetNulls()) {
 							return false, moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", n.TargetColDefs[i].GetName()))
 						}
 					}

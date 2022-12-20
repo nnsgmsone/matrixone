@@ -71,7 +71,7 @@ func (rel *txnRelation) Delete(_ context.Context, bat *batch.Batch, col string) 
 	allNullables := schema.AllNullables()
 	idx := catalog.GetAttrIdx(schema.AllNames(), col)
 	if data.GetType().Oid == types.T_any {
-		data.GetType() = schema.ColDefs[idx].Type
+		data.SetType(schema.ColDefs[idx].Type)
 	}
 	vec := containers.NewVectorWithSharedMemory(data, allNullables[idx])
 	defer vec.Close()
