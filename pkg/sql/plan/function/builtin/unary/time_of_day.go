@@ -31,7 +31,7 @@ func DatetimeToHour(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 		resultVector := vector.NewConstFixed(resultType, 1, uint8(inputValues[0].Hour()), proc.Mp())
 		return resultVector, nil
 	} else {
-		resultVector := vector.New(resultType)
+		resultVector := vector.New(0, resultType)
 		for i, v := range inputValues {
 			if inputVector.GetNulls().Contains(uint64(i)) {
 				resultVector.GetNulls().Set(uint64(i))
@@ -63,7 +63,7 @@ func TimestampToHour(vectors []*vector.Vector, proc *process.Process) (*vector.V
 		resultVector := vector.NewConstFixed(resultType, 1, uint8(convertedInputValues[0].Hour()), proc.Mp())
 		return resultVector, nil
 	} else {
-		resultVector := vector.New(resultType)
+		resultVector := vector.New(0, resultType)
 		for i, v := range convertedInputValues {
 			if inputVector.GetNulls().Contains(uint64(i)) {
 				resultVector.GetNulls().Set(uint64(i))
@@ -92,7 +92,7 @@ func DatetimeToMinute(vectors []*vector.Vector, proc *process.Process) (*vector.
 		resultVector := vector.NewConstFixed(resultType, 1, uint8(inputValues[0].Minute()), proc.Mp())
 		return resultVector, nil
 	} else {
-		resultVector := vector.New(resultType)
+		resultVector := vector.New(0, resultType)
 		for i, v := range inputValues {
 			if inputVector.GetNulls().Contains(uint64(i)) {
 				resultVector.GetNulls().Set(uint64(i))
@@ -124,7 +124,7 @@ func TimestampToMinute(vectors []*vector.Vector, proc *process.Process) (*vector
 		resultVector := vector.NewConstFixed(resultType, 1, uint8(convertedInputValues[0].Minute()), proc.Mp())
 		return resultVector, nil
 	} else {
-		resultVector := vector.New(resultType)
+		resultVector := vector.New(0, resultType)
 		for i, v := range convertedInputValues {
 			if inputVector.GetNulls().Contains(uint64(i)) {
 				resultVector.GetNulls().Set(uint64(i))
@@ -152,7 +152,7 @@ func DatetimeToSecond(vectors []*vector.Vector, proc *process.Process) (*vector.
 		resultVector := vector.NewConstFixed(resultType, 1, uint8(inputValues[0].Sec()), proc.Mp())
 		return resultVector, nil
 	} else {
-		resultVector := vector.New(resultType)
+		resultVector := vector.New(0, resultType)
 		for i, v := range inputValues {
 			if inputVector.GetNulls().Contains(uint64(i)) {
 				resultVector.GetNulls().Set(uint64(i))
@@ -184,7 +184,7 @@ func TimestampToSecond(vectors []*vector.Vector, proc *process.Process) (*vector
 		resultVector := vector.NewConstFixed(resultType, 1, uint8(convertedInputValues[0].Sec()), proc.Mp())
 		return resultVector, nil
 	} else {
-		resultVector := vector.New(resultType)
+		resultVector := vector.New(0, resultType)
 		for i, v := range convertedInputValues {
 			if inputVector.GetNulls().Contains(uint64(i)) {
 				resultVector.GetNulls().Set(uint64(i))

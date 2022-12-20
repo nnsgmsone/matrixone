@@ -65,7 +65,7 @@ func StrToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	} else {
 		datestrs := vector.MustStrCols(dateVector)
 		rNsp := nulls.NewWithSize(len(datestrs))
-		resCol, err := CalcStrToDate(datestrs, formatMask, dateVector.Nsp, rNsp)
+		resCol, err := CalcStrToDate(datestrs, formatMask, dateVector.GetNulls(), rNsp)
 		if err != nil {
 			return nil, err
 		}
@@ -110,12 +110,12 @@ func StrToDateTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 	} else {
 		datetimestrs := vector.MustStrCols(dateVector)
 		rNsp := nulls.NewWithSize(len(datetimestrs))
-		resCol, err := CalcStrToDatetime(datetimestrs, formatMask, dateVector.Nsp, rNsp)
+		resCol, err := CalcStrToDatetime(datetimestrs, formatMask, dateVector.GetNulls(), rNsp)
 		if err != nil {
 			return nil, err
 		}
 		resultVector := vector.NewWithFixed[types.Datetime](resultType, resCol, nulls.NewWithSize(len(resCol)), proc.Mp())
-		nulls.Set(resultVector.Nsp, dateVector.Nsp)
+		nulls.Set(resultVector.Nsp, dateVector.GetNulls())
 		return resultVector, nil
 	}
 }
@@ -156,12 +156,12 @@ func StrToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	} else {
 		timestrs := vector.MustStrCols(dateVector)
 		rNsp := nulls.NewWithSize(len(timestrs))
-		resCol, err := CalcStrToTime(timestrs, formatMask, dateVector.Nsp, rNsp)
+		resCol, err := CalcStrToTime(timestrs, formatMask, dateVector.GetNulls(), rNsp)
 		if err != nil {
 			return nil, err
 		}
 		resultVector := vector.NewWithFixed[types.Time](resultType, resCol, nulls.NewWithSize(len(resCol)), proc.Mp())
-		nulls.Set(resultVector.Nsp, dateVector.Nsp)
+		nulls.Set(resultVector.Nsp, dateVector.GetNulls())
 		return resultVector, nil
 	}
 }

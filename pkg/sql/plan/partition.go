@@ -16,10 +16,11 @@ package plan
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"go/constant"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -782,7 +783,7 @@ func buildKeyPartitionDefinitions(partitionBinder *PartitionBinder, defs []*tree
 func checkColumnsPartitionType(partitionBinder *PartitionBinder, partitionInfo *plan.PartitionInfo, columnPlanExprs []*plan.Expr) error {
 	columnNames := partitionInfo.PartitionColumns
 	for i, planexpr := range columnPlanExprs {
-		t := types.T(planexpr.GetType().Id)
+		t := types.T(planexpr.Typ.Id)
 		if !types.IsInteger(t) && !types.IsString(t) && !types.IsDateRelate(t) {
 			return moerr.NewSyntaxErrorNoCtx("type %s of column %s not allowd in partition clause", t.String(), columnNames[i])
 		}
@@ -821,7 +822,7 @@ func checkPartitionFuncType(partitionBinder *PartitionBinder, tableDef *TableDef
 			return moerr.NewInvalidInputNoCtx("partition functin is not const")
 		}
 
-		t := types.T(expr.GetType().Id)
+		t := types.T(expr.Typ.Id)
 		if !types.IsInteger(t) {
 			return moerr.NewSyntaxErrorNoCtx("type %s not allowed in partition clause", t.String())
 		}

@@ -92,7 +92,7 @@ func (p *Pipeline) cleanup(proc *process.Process, pipelineFailed bool) {
 	if pipelineFailed {
 		bat := proc.InputBatch()
 		if bat != nil {
-			bat.Clean(proc.Mp())
+			bat.Free(proc.Mp())
 		}
 		proc.SetInputBatch(nil)
 	}
@@ -105,7 +105,7 @@ func (p *Pipeline) cleanup(proc *process.Process, pipelineFailed bool) {
 			if bat == nil {
 				break
 			}
-			bat.Clean(proc.Mp())
+			bat.Free(proc.Mp())
 		}
 	}
 	// clean operator hold memory.

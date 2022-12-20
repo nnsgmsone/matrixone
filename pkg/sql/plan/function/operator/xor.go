@@ -21,14 +21,14 @@ import (
 )
 
 func ScalarXorNotScalar(_, nsv *vector.Vector, col1, col2 []bool, proc *process.Process) (*vector.Vector, error) {
-	length := vector.Length(nsv)
+	length := nsv.Length()
 	vec := allocateBoolVector(length, proc)
-	vcols := vec.Col.([]bool)
+	vcols := vector.MustTCols[bool](vec)
 	value := col1[0]
 	for i := range vcols {
 		vcols[i] = (col2[i] || value) && !(col2[i] && value)
 	}
-	nulls.Or(nsv.Nsp, nil, vec.Nsp)
+	nulls.Or(nsv.GetNulls(), nil, vec.GetNulls())
 	return vec, nil
 }
 
@@ -52,12 +52,12 @@ func Xor(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return ScalarXorNotScalar(v2, v1, col2, col1, proc)
 	}
 	// case !c1 && !c2
-	length := vector.Length(v1)
+	length := v1.Length()
 	vec := allocateBoolVector(length, proc)
-	vcols := vec.Col.([]bool)
+	vcols := vector.MustTCols[bool](vec)
 	for i := range vcols {
 		vcols[i] = (col1[i] || col2[i]) && !(col1[i] && col2[i])
 	}
-	nulls.Or(v1.Nsp, v2.Nsp, vec.Nsp)
+	nulls.Or(v1.GetNulls(), v2.GetNulls(), vec.GetNulls())
 	return vec, nil
 }

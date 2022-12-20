@@ -36,15 +36,15 @@ func SubStrIndex(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	countCols := getCount(vecs[2])
 
 	//calcute rows
-	rowCount := vector.Length(vecs[0])
+	rowCount := vecs[0].Length()
 
 	var resultVec *vector.Vector = nil
 	resultValues := make([]string, rowCount)
 	resultNsp := nulls.NewWithSize(rowCount)
 
 	// set null row
-	nulls.Or(vecs[0].Nsp, vecs[1].Nsp, resultNsp)
-	nulls.Or(vecs[2].Nsp, resultNsp, resultNsp)
+	nulls.Or(vecs[0].GetNulls(), vecs[1].GetNulls(), resultNsp)
+	nulls.Or(vecs[2].GetNulls(), resultNsp, resultNsp)
 
 	constVectors := []bool{vecs[0].IsConst(), vecs[1].IsConst(), vecs[2].IsConst()}
 	//get result values

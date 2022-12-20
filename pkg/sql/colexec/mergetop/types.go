@@ -47,7 +47,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
+		ctr.bat.Free(mp)
 		ctr.bat = nil
 	}
 }

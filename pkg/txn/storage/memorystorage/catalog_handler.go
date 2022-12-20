@@ -476,7 +476,7 @@ func (c *CatalogHandler) HandleRead(ctx context.Context, meta txn.TxnMeta, req m
 
 		case *DatabaseRowIter:
 			for i, name := range req.ColNames {
-				b.Vecs[i] = vector.New(iter.AttrsMap[name].Type)
+				b.Vecs[i] = vector.New(0, iter.AttrsMap[name].Type)
 			}
 
 			fn := iter.TableIter.Next
@@ -498,7 +498,7 @@ func (c *CatalogHandler) HandleRead(ctx context.Context, meta txn.TxnMeta, req m
 
 		case *RelationRowIter:
 			for i, name := range req.ColNames {
-				b.Vecs[i] = vector.New(iter.AttrsMap[name].Type)
+				b.Vecs[i] = vector.New(0, iter.AttrsMap[name].Type)
 			}
 
 			fn := iter.TableIter.Next
@@ -520,7 +520,7 @@ func (c *CatalogHandler) HandleRead(ctx context.Context, meta txn.TxnMeta, req m
 
 		case *AttributeRowIter:
 			for i, name := range req.ColNames {
-				b.Vecs[i] = vector.New(iter.AttrsMap[name].Type)
+				b.Vecs[i] = vector.New(0, iter.AttrsMap[name].Type)
 			}
 
 			fn := iter.TableIter.Next

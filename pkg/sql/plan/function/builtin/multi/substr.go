@@ -148,10 +148,10 @@ func substrSrcConst(inputVecs []*vector.Vector, proc *process.Process) (*vector.
 
 	// set null row
 	if paramNum == 2 {
-		nulls.Or(inputVecs[0].Nsp, inputVecs[1].Nsp, resultNsp)
+		nulls.Or(inputVecs[0].GetNulls(), inputVecs[1].GetNulls(), resultNsp)
 	} else {
-		nulls.Or(inputVecs[0].Nsp, inputVecs[1].Nsp, resultNsp)
-		nulls.Or(inputVecs[2].Nsp, resultNsp, resultNsp)
+		nulls.Or(inputVecs[0].GetNulls(), inputVecs[1].GetNulls(), resultNsp)
+		nulls.Or(inputVecs[2].GetNulls(), resultNsp, resultNsp)
 	}
 
 	if startVector.IsConst() {
@@ -230,10 +230,10 @@ func substrSrcCol(inputVecs []*vector.Vector, proc *process.Process) (*vector.Ve
 	//set null row
 	resultNsp := nulls.NewWithSize(len(results))
 	if paramNum == 2 {
-		nulls.Or(inputVecs[0].Nsp, inputVecs[1].Nsp, resultNsp)
+		nulls.Or(inputVecs[0].GetNulls(), inputVecs[1].GetNulls(), resultNsp)
 	} else {
-		nulls.Or(inputVecs[0].Nsp, inputVecs[1].Nsp, resultNsp)
-		nulls.Or(inputVecs[2].Nsp, resultNsp, resultNsp)
+		nulls.Or(inputVecs[0].GetNulls(), inputVecs[1].GetNulls(), resultNsp)
+		nulls.Or(inputVecs[2].GetNulls(), resultNsp, resultNsp)
 	}
 
 	if startVector.IsConst() {
@@ -306,13 +306,13 @@ func calcResultVectorRows(inputVecs []*vector.Vector) int {
 		if inputVecs[0].IsConst() && inputVecs[1].IsConst() {
 			return 1
 		} else {
-			return vector.Length(inputVecs[0])
+			return inputVecs[0].Length()
 		}
 	} else {
 		if inputVecs[0].IsConst() && inputVecs[1].IsConst() && inputVecs[2].IsConst() {
 			return 1
 		} else {
-			return vector.Length(inputVecs[0])
+			return inputVecs[0].Length()
 		}
 	}
 }

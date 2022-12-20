@@ -112,7 +112,7 @@ func (ctr *container) build(proc *process.Process, analyzer process.Analyze) err
 				}
 				vs, _, err := itr.Insert(i, n, bat.Vecs)
 				if err != nil {
-					bat.Clean(proc.Mp())
+					bat.Free(proc.Mp())
 					return err
 				}
 				if uint64(cap(ctr.counter)) < ctr.hashTable.GroupCount() {
@@ -126,7 +126,7 @@ func (ctr *container) build(proc *process.Process, analyzer process.Analyze) err
 					ctr.counter[v-1]++
 				}
 			}
-			bat.Clean(proc.Mp())
+			bat.Free(proc.Mp())
 		}
 
 	}
@@ -159,7 +159,7 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze) (bo
 		{
 			outputBat = batch.NewWithSize(len(bat.Vecs))
 			for i := range bat.Vecs {
-				outputBat.Vecs[i] = vector.New(bat.Vecs[i].GetType())
+				outputBat.Vecs[i] = vector.New(0, bat.Vecs[i].GetType())
 			}
 		}
 
@@ -204,7 +204,7 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze) (bo
 				if cnt > 0 {
 					for colNum := range bat.Vecs {
 						if err := vector.UnionBatch(outputBat.Vecs[colNum], bat.Vecs[colNum], int64(i), cnt, ctr.inserted[:n], proc.Mp()); err != nil {
-							bat.Clean(proc.Mp())
+							bat.Free(proc.Mp())
 							return false, err
 						}
 					}
@@ -214,7 +214,7 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze) (bo
 		}
 		analyzer.Output(outputBat)
 		proc.SetInputBatch(outputBat)
-		bat.Clean(proc.Mp())
+		bat.Free(proc.Mp())
 		return false, nil
 	}
 }

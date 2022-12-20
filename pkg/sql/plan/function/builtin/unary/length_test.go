@@ -81,7 +81,7 @@ func TestLength(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.wantBytes, lengthRes.Col)
+			require.Equal(t, c.wantBytes, lengthRes.GetRawData())
 			require.Equal(t, c.wantScalar, lengthRes.IsConst())
 
 		})
@@ -95,7 +95,7 @@ func TestBlobLength(t *testing.T) {
 		if srcIsConst {
 			inputVector = vector.NewConst(inputType, 1)
 		} else {
-			inputVector = vector.New(inputType)
+			inputVector = vector.New(0, inputType)
 		}
 		err := inputVector.Append(src, false, procs.Mp())
 		if err != nil {
@@ -134,7 +134,7 @@ func TestBlobLength(t *testing.T) {
 		convey.Convey(c.name, t, func() {
 			res, err := Length([]*vector.Vector{makeBlobVector(c.ctx, c.isScalar, procs)}, procs)
 			convey.So(err, convey.ShouldBeNil)
-			convey.So(res.Col, convey.ShouldResemble, c.want)
+			convey.So(res.GetRawData(), convey.ShouldResemble, c.want)
 			convey.So(res.IsConst(), convey.ShouldEqual, c.isScalar)
 		})
 	}

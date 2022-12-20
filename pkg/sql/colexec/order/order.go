@@ -86,7 +86,7 @@ func (ctr *container) process(ap *Argument, bat *batch.Batch, proc *process.Proc
 	for i := 0; i < bat.VectorCount(); i++ {
 		vec := bat.GetVector(int32(i))
 		if vec.IsOriginal() {
-			nvec, err := vector.Dup(bat.Vecs[i], proc.Mp())
+			nvec, err := bat.Vecs[i].Dup(proc.Mp())
 			if err != nil {
 				return false, err
 			}
@@ -117,7 +117,7 @@ func (ctr *container) process(ap *Argument, bat *batch.Batch, proc *process.Proc
 		sels[i] = int64(i)
 	}
 
-	nullCnt := nulls.Length(ovec.Nsp)
+	nullCnt := nulls.Length(ovec.GetNulls())
 	// skip sort for all nulls
 	if nullCnt < ovec.Length() {
 		if ovec.GetType().IsString() {
@@ -140,7 +140,7 @@ func (ctr *container) process(ap *Argument, bat *batch.Batch, proc *process.Proc
 		nullsLast := ctr.nullsLast[i]
 		ps = partition.Partition(sels, ds, ps, ovec)
 		vec := ctr.vecs[i].vec
-		nullCnt = nulls.Length(vec.Nsp)
+		nullCnt = nulls.Length(vec.GetNulls())
 		// skip sort for all nulls
 		if nullCnt < vec.Length() {
 			if vec.GetType().IsString() {

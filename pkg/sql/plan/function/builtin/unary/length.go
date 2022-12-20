@@ -31,7 +31,7 @@ func Length(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, er
 		ret := vector.NewConstFixed(resultType, inputVector.Length(), int64(len(inputValues[0])), proc.Mp())
 		return ret, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}

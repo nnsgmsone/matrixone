@@ -51,10 +51,10 @@ func getConstVec(proc *process.Process, expr *plan.Expr, length int) (*vector.Ve
 	var vec *vector.Vector
 	t := expr.Expr.(*plan.Expr_C)
 	if t.C.GetIsnull() {
-		if types.T(expr.GetType().GetId()) == types.T_any {
-			vec = vector.NewConstNull(types.Type{Oid: types.T(expr.GetType().GetId())}, length)
+		if types.T(expr.Typ.GetId()) == types.T_any {
+			vec = vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.Id)}, length)
 		} else {
-			vec = vector.NewConstNullWithData(types.Type{Oid: types.T(expr.GetType().GetId())}, length, proc.Mp())
+			vec = vector.NewConstNullWithData(types.Type{Oid: types.T(expr.Typ.Id)}, length, proc.Mp())
 		}
 	} else {
 		switch t.C.GetValue().(type) {
@@ -114,7 +114,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 	var vec *vector.Vector
 
 	if len(bat.Zs) == 0 {
-		return vector.NewConstNull(types.Type{Oid: types.T(expr.GetType().GetId())}, 1), nil
+		return vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.Id)}, 1), nil
 	}
 
 	var length = len(bat.Zs)
@@ -125,15 +125,15 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
 		return vector.New(types.Type{
-			Oid:       types.T(t.T.GetType().GetId()),
-			Width:     t.T.GetType().GetWidth(),
-			Scale:     t.T.GetType().GetScale(),
-			Precision: t.T.GetType().GetPrecision(),
+			Oid:       types.T(t.T.Typ.Id),
+			Width:     t.T.Typ.GetWidth(),
+			Scale:     t.T.Typ.GetScale(),
+			Precision: t.T.Typ.GetPrecision(),
 		}), nil
 	case *plan.Expr_Col:
 		vec := bat.Vecs[t.Col.ColPos]
 		if vec.IsConstNull() {
-			vec.GetType() = types.T(expr.GetType().GetId()).ToType()
+			vec.SetType(types.T(expr.Typ.GetId()).ToType())
 		}
 		return vec, nil
 	case *plan.Expr_F:
@@ -153,7 +153,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 					}
 					for j := 0; j < i; j++ {
 						if _, ok := mp[vs[j]]; !ok {
-							vector.Clean(vs[j], proc.Mp())
+							vs[j].Free(proc.Mp())
 						}
 					}
 				}
@@ -169,7 +169,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 				}
 				for i := range vs {
 					if _, ok := mp[vs[i]]; !ok {
-						vector.Clean(vs[i], proc.Mp())
+						vs[i].Free(proc.Mp())
 					}
 				}
 			}
@@ -178,7 +178,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 		if err != nil {
 			return nil, err
 		}
-		vector.SetLength(vec, len(bat.Zs))
+		vec.SetLength(len(bat.Zs))
 		vec.FillDefaultValue()
 		return vec, nil
 	default:
@@ -196,10 +196,10 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
 		return vector.New(types.Type{
-			Oid:       types.T(t.T.GetType().GetId()),
-			Width:     t.T.GetType().GetWidth(),
-			Scale:     t.T.GetType().GetScale(),
-			Precision: t.T.GetType().GetPrecision(),
+			Oid:       types.T(t.T.Typ.Id),
+			Width:     t.T.Typ.GetWidth(),
+			Scale:     t.T.Typ.GetScale(),
+			Precision: t.T.Typ.GetPrecision(),
 		}), nil
 	case *plan.Expr_Col:
 		if t.Col.RelPos == 0 {
@@ -222,7 +222,7 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 				}
 				for j := 0; j < i; j++ {
 					if _, ok := mp[vs[j]]; !ok {
-						vector.Clean(vs[j], proc.Mp())
+						vs[j].Free(proc.Mp())
 					}
 				}
 				return nil, err
@@ -236,7 +236,7 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 			}
 			for i := range vs {
 				if _, ok := mp[vs[i]]; !ok {
-					vector.Clean(vs[i], proc.Mp())
+					vs[i].Free(proc.Mp())
 				}
 			}
 		}()
@@ -244,7 +244,7 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 		if err != nil {
 			return nil, err
 		}
-		vector.SetLength(vec, len(s.Zs))
+		vec.SetLength(len(s.Zs))
 		vec.FillDefaultValue()
 		return vec, nil
 	default:
@@ -257,7 +257,7 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 	var vec *vector.Vector
 
 	if len(bat.Zs) == 0 {
-		return vector.NewConstNull(types.Type{Oid: types.T(expr.GetType().GetId())}, 1), nil
+		return vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.Id)}, 1), nil
 	}
 
 	var length = len(bat.Zs)
@@ -268,15 +268,15 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
 		return vector.New(types.Type{
-			Oid:       types.T(t.T.GetType().GetId()),
-			Width:     t.T.GetType().GetWidth(),
-			Scale:     t.T.GetType().GetScale(),
-			Precision: t.T.GetType().GetPrecision(),
+			Oid:       types.T(t.T.Typ.Id),
+			Width:     t.T.Typ.GetWidth(),
+			Scale:     t.T.Typ.GetScale(),
+			Precision: t.T.Typ.GetPrecision(),
 		}), nil
 	case *plan.Expr_Col:
 		vec := bat.Vecs[t.Col.ColPos]
 		if vec.IsConstNull() {
-			vec.GetType() = types.T(expr.GetType().GetId()).ToType()
+			vec.SetType(types.T(expr.Typ.Id).ToType())
 		}
 		return vec, nil
 	case *plan.Expr_F:
@@ -296,7 +296,7 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 					}
 					for j := 0; j < i; j++ {
 						if _, ok := mp[vs[j]]; !ok {
-							vector.Clean(vs[j], proc.Mp())
+							vs[j].Free(proc.Mp())
 						}
 					}
 				}
@@ -312,7 +312,7 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 				}
 				for i := range vs {
 					if _, ok := mp[vs[i]]; !ok {
-						vector.Clean(vs[i], proc.Mp())
+						vs[i].Free(proc.Mp())
 					}
 				}
 			}
@@ -381,7 +381,7 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 		if err != nil {
 			return nil, err
 		}
-		vector.SetLength(vec, len(bat.Zs))
+		vec.SetLength(len(bat.Zs))
 		vec.FillDefaultValue()
 		return vec, nil
 	default:
@@ -399,10 +399,10 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
 		return vector.New(types.Type{
-			Oid:       types.T(t.T.GetType().GetId()),
-			Width:     t.T.GetType().GetWidth(),
-			Scale:     t.T.GetType().GetScale(),
-			Precision: t.T.GetType().GetPrecision(),
+			Oid:       types.T(t.T.Typ.Id),
+			Width:     t.T.Typ.GetWidth(),
+			Scale:     t.T.Typ.GetScale(),
+			Precision: t.T.Typ.GetPrecision(),
 		}), nil
 	case *plan.Expr_Col:
 		if t.Col.RelPos == 0 {
@@ -425,7 +425,7 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 				}
 				for j := 0; j < i; j++ {
 					if _, ok := mp[vs[j]]; !ok {
-						vector.Clean(vs[j], proc.Mp())
+						vs[j].Free(proc.Mp())
 					}
 				}
 				return nil, err
@@ -439,7 +439,7 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 			}
 			for i := range vs {
 				if _, ok := mp[vs[i]]; !ok {
-					vector.Clean(vs[i], proc.Mp())
+					vs[i].Free(proc.Mp())
 				}
 			}
 		}()
@@ -448,7 +448,7 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 			return nil, err
 		}
 
-		vector.SetLength(vec, 1)
+		vec.SetLength(1)
 		vec.FillDefaultValue()
 		return vec, nil
 	default:
@@ -468,7 +468,7 @@ func RewriteFilterExprList(list []*plan.Expr) *plan.Expr {
 		left := list[0]
 		right := RewriteFilterExprList(list[1:])
 		return &plan.Expr{
-			Typ:  left.GetType(),
+			Typ:  left.Typ,
 			Expr: makeAndExpr(left, right),
 		}
 	}

@@ -114,7 +114,7 @@ func TestFieldNumber(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, tc.expect.Col, gotV.Col)
+			require.Equal(t, tc.expect.GetRawData(), gotV.GetRawData())
 		})
 	}
 }
@@ -202,7 +202,7 @@ func TestFieldString(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, tc.expect.Col, gotV.Col)
+			require.Equal(t, tc.expect.GetRawData(), gotV.GetRawData())
 		})
 	}
 }

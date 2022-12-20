@@ -29,9 +29,9 @@ func RegularInstr(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 	resultType := types.T_int64.ToType()
 
 	//maxLen
-	maxLen := vector.Length(vectors[0])
+	maxLen := vectors[0].Length()
 	for i := range vectors {
-		val := vector.Length(vectors[i])
+		val := vectors[i].Length()
 		if val > maxLen {
 			maxLen = val
 		}
@@ -77,7 +77,7 @@ func RegularInstr(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 		return nil, err
 	}
 	resultValues := vector.MustTCols[int64](resultVector)
-	err = regular.RegularInstrWithArrays(firstValues, secondValues, pos, occ, opt, match_type, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues, maxLen)
+	err = regular.RegularInstrWithArrays(firstValues, secondValues, pos, occ, opt, match_type, firstVector.GetNulls(), secondVector.GetNulls(), resultVector.Nsp, resultValues, maxLen)
 	if err != nil {
 		return nil, err
 	}

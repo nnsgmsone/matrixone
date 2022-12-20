@@ -75,7 +75,7 @@ func TestIs(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			col := result.Col.([]bool)
+			col := vector.MustTCols[bool](result)
 			require.Equal(t, c.expected, col)
 			require.Equal(t, c.isScalar, result.IsConst())
 		})

@@ -44,7 +44,7 @@ func SerialWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vecto
 		case types.T_bool:
 			s := vector.MustTCols[bool](v)
 			for i, b := range s {
-				if nulls.Contains(v.Nsp, uint64(i)) {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeBool(b)
@@ -53,7 +53,7 @@ func SerialWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vecto
 		case types.T_int8:
 			s := vector.MustTCols[int8](v)
 			for i, b := range s {
-				if nulls.Contains(v.Nsp, uint64(i)) {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeInt8(b)
@@ -62,7 +62,7 @@ func SerialWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vecto
 		case types.T_int16:
 			s := vector.MustTCols[int16](v)
 			for i, b := range s {
-				if nulls.Contains(v.Nsp, uint64(i)) {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeInt16(b)
@@ -71,7 +71,7 @@ func SerialWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vecto
 		case types.T_int32:
 			s := vector.MustTCols[int32](v)
 			for i, b := range s {
-				if nulls.Contains(v.Nsp, uint64(i)) {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeInt32(b)
@@ -80,7 +80,7 @@ func SerialWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vecto
 		case types.T_int64:
 			s := vector.MustTCols[int64](v)
 			for i, b := range s {
-				if nulls.Contains(v.Nsp, uint64(i)) {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeInt64(b)
@@ -89,7 +89,7 @@ func SerialWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vecto
 		case types.T_uint8:
 			s := vector.MustTCols[uint8](v)
 			for i, b := range s {
-				if nulls.Contains(v.Nsp, uint64(i)) {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeUint8(b)
@@ -98,7 +98,7 @@ func SerialWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vecto
 		case types.T_uint16:
 			s := vector.MustTCols[uint16](v)
 			for i, b := range s {
-				if nulls.Contains(v.Nsp, uint64(i)) {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeUint16(b)
@@ -107,7 +107,7 @@ func SerialWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vecto
 		case types.T_uint32:
 			s := vector.MustTCols[uint32](v)
 			for i, b := range s {
-				if nulls.Contains(v.Nsp, uint64(i)) {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeUint32(b)
@@ -116,7 +116,7 @@ func SerialWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vecto
 		case types.T_uint64:
 			s := vector.MustTCols[uint64](v)
 			for i, b := range s {
-				if nulls.Contains(v.Nsp, uint64(i)) {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeUint64(b)
@@ -125,7 +125,7 @@ func SerialWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vecto
 		case types.T_float32:
 			s := vector.MustTCols[float32](v)
 			for i, b := range s {
-				if nulls.Contains(v.Nsp, uint64(i)) {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeFloat32(b)
@@ -134,7 +134,7 @@ func SerialWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vecto
 		case types.T_float64:
 			s := vector.MustTCols[float64](v)
 			for i, b := range s {
-				if nulls.Contains(v.Nsp, uint64(i)) {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeFloat64(b)
@@ -143,7 +143,7 @@ func SerialWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vecto
 		case types.T_date:
 			s := vector.MustTCols[types.Date](v)
 			for i, b := range s {
-				if nulls.Contains(v.Nsp, uint64(i)) {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeDate(b)
@@ -152,7 +152,7 @@ func SerialWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vecto
 		case types.T_time:
 			s := vector.MustTCols[types.Time](v)
 			for i, b := range s {
-				if nulls.Contains(v.Nsp, uint64(i)) {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeTime(b)
@@ -161,7 +161,7 @@ func SerialWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vecto
 		case types.T_datetime:
 			s := vector.MustTCols[types.Datetime](v)
 			for i, b := range s {
-				if nulls.Contains(v.Nsp, uint64(i)) {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeDatetime(b)
@@ -170,7 +170,7 @@ func SerialWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vecto
 		case types.T_timestamp:
 			s := vector.MustTCols[types.Timestamp](v)
 			for i, b := range s {
-				if nulls.Contains(v.Nsp, uint64(i)) {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeTimestamp(b)
@@ -179,7 +179,7 @@ func SerialWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vecto
 		case types.T_decimal64:
 			s := vector.MustTCols[types.Decimal64](v)
 			for i, b := range s {
-				if nulls.Contains(v.Nsp, uint64(i)) {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeDecimal64(b)
@@ -188,7 +188,7 @@ func SerialWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vecto
 		case types.T_decimal128:
 			s := vector.MustTCols[types.Decimal128](v)
 			for i, b := range s {
-				if nulls.Contains(v.Nsp, uint64(i)) {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeDecimal128(b)
@@ -197,7 +197,7 @@ func SerialWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vecto
 		case types.T_json, types.T_char, types.T_varchar, types.T_blob, types.T_text:
 			vs := vector.MustStrCols(v)
 			for i := range vs {
-				if nulls.Contains(v.Nsp, uint64(i)) {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeStringType([]byte(vs[i]))

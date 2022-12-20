@@ -50,13 +50,13 @@ func Test_CeilUint64(t *testing.T) {
 		for i := 0; i < len(compVec); i++ {
 			if j < len(compNsp) {
 				if compNsp[j] == int64(i) {
-					convey.So(vec.Nsp.Np.Contains(uint64(i)), convey.ShouldBeTrue)
+					convey.So(vec.GetNulls().Np.Contains(uint64(i)), convey.ShouldBeTrue)
 					j++
 				} else {
-					convey.So(vec.Nsp.Np.Contains(uint64(i)), convey.ShouldBeFalse)
+					convey.So(vec.GetNulls().Np.Contains(uint64(i)), convey.ShouldBeFalse)
 				}
 			} else {
-				convey.So(vec.Nsp.Np.Contains(uint64(i)), convey.ShouldBeFalse)
+				convey.So(vec.GetNulls().Np.Contains(uint64(i)), convey.ShouldBeFalse)
 			}
 		}
 
@@ -88,13 +88,13 @@ func Test_CeilInt64(t *testing.T) {
 		for i := 0; i < len(compVec); i++ {
 			if j < len(compNsp) {
 				if compNsp[j] == int64(i) {
-					convey.So(vec.Nsp.Np.Contains(uint64(i)), convey.ShouldBeTrue)
+					convey.So(vec.GetNulls().Np.Contains(uint64(i)), convey.ShouldBeTrue)
 					j++
 				} else {
-					convey.So(vec.Nsp.Np.Contains(uint64(i)), convey.ShouldBeFalse)
+					convey.So(vec.GetNulls().Np.Contains(uint64(i)), convey.ShouldBeFalse)
 				}
 			} else {
-				convey.So(vec.Nsp.Np.Contains(uint64(i)), convey.ShouldBeFalse)
+				convey.So(vec.GetNulls().Np.Contains(uint64(i)), convey.ShouldBeFalse)
 			}
 		}
 	})
@@ -127,13 +127,13 @@ func Test_CeilFloat64(t *testing.T) {
 		for i := 0; i < len(compVec); i++ {
 			if j < len(compNsp) {
 				if compNsp[j] == int64(i) {
-					convey.So(vec.Nsp.Np.Contains(uint64(i)), convey.ShouldBeTrue)
+					convey.So(vec.GetNulls().Np.Contains(uint64(i)), convey.ShouldBeTrue)
 					j++
 				} else {
-					convey.So(vec.Nsp.Np.Contains(uint64(i)), convey.ShouldBeFalse)
+					convey.So(vec.GetNulls().Np.Contains(uint64(i)), convey.ShouldBeFalse)
 				}
 			} else {
-				convey.So(vec.Nsp.Np.Contains(uint64(i)), convey.ShouldBeFalse)
+				convey.So(vec.GetNulls().Np.Contains(uint64(i)), convey.ShouldBeFalse)
 			}
 		}
 	})

@@ -42,7 +42,7 @@ func DateDiff(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		if left.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(rightValues)), right.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(rightValues)), right.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -53,7 +53,7 @@ func DateDiff(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		if right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(leftValues)), left.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(leftValues)), left.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -66,7 +66,7 @@ func DateDiff(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		return nil, err
 	}
 	resultValues := vector.MustTCols[int64](resultVector)
-	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
+	nulls.Or(left.GetNulls(), right.GetNulls(), resultVector.Nsp)
 	datediff.DateDiff(leftValues, rightValues, resultValues)
 	return resultVector, nil
 }

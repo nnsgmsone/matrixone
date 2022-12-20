@@ -42,10 +42,10 @@ func Prepare(proc *process.Process, arg any) error {
 		ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions))
 		ap.ctr.evecs = make([]evalVector, len(ap.Conditions))
 	}
-	ap.ctr.bat = batch.NewWithSize(len(ap.GetType()s))
+	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
 	ap.ctr.bat.Zs = proc.Mp().GetSels()
-	for i, typ := range ap.GetType()s {
-		ap.ctr.bat.Vecs[i] = vector.New(typ)
+	for i, typ := range ap.Typs {
+		ap.ctr.bat.Vecs[i] = vector.New(0, typ)
 	}
 
 	return nil
@@ -97,7 +97,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		if ctr.bat, err = ctr.bat.Append(proc.Ctx, proc.Mp(), bat); err != nil {
 			return err
 		}
-		bat.Clean(proc.Mp())
+		bat.Free(proc.Mp())
 	}
 	if ctr.bat == nil || ctr.bat.Length() == 0 || !ap.NeedHashMap {
 		return nil

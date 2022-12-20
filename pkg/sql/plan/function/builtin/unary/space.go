@@ -41,5 +41,5 @@ func SpaceNumber[T types.BuiltinNumber](vectors []*vector.Vector, proc *process.
 	if _, err := space.FillSpacesNumber(inputValues, results); err != nil {
 		return nil, err
 	}
-	return vector.NewWithStrings(resultType, results, inputVector.Nsp, proc.Mp()), nil
+	return vector.NewWithStrings(resultType, results, inputVector.GetNulls(), proc.Mp()), nil
 }

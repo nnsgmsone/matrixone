@@ -46,10 +46,10 @@ func Rpad(origVecs []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		// keep orig type
 		padstrs = origVecs[2].Col
 	}
-	oriNsps := []*nulls.Nulls{origVecs[0].Nsp, origVecs[1].Nsp, origVecs[2].Nsp}
+	oriNsps := []*nulls.Nulls{origVecs[0].GetNulls(), origVecs[1].GetNulls(), origVecs[2].GetNulls()}
 
 	// gets a new vector to store our result
-	rowCount := vector.Length(origVecs[0])
+	rowCount := origVecs[0].Length()
 
 	if origVecs[0].IsConst() && origVecs[1].IsConst() && origVecs[2].IsConst() {
 		//evaluate the result

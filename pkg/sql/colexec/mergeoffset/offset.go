@@ -68,7 +68,7 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 			return false, nil
 		}
 		ap.ctr.seen += uint64(length)
-		bat.Clean(proc.Mp())
+		bat.Free(proc.Mp())
 		i--
 	}
 	proc.SetInputBatch(nil)

@@ -105,7 +105,7 @@ func (c *container) buildHashTable(proc *process.Process, analyse process.Analyz
 
 			vs, zs, err := itr.Insert(i, n, btc.Vecs)
 			if err != nil {
-				btc.Clean(proc.Mp())
+				btc.Free(proc.Mp())
 				return err
 			}
 
@@ -121,7 +121,7 @@ func (c *container) buildHashTable(proc *process.Process, analyse process.Analyz
 				}
 			}
 		}
-		btc.Clean(proc.Mp())
+		btc.Free(proc.Mp())
 	}
 	return nil
 }
@@ -144,7 +144,7 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 
 		c.btc = batch.NewWithSize(len(btc.Vecs))
 		for i := range btc.Vecs {
-			c.btc.Vecs[i] = vector.New(btc.Vecs[i].GetType())
+			c.btc.Vecs[i] = vector.New(0, btc.Vecs[i].GetType())
 		}
 		needInsert := make([]uint8, hashmap.UnitLimit)
 		resetsNeedInsert := make([]uint8, hashmap.UnitLimit)
@@ -192,14 +192,14 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 			if insertcnt > 0 {
 				for pos := range btc.Vecs {
 					if err := vector.UnionBatch(c.btc.Vecs[pos], btc.Vecs[pos], int64(i), insertcnt, needInsert, proc.Mp()); err != nil {
-						btc.Clean(proc.Mp())
+						btc.Free(proc.Mp())
 						return false, err
 					}
 				}
 			}
 		}
 
-		btc.Clean(proc.Mp())
+		btc.Free(proc.Mp())
 		analyze.Output(c.btc)
 		proc.SetInputBatch(c.btc)
 		return false, nil

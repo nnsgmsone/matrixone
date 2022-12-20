@@ -41,14 +41,14 @@ func Format(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 	}
 
 	//calcute rows
-	rowCount := vector.Length(vecs[0])
+	rowCount := vecs[0].Length()
 
 	var resultVec *vector.Vector = nil
 	resultValues := make([]string, rowCount)
 	resultNsp := nulls.NewWithSize(rowCount)
 
 	// set null row
-	nulls.Or(vecs[0].Nsp, vecs[1].Nsp, resultNsp)
+	nulls.Or(vecs[0].GetNulls(), vecs[1].GetNulls(), resultNsp)
 
 	var constVectors []bool
 	if paramNum == 2 || vecs[2].IsConstNull() {

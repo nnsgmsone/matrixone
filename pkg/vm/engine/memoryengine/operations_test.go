@@ -30,7 +30,7 @@ func TestVectorGobEncoding(t *testing.T) {
 	//})
 	//vec.Col = &types.Bytes{}
 
-	vec := vector.New(types.Type{
+	vec := vector.New(0, types.Type{
 		Oid: types.T_int16,
 	})
 

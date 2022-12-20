@@ -31,9 +31,9 @@ func RegularReplace(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 	resultType := types.T_varchar.ToType()
 
 	//maxLen
-	maxLen := vector.Length(vectors[0])
+	maxLen := vectors[0].Length()
 	for i := range vectors {
-		val := vector.Length(vectors[i])
+		val := vectors[i].Length()
 		if val > maxLen {
 			maxLen = val
 		}
@@ -69,7 +69,7 @@ func RegularReplace(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 	if err != nil {
 		return nil, err
 	}
-	err = regular.RegularReplaceWithArrays(firstValues, secondValues, thirdValues, pos, occ, match_type, firstVector.Nsp, secondVector.Nsp, thirdVector.Nsp, resultVector, proc, maxLen)
+	err = regular.RegularReplaceWithArrays(firstValues, secondValues, thirdValues, pos, occ, match_type, firstVector.GetNulls(), secondVector.GetNulls(), thirdVector.GetNulls(), resultVector, proc, maxLen)
 	if err != nil {
 		return nil, err
 	}

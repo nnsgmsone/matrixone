@@ -113,7 +113,7 @@ func TestGroup(t *testing.T) {
 		_, err = Call(0, tc.proc, tc.arg)
 		require.NoError(t, err)
 		if tc.proc.Reg.InputBatch != nil {
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+			tc.proc.Reg.InputBatch.Free(tc.proc.Mp())
 		}
 		tc.proc.Reg.InputBatch = nil
 		_, err = Call(0, tc.proc, tc.arg)
@@ -149,7 +149,7 @@ func TestLowCardinalityGroup(t *testing.T) {
 		require.Equal(t, []int64{4, 3, 3, 2}, vector.MustTCols[int64](rbat.Vecs[1]))
 
 		if tc.proc.Reg.InputBatch != nil {
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+			tc.proc.Reg.InputBatch.Free(tc.proc.Mp())
 		}
 	}
 
@@ -178,7 +178,7 @@ func TestLowCardinalityGroup(t *testing.T) {
 		require.Equal(t, []int64{32, 2, 8, 6, 16, 32}, vector.MustTCols[int64](rbat.Vecs[1]))
 
 		if tc.proc.Reg.InputBatch != nil {
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+			tc.proc.Reg.InputBatch.Free(tc.proc.Mp())
 		}
 	}
 }
@@ -206,7 +206,7 @@ func BenchmarkGroup(b *testing.B) {
 			_, err = Call(0, tc.proc, tc.arg)
 			require.NoError(t, err)
 			if tc.proc.Reg.InputBatch != nil {
-				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+				tc.proc.Reg.InputBatch.Free(tc.proc.Mp())
 			}
 		}
 	}
@@ -247,5 +247,5 @@ func constructIndex(t *testing.T, v *vector.Vector, m *mpool.MPool) {
 	err = idx.InsertBatch(v)
 	require.NoError(t, err)
 
-	v.SetIndex(idx)
+	//v.SetIndex(idx)
 }

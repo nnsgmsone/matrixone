@@ -40,7 +40,7 @@ func Concat(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, er
 }
 
 func concatWithAllConst(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	length := vector.Length(vectors[0])
+	length := vectors[0].Length()
 	vct := types.T_varchar.ToType()
 	res := ""
 	for i := range vectors {
@@ -50,13 +50,13 @@ func concatWithAllConst(vectors []*vector.Vector, proc *process.Process) (*vecto
 }
 
 func concatWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	length := vector.Length(vectors[0])
+	length := vectors[0].Length()
 	vct := types.T_varchar.ToType()
 	nsp := new(nulls.Nulls)
 	val := make([]string, length)
 	for i := 0; i < length; i++ {
 		for j := range vectors {
-			if nulls.Contains(vectors[j].Nsp, uint64(i)) {
+			if nulls.Contains(vectors[j].GetNulls(), uint64(i)) {
 				nulls.Add(nsp, uint64(i))
 				break
 			}

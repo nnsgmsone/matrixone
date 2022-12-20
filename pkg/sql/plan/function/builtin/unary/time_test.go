@@ -211,7 +211,7 @@ func TestTime(t *testing.T) {
 				result, err = DateStringToTime(vec, c.proc)
 			}
 			require.NoError(t, err)
-			require.Equal(t, c.want, result.Col.([]types.Time))
+			require.Equal(t, c.want, vector.MustTCols[types.Time](result))
 		})
 	}
 

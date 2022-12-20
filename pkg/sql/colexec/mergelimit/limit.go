@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -54,7 +53,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		}
 		anal.Input(bat)
 		if ap.ctr.seen >= ap.Limit {
-			bat.Clean(proc.Mp())
+			bat.Free(proc.Mp())
 			continue
 		}
 		newSeen := ap.ctr.seen + uint64(bat.Length())
@@ -65,7 +64,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			return false, nil
 		} else {
 			num := int(newSeen - ap.Limit)
-			batch.SetLength(bat, bat.Length()-num)
+			bat.SetLength(bat.Length() - num)
 			ap.ctr.seen = newSeen
 			anal.Output(bat)
 			proc.SetInputBatch(bat)

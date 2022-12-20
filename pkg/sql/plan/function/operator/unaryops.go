@@ -37,12 +37,12 @@ func UnaryTilde[T constraints.Integer](vectors []*vector.Vector, proc *process.P
 		}
 		resVector := proc.AllocScalarVector(returnType)
 		resValues := make([]uint64, 1)
-		nulls.Set(resVector.Nsp, srcVector.Nsp)
+		nulls.Set(resVector.Nsp, srcVector.GetNulls())
 		resValues[0] = funcBitInversion(srcValues[0])
 		vector.SetCol(resVector, resValues)
 		return resVector, nil
 	} else {
-		resVector, err := proc.AllocVectorOfRows(returnType, int64(len(srcValues)), srcVector.Nsp)
+		resVector, err := proc.AllocVectorOfRows(returnType, int64(len(srcValues)), srcVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -85,11 +85,11 @@ func UnaryMinus[T constraints.Signed | constraints.Float](vectors []*vector.Vect
 		}
 		resVector := proc.AllocScalarVector(srcVector.GetType())
 		resValues := make([]T, 1)
-		nulls.Set(resVector.Nsp, srcVector.Nsp)
+		nulls.Set(resVector.Nsp, srcVector.GetNulls())
 		vector.SetCol(resVector, neg.NumericNeg(srcValues, resValues))
 		return resVector, nil
 	} else {
-		resVector, err := proc.AllocVectorOfRows(srcVector.GetType(), int64(len(srcValues)), srcVector.Nsp)
+		resVector, err := proc.AllocVectorOfRows(srcVector.GetType(), int64(len(srcValues)), srcVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -113,7 +113,7 @@ func UnaryMinusDecimal64(vectors []*vector.Vector, proc *process.Process) (*vect
 		vector.SetCol(resVector, neg.Decimal64Neg(srcValues, resValues))
 		return resVector, nil
 	} else {
-		resVector, err := proc.AllocVectorOfRows(srcVector.GetType(), int64(len(srcValues)), srcVector.Nsp)
+		resVector, err := proc.AllocVectorOfRows(srcVector.GetType(), int64(len(srcValues)), srcVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -136,7 +136,7 @@ func UnaryMinusDecimal128(vectors []*vector.Vector, proc *process.Process) (*vec
 		vector.SetCol(resVector, neg.Decimal128Neg(srcValues, resValues))
 		return resVector, nil
 	} else {
-		resVector, err := proc.AllocVectorOfRows(srcVector.GetType(), int64(len(srcValues)), srcVector.Nsp)
+		resVector, err := proc.AllocVectorOfRows(srcVector.GetType(), int64(len(srcValues)), srcVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}

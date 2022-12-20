@@ -124,7 +124,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 				}
 				ctr.bat = batch.NewWithSize(len(bat.Vecs))
 				for i, vec := range bat.Vecs {
-					ctr.bat.Vecs[i] = vector.New(vec.GetType())
+					ctr.bat.Vecs[i] = vector.New(0, vec.GetType())
 				}
 				ctr.cmps = make([]compare.Compare, len(bat.Vecs))
 				for i := range ctr.cmps {
@@ -143,10 +143,10 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 				}
 			}
 			if err := ctr.processBatch(ap.Limit, bat, proc); err != nil {
-				bat.Clean(proc.Mp())
+				bat.Free(proc.Mp())
 				return err
 			}
-			bat.Clean(proc.Mp())
+			bat.Free(proc.Mp())
 		}
 	}
 	return nil
@@ -163,7 +163,7 @@ func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.
 		}
 		for i := int64(0); i < start; i++ {
 			for j, vec := range ctr.bat.Vecs {
-				if err := vector.UnionOne(vec, bat.Vecs[j], i, proc.Mp()); err != nil {
+				if err := vec.UnionOne(bat.Vecs[j], i, bat.Vecs[j].Length() == 0, proc.Mp()); err != nil {
 					return err
 				}
 			}
@@ -212,7 +212,7 @@ func (ctr *container) eval(limit int64, proc *process.Process, anal process.Anal
 		return err
 	}
 	for i := ctr.n; i < len(ctr.bat.Vecs); i++ {
-		vector.Clean(ctr.bat.Vecs[i], proc.Mp())
+		ctr.bat.Vecs[i].Free(proc.Mp())
 	}
 	ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
 	ctr.bat.ExpandNulls()

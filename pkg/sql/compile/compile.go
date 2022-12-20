@@ -215,7 +215,7 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) (*Scope, er
 	if err != nil {
 		return nil, err
 	}
-	if c.info.GetType() == plan2.ExecTypeTP {
+	if c.info.Typ == plan2.ExecTypeTP {
 		c.cnList = engine.Nodes{engine.Node{Mcpu: 1}}
 	} else {
 		if len(c.cnList) == 0 {
@@ -229,7 +229,7 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) (*Scope, er
 	if err != nil {
 		return nil, err
 	}
-	if c.info.GetType() == plan2.ExecTypeTP {
+	if c.info.Typ == plan2.ExecTypeTP {
 		return c.compileTpQuery(qry, ss)
 	}
 	return c.compileApQuery(qry, ss)
@@ -768,7 +768,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, right *plan.Node, ss []*Sc
 	isEq := isEquiJoin(n.OnList)
 	typs := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
-		typs[i] = dupType(expr.GetType())
+		typs[i] = dupType(expr.Typ)
 	}
 	switch joinTyp {
 	case plan.Node_INNER:
@@ -876,7 +876,7 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 			panic(err)
 		}
 		defer vec.Free(c.proc.Mp())
-		return c.compileTop(n, vec.Col.([]int64)[0], ss)
+		return c.compileTop(n, vector.MustTCols[int64](vec)[0], ss)
 	case n.Limit == nil && n.Offset == nil && len(n.OrderBy) > 0: // top
 		return c.compileOrder(n, ss)
 	case n.Limit != nil && n.Offset != nil && len(n.OrderBy) > 0:
@@ -890,7 +890,7 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 			panic(err)
 		}
 		defer vec2.Free(c.proc.Mp())
-		limit, offset := vec1.Col.([]int64)[0], vec2.Col.([]int64)[0]
+		limit, offset := vector.MustTCols[int64](vec1)[0], vector.MustTCols[int64](vec2)[0]
 		topN := limit + offset
 		if topN <= 8192*2 {
 			// if n is small, convert `order by col limit m offset n` to `top m+n offset n`
@@ -1262,7 +1262,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		return nodes, nil
 	}
 	if len(ranges[0]) == 0 {
-		if c.info.GetType() == plan2.ExecTypeTP {
+		if c.info.Typ == plan2.ExecTypeTP {
 			nodes = append(nodes, engine.Node{Mcpu: 1})
 		} else {
 			nodes = append(nodes, engine.Node{

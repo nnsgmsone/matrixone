@@ -56,7 +56,7 @@ func DatetimeToMonth(vectors []*vector.Vector, proc *process.Process) (*vector.V
 		vector.SetCol(resultVector, month.DatetimeToMonth(inputValues, resultValues))
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -79,7 +79,7 @@ func DateStringToMonth(vectors []*vector.Vector, proc *process.Process) (*vector
 		vector.SetCol(resultVector, month.DateStringToMonth(inputValues, resultVector.Nsp, resultValues))
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}

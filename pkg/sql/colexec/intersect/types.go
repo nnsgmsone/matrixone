@@ -58,7 +58,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		ctr.hashTable = nil
 	}
 	if ctr.btc != nil {
-		ctr.btc.Clean(proc.Mp())
+		ctr.btc.Free(proc.Mp())
 		ctr.btc = nil
 	}
 	if ctr.cnts != nil {

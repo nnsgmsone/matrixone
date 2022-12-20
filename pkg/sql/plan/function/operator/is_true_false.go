@@ -53,7 +53,7 @@ func funcIs(vectors []*vector.Vector, proc *process.Process, nullValue bool, eqB
 		vals := vector.MustTCols[bool](vec)
 		olds := vector.MustTCols[bool](input)
 		for i := range vals {
-			if nulls.Contains(input.Nsp, uint64(i)) {
+			if nulls.Contains(input.GetNulls(), uint64(i)) {
 				vals[i] = nullValue
 			} else {
 				vals[i] = olds[i] == eqBool

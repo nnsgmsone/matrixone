@@ -234,9 +234,9 @@ func (txn *Transaction) WriteBatch(
 	txn.readOnly = false
 	if typ == INSERT {
 		len := bat.Length()
-		vec := vector.New(types.New(types.T_Rowid, 0, 0, 0))
+		vec := vector.New(0, types.New(types.T_Rowid, 0, 0, 0))
 		for i := 0; i < len; i++ {
-			if err := vec.Append(txn.genRowId(), false,
+			if err := vector.Append(vec, txn.genRowId(), false,
 				txn.proc.Mp()); err != nil {
 				return err
 			}
@@ -390,7 +390,7 @@ func (txn *Transaction) getRow(ctx context.Context, databaseId uint64, tableId u
 		if bat.Length() > 0 {
 			rows = append(rows, catalog.GenRows(bat)...)
 		}
-		bat.Clean(txn.proc.Mp())
+		bat.Free(txn.proc.Mp())
 	}
 	if len(rows) == 0 {
 		return nil, moerr.GetOkExpectedEOB()
@@ -416,7 +416,7 @@ func (txn *Transaction) getRows(ctx context.Context, name string, databaseId uin
 		if bat.Length() > 0 {
 			rows = append(rows, catalog.GenRows(bat)...)
 		}
-		bat.Clean(txn.proc.Mp())
+		bat.Free(txn.proc.Mp())
 	}
 	return rows, nil
 }
@@ -459,7 +459,7 @@ func (txn *Transaction) getRowsByIndex(databaseId, tableId uint64, name string,
 					bat := batch.NewWithSize(len(columns))
 					for i := range bat.Vecs {
 						vec := entry.bat.Vecs[mp[columns[i]]]
-						bat.Vecs[i] = vector.New(vec.GetType())
+						bat.Vecs[i] = vector.New(0, vec.GetType())
 						if err := vector.UnionBatch(bat.Vecs[i], vec, 0, length,
 							flags[:length], txn.proc.Mp()); err != nil {
 							return nil, err
@@ -471,7 +471,7 @@ func (txn *Transaction) getRowsByIndex(databaseId, tableId uint64, name string,
 						if err != nil {
 							return nil, err
 						}
-						bs := vector.GetColumn[bool](vec)
+						bs := vector.MustTCols[bool](vec)
 						if vec.IsConst() {
 							if !bs[0] {
 								bat.Shrink(nil)
@@ -489,7 +489,7 @@ func (txn *Transaction) getRowsByIndex(databaseId, tableId uint64, name string,
 						vec.Free(txn.proc.Mp())
 					}
 					rows = append(rows, catalog.GenRows(bat)...)
-					bat.Clean(txn.proc.Mp())
+					bat.Free(txn.proc.Mp())
 				}
 			}
 		}
@@ -578,7 +578,7 @@ func (txn *Transaction) readTable(ctx context.Context, name string, databaseId u
 		if err != nil {
 			return nil, err
 		}
-		bs := vector.GetColumn[bool](vec)
+		bs := vector.MustTCols[bool](vec)
 		if vec.IsConst() {
 			if !bs[0] {
 				bat.Shrink(nil)
@@ -706,7 +706,7 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 		if err != nil {
 			return true
 		}
-		bat.Clean(proc.Mp())
+		bat.Free(proc.Mp())
 		return ifNeed
 	}
 	if !checkExprIsMonotonic(expr) {
@@ -746,10 +746,10 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 
 	ifNeed, err := evalFilterExpr(expr, bat, proc)
 	if err != nil {
-		bat.Clean(proc.Mp())
+		bat.Free(proc.Mp())
 		return true
 	}
-	bat.Clean(proc.Mp())
+	bat.Free(proc.Mp())
 
 	return ifNeed
 

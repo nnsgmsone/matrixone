@@ -17,6 +17,10 @@ package table_function
 import (
 	"bytes"
 	"context"
+	"math"
+	"strconv"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -25,9 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"math"
-	"strconv"
-	"strings"
 )
 
 func generateSeriesString(arg any, buf *bytes.Buffer) {
@@ -46,7 +47,7 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 	)
 	defer func() {
 		if err != nil && rbat != nil {
-			rbat.Clean(proc.Mp())
+			rbat.Free(proc.Mp())
 		}
 		if startVec != nil {
 			startVec.Free(proc.Mp())

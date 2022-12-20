@@ -70,13 +70,13 @@ func TestDispatch(t *testing.T) {
 		require.NoError(t, err)
 		bat := newBatch(t, tc.types, tc.proc, Rows)
 		tc.proc.Reg.InputBatch = bat
-		{
+		/*{
 			for _, vec := range bat.Vecs {
 				if vec.IsOriginal() {
 					vec.FreeOriginal(tc.proc.Mp())
 				}
 			}
-		}
+		}*/
 		_, _ = Call(0, tc.proc, tc.arg)
 		tc.proc.Reg.InputBatch = &batch.Batch{}
 		_, _ = Call(0, tc.proc, tc.arg)
@@ -89,7 +89,7 @@ func TestDispatch(t *testing.T) {
 				if bat == nil {
 					break
 				}
-				bat.Clean(tc.proc.Mp())
+				bat.Free(tc.proc.Mp())
 			}
 		}
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())

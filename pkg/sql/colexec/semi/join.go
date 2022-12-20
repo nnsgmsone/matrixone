@@ -63,7 +63,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 				continue
 			}
 			if ctr.bat == nil || ctr.bat.Length() == 0 {
-				bat.Clean(proc.Mp())
+				bat.Free(proc.Mp())
 				continue
 			}
 			if err := ctr.probe(bat, ap, proc, anal); err != nil {
@@ -90,16 +90,16 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
-	defer bat.Clean(proc.Mp())
+	defer bat.Free(proc.Mp())
 	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
 	rbat.Zs = proc.Mp().GetSels()
 	for i, pos := range ap.Result {
-		rbat.Vecs[i] = vector.New(bat.Vecs[pos].GetType())
+		rbat.Vecs[i] = vector.New(0, bat.Vecs[pos].GetType())
 	}
 	ctr.cleanEvalVectors(proc.Mp())
 	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc); err != nil {
-		rbat.Clean(proc.Mp())
+		rbat.Free(proc.Mp())
 		return err
 	}
 	count := bat.Length()
@@ -123,10 +123,10 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				for _, sel := range sels {
 					vec, err := colexec.JoinFilterEvalExprInBucket(bat, ctr.bat, i+k, int(sel), proc, ap.Cond)
 					if err != nil {
-						rbat.Clean(proc.Mp())
+						rbat.Free(proc.Mp())
 						return err
 					}
-					bs := vec.Col.([]bool)
+					bs := vector.MustTCols[bool](vec)
 					if bs[0] {
 						matched = true
 						vec.Free(proc.Mp())
@@ -142,8 +142,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
 		}
 		for j, pos := range ap.Result {
-			if err := vector.Union(rbat.Vecs[j], bat.Vecs[pos], eligible, true, proc.Mp()); err != nil {
-				rbat.Clean(proc.Mp())
+			if err := bat.Vecs[j].UnionOne(bat.Vecs[pos], eligible, true, proc.Mp()); err != nil {
+				rbat.Free(proc.Mp())
 				return err
 			}
 		}

@@ -85,8 +85,8 @@ func UnmarshalToMoVec(vec Vector) (mov *movec.Vector) {
 		mov = movec.NewOriginalWithData(vec.GetType(), bs.StorageBuf(), &nulls.Nulls{})
 	}
 	if vec.HasNull() {
-		mov.Nsp.Np = bitmap.New(vec.Length())
-		mov.Nsp.Np.AddMany(vec.NullMask().ToArray())
+		mov.GetNulls().Np = bitmap.New(vec.Length())
+		mov.GetNulls().Np.AddMany(vec.NullMask().ToArray())
 	}
 	mov.SetOriginal(true)
 
@@ -128,9 +128,9 @@ func CopyToMoVec(vec Vector) (mov *movec.Vector) {
 	}
 
 	if vec.HasNull() {
-		mov.Nsp.Np = bitmap.New(vec.Length())
-		mov.Nsp.Np.AddMany(vec.NullMask().ToArray())
-		//mov.Nsp.Np = vec.NullMask()
+		mov.GetNulls().Np = bitmap.New(vec.Length())
+		mov.GetNulls().Np.AddMany(vec.NullMask().ToArray())
+		//mov.GetNulls().Np = vec.NullMask()
 	}
 
 	return mov
@@ -164,7 +164,7 @@ func CopyToMoBatch(bat *Batch) *batch.Batch {
 
 func movecToBytes[T types.FixedSizeT](v *movec.Vector) *Bytes {
 	bs := stl.NewFixedTypeBytes[T]()
-	if v.Col == nil || len(movec.MustTCols[T](v)) == 0 {
+	if v.GetRawData() == nil || len(movec.MustTCols[T](v)) == 0 {
 		bs.Storage = make([]byte, v.Length()*v.GetType().TypeSize())
 	} else {
 		bs.Storage = types.EncodeSlice(movec.MustTCols[T](v))
@@ -226,9 +226,9 @@ func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 		panic(any(moerr.NewInternalErrorNoCtx("%s not supported", v.GetType().String())))
 	}
 	var np *roaring64.Bitmap
-	if v.Nsp.Np != nil {
+	if v.GetNulls().Np != nil {
 		np = roaring64.New()
-		np.AddMany(v.Nsp.Np.ToArray())
+		np.AddMany(v.GetNulls().Np.ToArray())
 	}
 	vec.ResetWithData(bs, np)
 	return vec
@@ -238,7 +238,7 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 	if cnt == 1 {
 		return []*batch.Batch{bat}
 	}
-	length := movec.Length(bat.Vecs[0])
+	length := bat.Vecs[0].Length()
 	rows := length / cnt
 	if length%cnt == 0 {
 		bats := make([]*batch.Batch, 0, cnt)
@@ -426,11 +426,11 @@ func MockVec(typ types.Type, rows int, offset int) *movec.Vector {
 func GenericUpdateFixedValue[T types.FixedSizeT](vec *movec.Vector, row uint32, v any) {
 	_, isNull := v.(types.Null)
 	if isNull {
-		nulls.Add(vec.Nsp, uint64(row))
+		nulls.Add(vec.GetNulls(), uint64(row))
 	} else {
 		movec.SetTAt(vec, int(row), v.(T))
-		if vec.Nsp.Np != nil && vec.Nsp.Np.Contains(uint64(row)) {
-			vec.Nsp.Np.Remove(uint64(row))
+		if vec.GetNulls().Np != nil && vec.GetNulls().Np.Contains(uint64(row)) {
+			vec.GetNulls().Np.Remove(uint64(row))
 		}
 	}
 }
@@ -438,11 +438,11 @@ func GenericUpdateFixedValue[T types.FixedSizeT](vec *movec.Vector, row uint32, 
 func GenericUpdateBytes(vec *movec.Vector, row uint32, v any) {
 	_, isNull := v.(types.Null)
 	if isNull {
-		nulls.Add(vec.Nsp, uint64(row))
+		nulls.Add(vec.GetNulls(), uint64(row))
 	} else {
 		movec.SetBytesAt(vec, int(row), v.([]byte), mockMp)
-		if vec.Nsp.Np != nil && vec.Nsp.Np.Contains(uint64(row)) {
-			vec.Nsp.Np.Remove(uint64(row))
+		if vec.GetNulls().Np != nil && vec.GetNulls().Np.Contains(uint64(row)) {
+			vec.GetNulls().Np.Remove(uint64(row))
 		}
 	}
 }
@@ -516,7 +516,7 @@ func AppendValue(vec *movec.Vector, v any) {
 }
 
 func GetValue(col *movec.Vector, row uint32) any {
-	if col.Nsp.Np != nil && col.Nsp.Np.Contains(uint64(row)) {
+	if col.GetNulls().Np != nil && col.GetNulls().Np.Contains(uint64(row)) {
 		return types.Null{}
 	}
 	switch col.GetType().Oid {
@@ -620,7 +620,7 @@ func UpdateValue(col *movec.Vector, row uint32, val any) {
 
 func ForEachValue(col *movec.Vector, reversed bool, op func(v any, row uint32) error) (err error) {
 	if reversed {
-		for i := movec.Length(col) - 1; i >= 0; i-- {
+		for i := col.Length() - 1; i >= 0; i-- {
 			v := GetValue(col, uint32(i))
 			if err = op(v, uint32(i)); err != nil {
 				return
@@ -628,7 +628,7 @@ func ForEachValue(col *movec.Vector, reversed bool, op func(v any, row uint32) e
 		}
 		return
 	}
-	for i := 0; i < movec.Length(col); i++ {
+	for i := 0; i < col.Length(); i++ {
 		v := GetValue(col, uint32(i))
 		if err = op(v, uint32(i)); err != nil {
 			return
@@ -656,8 +656,8 @@ func BatchWindow(bat *batch.Batch, start, end int) *batch.Batch {
 
 	np := bitmap.New(0)
 	var nspIterator bitmap.Iterator
-	if vec.Nsp != nil && vec.Nsp.Np != nil {
-		nspIterator = vec.Nsp.Np.Iterator()
+	if vec.GetNulls() != nil && vec.GetNulls().Np != nil {
+		nspIterator = vec.GetNulls().Np.Iterator()
 	}
 	deleted := 0
 	vec.Col = compute.InplaceDeleteRows(vec.Col, deletesIterator)
@@ -689,7 +689,7 @@ func BatchWindow(bat *batch.Batch, start, end int) *batch.Batch {
 			np.Add(n - uint64(deleted))
 		}
 	}
-	vec.Nsp.Np = np
+	vec.GetNulls().Np = np
 	return vec
 }*/
 

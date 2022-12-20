@@ -57,11 +57,11 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 				continue
 			}
 			if ctr.bat == nil {
-				bat.Clean(proc.Mp())
+				bat.Free(proc.Mp())
 				continue
 			}
 			if err := ctr.probe(bat, ap, proc, anal); err != nil {
-				bat.Clean(proc.Mp())
+				bat.Free(proc.Mp())
 				ap.Free(proc, true)
 				return false, err
 			}
@@ -84,15 +84,15 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
-	defer bat.Clean(proc.Mp())
+	defer bat.Free(proc.Mp())
 	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
 	rbat.Zs = proc.Mp().GetSels()
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
-			rbat.Vecs[i] = vector.New(bat.Vecs[rp.Pos].GetType())
+			rbat.Vecs[i] = vector.New(0, bat.Vecs[rp.Pos].GetType())
 		} else {
-			rbat.Vecs[i] = vector.New(ctr.bat.Vecs[rp.Pos].GetType())
+			rbat.Vecs[i] = vector.New(0, ctr.bat.Vecs[rp.Pos].GetType())
 		}
 	}
 	count := bat.Length()
@@ -100,13 +100,13 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		for j := 0; j < len(ctr.bat.Zs); j++ {
 			for k, rp := range ap.Result {
 				if rp.Rel == 0 {
-					if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
-						rbat.Clean(proc.Mp())
+					if err := rbat.Vecs[k].UnionOne(bat.Vecs[rp.Pos], int64(i), rbat.Vecs[k].Length() == 0, proc.Mp()); err != nil {
+						rbat.Free(proc.Mp())
 						return err
 					}
 				} else {
-					if err := vector.UnionOne(rbat.Vecs[k], ctr.bat.Vecs[rp.Pos], int64(j), proc.Mp()); err != nil {
-						rbat.Clean(proc.Mp())
+					if err := rbat.Vecs[k].UnionOne(ctr.bat.Vecs[rp.Pos], int64(j), rbat.Vecs[k].Length() == 0, proc.Mp()); err != nil {
+						rbat.Free(proc.Mp())
 						return err
 					}
 				}

@@ -175,7 +175,7 @@ func getZonemapDataFromMeta(ctx context.Context, columns []int, meta BlockMeta, 
 
 	for i := 0; i < dataLength; i++ {
 		idx := columns[i]
-		dataTypes[i] = uint8(tableDef.Cols[idx].GetType().Id)
+		dataTypes[i] = uint8(tableDef.Cols[idx].Typ.Id)
 		typ := types.T(dataTypes[i]).ToType()
 
 		zm := index.NewZoneMap(typ)
@@ -233,7 +233,7 @@ func exchangeVectors(datas [][2]any, depth int, tmpResult []any, result *[]*vect
 			exchangeVectors(datas, depth+1, tmpResult, result, mp)
 		} else {
 			for j, val := range tmpResult {
-				(*result)[j].Append(val, false, mp)
+				vector.Append((*result)[j], val, false, mp)
 			}
 		}
 	}
@@ -242,7 +242,7 @@ func exchangeVectors(datas [][2]any, depth int, tmpResult []any, result *[]*vect
 func buildVectorsByData(datas [][2]any, dataTypes []uint8, mp *mpool.MPool) []*vector.Vector {
 	vectors := make([]*vector.Vector, len(dataTypes))
 	for i, typ := range dataTypes {
-		vectors[i] = vector.New(types.T(typ).ToType())
+		vectors[i] = vector.New(0, types.T(typ).ToType())
 	}
 
 	tmpResult := make([]any, len(datas))
@@ -262,7 +262,7 @@ func getNewBlockName(accountId uint32) (string, error) {
 
 func getConstantExprHashValue(constExpr *plan.Expr) (bool, uint64) {
 	args := []*plan.Expr{constExpr}
-	argTypes := []types.Type{types.T(constExpr.GetType().Id).ToType()}
+	argTypes := []types.Type{types.T(constExpr.Typ.Id).ToType()}
 	funId, returnType, _, _ := function.GetFunctionByName(HASH_VALUE_FUN, argTypes)
 	funExpr := &plan.Expr{
 		Typ: plan2.MakePlan2Type(&returnType),

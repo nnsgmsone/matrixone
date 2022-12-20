@@ -105,7 +105,7 @@ func (ctr *container) buildHashTable(proc *process.Process, ana process.Analyze,
 		ana.Input(bat)
 
 		itr := ctr.hashTable.NewIterator()
-		count := vector.Length(bat.Vecs[0])
+		count := bat.Vecs[0].Length()
 		for i := 0; i < count; i += hashmap.UnitLimit {
 			n := count - i
 			if n > hashmap.UnitLimit {
@@ -113,11 +113,11 @@ func (ctr *container) buildHashTable(proc *process.Process, ana process.Analyze,
 			}
 			_, _, err := itr.Insert(i, n, bat.Vecs)
 			if err != nil {
-				bat.Clean(proc.Mp())
+				bat.Free(proc.Mp())
 				return err
 			}
 		}
-		bat.Clean(proc.Mp())
+		bat.Free(proc.Mp())
 	}
 	return nil
 }
@@ -143,10 +143,10 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 
 		ctr.bat = batch.NewWithSize(len(bat.Vecs))
 		for i := range bat.Vecs {
-			ctr.bat.Vecs[i] = vector.New(bat.Vecs[i].GetType())
+			ctr.bat.Vecs[i] = vector.New(0, bat.Vecs[i].GetType())
 		}
 
-		count := vector.Length(bat.Vecs[0])
+		count := bat.Vecs[0].Length()
 		itr := ctr.hashTable.NewIterator()
 		for i := 0; i < count; i += hashmap.UnitLimit {
 			oldHashGroup := ctr.hashTable.GroupCount()
@@ -157,7 +157,7 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 			}
 			vs, _, err := itr.Insert(i, n, bat.Vecs)
 			if err != nil {
-				bat.Clean(proc.Mp())
+				bat.Free(proc.Mp())
 				return false, err
 			}
 			copy(inserted[:n], restoreInserted[:n])
@@ -176,7 +176,7 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 			if insertCount > 0 {
 				for pos := range bat.Vecs {
 					if err := vector.UnionBatch(ctr.bat.Vecs[pos], bat.Vecs[pos], int64(i), insertCount, inserted[:n], proc.Mp()); err != nil {
-						bat.Clean(proc.Mp())
+						bat.Free(proc.Mp())
 						return false, err
 					}
 				}
@@ -185,7 +185,7 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 		ana.Output(ctr.bat)
 		proc.SetInputBatch(ctr.bat)
 		ctr.bat = nil
-		bat.Clean(proc.Mp())
+		bat.Free(proc.Mp())
 		return false, nil
 	}
 }

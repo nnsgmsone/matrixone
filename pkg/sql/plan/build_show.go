@@ -101,7 +101,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			nullOrNot = "DEFAULT NULL"
 		}
 
-		if col.GetType().AutoIncr {
+		if col.Typ.AutoIncr {
 			nullOrNot = "NOT NULL AUTO_INCREMENT"
 		}
 
@@ -115,13 +115,13 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		} else {
 			createStr += ",\n"
 		}
-		typ := types.Type{Oid: types.T(col.GetType().Id)}
+		typ := types.Type{Oid: types.T(col.Typ.Id)}
 		typeStr := typ.String()
 		if types.IsDecimal(typ.Oid) { //after decimal fix,remove this
-			typeStr = fmt.Sprintf("DECIMAL(%d,%d)", col.GetType().Width, col.GetType().Scale)
+			typeStr = fmt.Sprintf("DECIMAL(%d,%d)", col.Typ.Width, col.Typ.Scale)
 		}
 		if typ.Oid == types.T_varchar || typ.Oid == types.T_char {
-			typeStr += fmt.Sprintf("(%d)", col.GetType().Width)
+			typeStr += fmt.Sprintf("(%d)", col.Typ.Width)
 		}
 
 		updateOpt := ""

@@ -244,7 +244,7 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 	}
 
 	for _, arg := range args {
-		if !arg.GetType().NotNullable {
+		if !arg.Typ.NotNullable {
 			return false
 		}
 	}

@@ -86,7 +86,7 @@ func TestJoin(t *testing.T) {
 			if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
 				break
 			}
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+			tc.proc.Reg.InputBatch.Free(tc.proc.Mp())
 		}
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
@@ -104,7 +104,7 @@ func TestJoin(t *testing.T) {
 			if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
 				break
 			}
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+			tc.proc.Reg.InputBatch.Free(tc.proc.Mp())
 		}
 		tc.arg.Free(tc.proc, false)
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
@@ -134,7 +134,7 @@ func BenchmarkJoin(b *testing.B) {
 				if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
 					break
 				}
-				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+				tc.proc.Reg.InputBatch.Free(tc.proc.Mp())
 			}
 		}
 	}

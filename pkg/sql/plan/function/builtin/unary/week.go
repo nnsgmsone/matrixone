@@ -34,7 +34,7 @@ func DateToWeek(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		vector.SetCol(resultVector, week.DateToWeek(inputValues, resultValues))
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -57,7 +57,7 @@ func DatetimeToWeek(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 		vector.SetCol(resultVector, week.DatetimeToWeek(inputValues, resultValues))
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}

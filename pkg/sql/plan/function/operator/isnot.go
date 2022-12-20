@@ -50,7 +50,7 @@ func IsNot(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 			return nil, err
 		}
 		for i := range lefts {
-			if nulls.Contains(lv.Nsp, uint64(i)) {
+			if nulls.Contains(lv.GetNulls(), uint64(i)) {
 				col[i] = false
 			} else {
 				col[i] = (lefts[i] != right)

@@ -16,6 +16,7 @@ package left
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -34,10 +35,10 @@ func Prepare(proc *process.Process, arg any) error {
 	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.evecs = make([]evalVector, len(ap.Conditions[0]))
 	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
-	ap.ctr.bat = batch.NewWithSize(len(ap.GetType()s))
+	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
 	ap.ctr.bat.Zs = proc.Mp().GetSels()
-	for i, typ := range ap.GetType()s {
-		ap.ctr.bat.Vecs[i] = vector.New(typ)
+	for i, typ := range ap.Typs {
+		ap.ctr.bat.Vecs[i] = vector.New(0, typ)
 	}
 	return nil
 }
@@ -97,7 +98,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 }
 
 func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
-	defer bat.Clean(proc.Mp())
+	defer bat.Free(proc.Mp())
 	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
 	count := bat.Length()
@@ -106,7 +107,8 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 			rbat.Vecs[i] = bat.Vecs[rp.Pos]
 			bat.Vecs[rp.Pos] = nil
 		} else {
-			rbat.Vecs[i] = vector.NewConstNull(ctr.bat.Vecs[rp.Pos].GetType(), count)
+			rbat.Vecs[i] = vector.New(0, ctr.bat.Vecs[rp.Pos].GetType())
+			rbat.Vecs[i].SetLength(count)
 		}
 	}
 	rbat.Zs = bat.Zs
@@ -117,15 +119,15 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
-	defer bat.Clean(proc.Mp())
+	defer bat.Free(proc.Mp())
 	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
 	rbat.Zs = proc.Mp().GetSels()
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
-			rbat.Vecs[i] = vector.New(bat.Vecs[rp.Pos].GetType())
+			rbat.Vecs[i] = vector.New(0, bat.Vecs[rp.Pos].GetType())
 		} else {
-			rbat.Vecs[i] = vector.New(ctr.bat.Vecs[rp.Pos].GetType())
+			rbat.Vecs[i] = vector.New(0, ctr.bat.Vecs[rp.Pos].GetType())
 		}
 	}
 
@@ -151,13 +153,13 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			if zvals[k] == 0 || vals[k] == 0 {
 				for j, rp := range ap.Result {
 					if rp.Rel == 0 {
-						if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), proc.Mp()); err != nil {
-							rbat.Clean(proc.Mp())
+						if err := rbat.Vecs[j].UnionOne(bat.Vecs[rp.Pos], int64(i+k), rbat.Vecs[j].Length() == 0, proc.Mp()); err != nil {
+							rbat.Free(proc.Mp())
 							return err
 						}
 					} else {
-						if err := vector.UnionNull(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], proc.Mp()); err != nil {
-							rbat.Clean(proc.Mp())
+						if err := rbat.Vecs[j].UnionNull(ctr.bat.Vecs[rp.Pos], proc.Mp()); err != nil {
+							rbat.Free(proc.Mp())
 							return err
 						}
 					}
@@ -173,7 +175,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					if err != nil {
 						return err
 					}
-					bs := vec.Col.([]bool)
+					bs := vector.MustTCols[bool](vec)
 					if !bs[0] {
 						vec.Free(proc.Mp())
 						continue
@@ -183,13 +185,13 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				matched = true
 				for j, rp := range ap.Result {
 					if rp.Rel == 0 {
-						if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), proc.Mp()); err != nil {
-							rbat.Clean(proc.Mp())
+						if err := rbat.Vecs[j].UnionOne(bat.Vecs[rp.Pos], int64(i+k), rbat.Vecs[j].Length() == 0, proc.Mp()); err != nil {
+							rbat.Free(proc.Mp())
 							return err
 						}
 					} else {
-						if err := vector.UnionOne(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], sel, proc.Mp()); err != nil {
-							rbat.Clean(proc.Mp())
+						if err := rbat.Vecs[j].UnionOne(ctr.bat.Vecs[rp.Pos], sel, rbat.Vecs[j].Length() == 0, proc.Mp()); err != nil {
+							rbat.Free(proc.Mp())
 							return err
 						}
 					}
@@ -199,13 +201,13 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			if !matched {
 				for j, rp := range ap.Result {
 					if rp.Rel == 0 {
-						if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), proc.Mp()); err != nil {
-							rbat.Clean(proc.Mp())
+						if err := rbat.Vecs[j].UnionOne(bat.Vecs[rp.Pos], int64(i+k), rbat.Vecs[j].Length() == 0, proc.Mp()); err != nil {
+							rbat.Free(proc.Mp())
 							return err
 						}
 					} else {
 						if err := vector.UnionNull(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], proc.Mp()); err != nil {
-							rbat.Clean(proc.Mp())
+							rbat.Free(proc.Mp())
 							return err
 						}
 					}

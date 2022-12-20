@@ -53,7 +53,7 @@ func generalBin[T binT](vectors []*vector.Vector, proc *process.Process, cb binF
 		}
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, 0, inputVector.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, 0, inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}

@@ -45,7 +45,7 @@ func math1(vs []*vector.Vector, proc *process.Process, fn mathFn) (*vector.Vecto
 			return resultVector, nil
 		}
 	} else {
-		vecLen := int64(vector.Length(origVec))
+		vecLen := int64(origVec.Length())
 		resultVector, err := proc.AllocVectorOfRows(types.T_float64.ToType(), vecLen, origVec.Nsp)
 		if err != nil {
 			return nil, err
@@ -94,7 +94,7 @@ func Log(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if vs[0].IsConstNull() {
 		return vector.NewConstNull(vs[0].GetType(), vs[1].Length()), nil
 	}
-	vals := vs[0].Col.([]float64)
+	vals := vector.MustTCols[float64](vs[0])
 	for i := range vals {
 		if vals[i] == float64(1) {
 			return nil, moerr.NewInvalidArgNoCtx("log base", 1)

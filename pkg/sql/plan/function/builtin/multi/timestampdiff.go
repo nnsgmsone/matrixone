@@ -32,9 +32,9 @@ func TimeStampDiff(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 	resultType := types.T_int64.ToType()
 
 	//the max Length of all vectors
-	maxLen := vector.Length(vectors[0])
+	maxLen := vectors[0].Length()
 	for i := range vectors {
-		val := vector.Length(vectors[i])
+		val := vectors[i].Length()
 		if val > maxLen {
 			maxLen = val
 		}
@@ -49,7 +49,7 @@ func TimeStampDiff(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		return nil, err
 	}
 	resultValues := vector.MustTCols[int64](resultVector)
-	err = datediff.TimeStampDiffWithCols(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, thirdVector.Nsp, resultVector.Nsp, resultValues, maxLen)
+	err = datediff.TimeStampDiffWithCols(firstValues, secondValues, thirdValues, firstVector.GetNulls(), secondVector.GetNulls(), thirdVector.GetNulls(), resultVector.Nsp, resultValues, maxLen)
 	if err != nil {
 		return nil, err
 	}

@@ -16,6 +16,7 @@ package binary
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -38,7 +39,7 @@ func ShowVisibleBin(vec []*vector.Vector, proc *process.Process) (*vector.Vector
 	tpSlice := vector.MustTCols[uint8](vec[1])
 	srcSlice := vector.MustBytesCols(vec[0])
 	tp := tpSlice[0]
-	resultVec := vector.New(types.T_varchar.ToType())
+	resultVec := vector.New(0, types.T_varchar.ToType())
 	defer func() {
 		if err != nil {
 			resultVec.Free(proc.Mp())

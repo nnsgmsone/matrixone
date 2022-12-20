@@ -115,7 +115,7 @@ func TestFindInSetLength(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			col := result.Col.([]uint64)
+			col := vector.MustTCols[uint64](result)
 			require.Equal(t, c.expected, col)
 			require.Equal(t, c.isScalarL && c.isScalarR, result.IsConst())
 		})

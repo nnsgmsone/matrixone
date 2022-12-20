@@ -114,7 +114,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	}
 
 	bat := makeInsertBatch(p)
-	defer bat.Clean(c.proc.Mp())
+	defer bat.Free(c.proc.Mp())
 
 	if p.OtherCols != nil {
 		p.ExplicitCols = append(p.ExplicitCols, p.OtherCols...)
@@ -134,8 +134,8 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	*/
 	for i := range bat.Vecs {
 		// check for case 1 and case 2
-		if (p.ExplicitCols[i].Primary && !p.ExplicitCols[i].GetType().AutoIncr) || (p.ExplicitCols[i].Default != nil && !p.ExplicitCols[i].Default.NullAbility && !p.ExplicitCols[i].GetType().AutoIncr) {
-			if nulls.Any(bat.Vecs[i].Nsp) {
+		if (p.ExplicitCols[i].Primary && !p.ExplicitCols[i].Typ.AutoIncr) || (p.ExplicitCols[i].Default != nil && !p.ExplicitCols[i].Default.NullAbility && !p.ExplicitCols[i].Typ.AutoIncr) {
+			if nulls.Any(bat.Vecs[i].GetNulls()) {
 				return 0, moerr.NewConstraintViolation(c.ctx, fmt.Sprintf("Column '%s' cannot be null", p.ExplicitCols[i].Name))
 			}
 		}
@@ -152,7 +152,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 			for i := range bat.Vecs {
 				for _, name := range names {
 					if p.OrderAttrs[i] == name {
-						if nulls.Any(bat.Vecs[i].Nsp) {
+						if nulls.Any(bat.Vecs[i].GetNulls()) {
 							return 0, moerr.NewConstraintViolation(c.ctx, fmt.Sprintf("Column '%s' cannot be null", p.OrderAttrs[i]))
 						}
 					}
@@ -173,7 +173,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 						return 0, err
 					}
 				}
-				indexBatch.Clean(c.proc.Mp())
+				indexBatch.Free(c.proc.Mp())
 			}
 		}
 	}
@@ -199,7 +199,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 			if vec.Size() == 0 {
 				vec = vec.ConstExpand(proc.Mp())
 			}
-			if err := vector.UnionOne(v, vec, 0, proc.Mp()); err != nil {
+			if err := v.UnionOne(vec, 0, v.Length() == 0, proc.Mp()); err != nil {
 				vec.Free(proc.Mp())
 				return err
 			}
@@ -224,11 +224,11 @@ func makeInsertBatch(p *plan.InsertValues) *batch.Batch {
 	bat.SetAttributes(attrs)
 	idx := 0
 	for _, col := range p.ExplicitCols {
-		bat.Vecs[idx] = vector.New(types.Type{Oid: types.T(col.GetType().GetId()), Scale: col.GetType().Scale, Width: col.GetType().Width})
+		bat.Vecs[idx] = vector.New(0, types.Type{Oid: types.T(col.Typ.Id), Scale: col.Typ.Scale, Width: col.Typ.Width})
 		idx++
 	}
 	for _, col := range p.OtherCols {
-		bat.Vecs[idx] = vector.New(types.Type{Oid: types.T(col.GetType().GetId()), Scale: col.GetType().Scale, Width: col.GetType().Width})
+		bat.Vecs[idx] = vector.New(0, types.Type{Oid: types.T(col.Typ.Id), Scale: col.Typ.Scale, Width: col.Typ.Width})
 		idx++
 	}
 

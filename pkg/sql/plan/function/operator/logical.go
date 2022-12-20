@@ -44,9 +44,9 @@ func Logic(vectors []*vector.Vector, proc *process.Process, cfn logicFn, op logi
 
 		if op == XOR {
 			if left.IsConstNull() {
-				return proc.AllocConstNullVector(boolType, vector.Length(right)), nil
+				return proc.AllocConstNullVector(boolType, right.Length()), nil
 			} else {
-				return proc.AllocConstNullVector(boolType, vector.Length(left)), nil
+				return proc.AllocConstNullVector(boolType, left.Length()), nil
 			}
 		}
 	}
@@ -59,12 +59,12 @@ func Logic(vectors []*vector.Vector, proc *process.Process, cfn logicFn, op logi
 		return vec, nil
 	}
 
-	length := vector.Length(left)
+	length := left.Length()
 	if left.IsConst() {
-		length = vector.Length(right)
+		length = right.Length()
 	}
 	resultVector := allocateBoolVector(length, proc)
-	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
+	nulls.Or(left.GetNulls(), right.GetNulls(), resultVector.GetNulls())
 
 	if err := cfn(left, right, resultVector); err != nil {
 		return nil, err
@@ -96,9 +96,9 @@ func LogicNot(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 		}
 		return vec, nil
 	}
-	length := vector.Length(v1)
+	length := v1.Length()
 	vec := allocateBoolVector(length, proc)
-	nulls.Or(v1.Nsp, nil, vec.Nsp)
+	nulls.Or(v1.GetNulls(), nil, vec.GetNulls())
 	if err := logical.Not(v1, vec); err != nil {
 		return nil, err
 	}

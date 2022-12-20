@@ -39,7 +39,7 @@ func Startswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		if left.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(rightValues)), right.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(rightValues)), right.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -50,7 +50,7 @@ func Startswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		if right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(leftValues)), left.Nsp)
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(leftValues)), left.GetNulls())
 		if err != nil {
 			return nil, err
 		}
@@ -63,7 +63,7 @@ func Startswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		return nil, err
 	}
 	resultValues := vector.MustTCols[uint8](resultVector)
-	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
+	nulls.Or(left.GetNulls(), right.GetNulls(), resultVector.Nsp)
 	startswith.StartsWith(leftValues, rightValues, resultValues)
 	return resultVector, nil
 }
