@@ -20,12 +20,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -141,62 +137,4 @@ func (proc *Process) SetInputBatch(bat *batch.Batch) {
 
 func (proc *Process) InputBatch() *batch.Batch {
 	return proc.Reg.InputBatch
-}
-
-func (proc *Process) GetAnalyze(idx int) Analyze {
-	if idx >= len(proc.AnalInfos) {
-		return &analyze{analInfo: nil}
-	}
-	return &analyze{analInfo: proc.AnalInfos[idx], wait: 0}
-}
-
-func (proc *Process) AllocVector(typ types.Type, size int64) (*vector.Vector, error) {
-	return proc.AllocVectorOfRows(typ, size/int64(typ.TypeSize()), nil)
-}
-
-func (proc *Process) AllocVectorOfRows(typ types.Type, nele int64, nsp *nulls.Nulls) (*vector.Vector, error) {
-	vec := vector.New(typ)
-	vector.PreAlloc(vec, int(nele), int(nele), proc.Mp())
-	if nsp != nil {
-		nulls.Set(vec.Nsp, nsp)
-	}
-	return vec, nil
-}
-
-func (proc *Process) AllocScalarVector(typ types.Type) *vector.Vector {
-	return vector.NewConst(typ, 1)
-}
-
-func (proc *Process) AllocScalarNullVector(typ types.Type) *vector.Vector {
-	vec := vector.NewConst(typ, 1)
-	nulls.Add(vec.Nsp, 0)
-	return vec
-}
-
-func (proc *Process) AllocConstNullVector(typ types.Type, cnt int) *vector.Vector {
-	vec := vector.NewConstNull(typ, cnt)
-	nulls.Add(vec.Nsp, 0)
-	return vec
-}
-
-func (proc *Process) AllocBoolScalarVector(v bool) *vector.Vector {
-	typ := types.T_bool.ToType()
-	vec := proc.AllocScalarVector(typ)
-	bvec := make([]bool, 1)
-	bvec[0] = v
-	vec.Col = bvec
-	return vec
-}
-
-func (proc *Process) AllocInt64ScalarVector(v int64) *vector.Vector {
-	typ := types.T_int64.ToType()
-	vec := proc.AllocScalarVector(typ)
-	ivec := make([]int64, 1)
-	ivec[0] = v
-	vec.Col = ivec
-	return vec
-}
-
-func (proc *Process) WithSpanContext(sc trace.SpanContext) {
-	proc.Ctx = trace.ContextWithSpanContext(proc.Ctx, sc)
 }

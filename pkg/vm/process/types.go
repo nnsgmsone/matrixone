@@ -186,6 +186,14 @@ type analyze struct {
 	analInfo *AnalyzeInfo
 }
 
+func (proc *Process) SetOutputBatch(bat *batch.Batch) {
+	proc.Reg.InputBatch = bat
+}
+
+func (proc *Process) GetInputBatch() *batch.Batch {
+	return proc.Reg.InputBatch
+}
+
 func (si *SessionInfo) GetUser() string {
 	return si.User
 }
