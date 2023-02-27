@@ -60,11 +60,8 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (end bool, err er
 	}
 
 	for {
-		select {
-		case <-proc.Ctx.Done():
-			proc.SetInputBatch(nil)
+		if p.isEnd(proc) {
 			return true, nil
-		default:
 		}
 		// read data from storage engine
 		if bat, err = r.Read(proc.Ctx, p.attrs, nil, proc.Mp()); err != nil {
@@ -110,6 +107,9 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (end bool, 
 	bat.Cnt = 1
 	pipelineInputBatches := []*batch.Batch{bat, nil}
 	for {
+		if p.isEnd(proc) {
+			return true, nil
+		}
 		for i := range pipelineInputBatches {
 			proc.SetInputBatch(pipelineInputBatches[i])
 			end, err = vm.Run(p.instructions, proc)
@@ -140,6 +140,9 @@ func (p *Pipeline) MergeRun(proc *process.Process) (end bool, err error) {
 		return false, err
 	}
 	for {
+		if p.isEnd(proc) {
+			return true, nil
+		}
 		end, err = vm.Run(p.instructions, proc)
 		if err != nil {
 			proc.Cancel()
@@ -151,5 +154,15 @@ func (p *Pipeline) MergeRun(proc *process.Process) (end bool, err error) {
 			p.cleanup(proc, false)
 			return end, nil
 		}
+	}
+}
+
+func (p *Pipeline) isEnd(proc *process.Process) bool {
+	select {
+	case <-proc.Ctx.Done():
+		proc.SetInputBatch(nil)
+		return true
+	default:
+		return false
 	}
 }

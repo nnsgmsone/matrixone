@@ -15,9 +15,6 @@
 package pipeline
 
 import (
-	"reflect"
-
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -99,36 +96,18 @@ func (p *Pipeline) cleanup(proc *process.Process, pipelineFailed bool) {
 		}
 		proc.SetInputBatch(nil)
 	}
+	for {
+		bat, ok := <-proc.Reg.MergeReceiver.Ch
+		if !ok {
+			break
+		}
+		if bat == nil {
+			break
+		}
+		bat.Clean(proc.Mp())
+	}
 	// clean operator hold memory.
 	for i := range p.instructions {
 		p.instructions[i].Arg.Free(proc, pipelineFailed)
 	}
-
-	// select all merge receivers
-	listeners, alive := newSelectListener(proc.Reg.MergeReceivers)
-	for alive != 0 {
-		chosen, value, ok := reflect.Select(listeners)
-		if !ok {
-			break
-		}
-		pointer := value.UnsafePointer()
-		bat := (*batch.Batch)(pointer)
-		if bat == nil {
-			alive--
-			listeners = append(listeners[:chosen], listeners[chosen+1:]...)
-			continue
-		}
-		bat.Clean(proc.Mp())
-	}
-}
-
-func newSelectListener(wrs []*process.WaitRegister) ([]reflect.SelectCase, int) {
-	listener := make([]reflect.SelectCase, len(wrs))
-	for i, mr := range wrs {
-		listener[i] = reflect.SelectCase{
-			Dir:  reflect.SelectRecv,
-			Chan: reflect.ValueOf(mr.Ch),
-		}
-	}
-	return listener, len(wrs)
 }

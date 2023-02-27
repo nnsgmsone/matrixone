@@ -230,6 +230,10 @@ func (bat *Batch) GetSubBatch(cols []string) *Batch {
 	return rbat
 }
 
+// Reset batch's memory
+func (bat *Batch) Reset() {
+}
+
 func (bat *Batch) Clean(m *mpool.MPool) {
 	if atomic.AddInt64(&bat.Cnt, -1) != 0 {
 		return

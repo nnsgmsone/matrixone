@@ -19,15 +19,28 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+var emptyBatch = &batch.Batch{}
+
 func String(arg any, buf *bytes.Buffer) {
-	n := arg.(*Argument)
-	buf.WriteString(fmt.Sprintf("limit(%v)", n.Limit))
+	ap := arg.(*Argument)
+	buf.WriteString(fmt.Sprintf("limit(%v)", ap.Limit))
 }
 
-func Prepare(_ *process.Process, _ any) error {
+func Prepare(proc *process.Process, arg any) error {
+	ap := arg.(*Argument)
+	ap.ctr = new(container)
+	ap.ctr.bat = batch.NewWithSize(len(ap.Types))
+	ap.ctr.vecs = make([]*vector.Vector, len(ap.Types))
+	for i := range ap.Types {
+		vec := vector.New(ap.Types[i])
+		ap.ctr.vecs[i] = vec
+		ap.ctr.bat.SetVector(int32(i), vec)
+	}
+	// init ufs
 	return nil
 }
 

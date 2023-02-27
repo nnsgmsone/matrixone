@@ -19,15 +19,28 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+var emptyBatch = &batch.Batch{}
+
 func String(arg any, buf *bytes.Buffer) {
-	n := arg.(*Argument)
-	buf.WriteString(fmt.Sprintf("offset(%v)", n.Offset))
+	ap := arg.(*Argument)
+	buf.WriteString(fmt.Sprintf("offset(%v)", ap.Offset))
 }
 
-func Prepare(_ *process.Process, _ any) error {
+func Prepare(proc *process.Process, arg any) error {
+	ap := arg.(*Argument)
+	ap.ctr = new(container)
+	ap.ctr.bat = batch.NewWithSize(len(ap.Types))
+	ap.ctr.vecs = make([]*vector.Vector, len(ap.Types))
+	for i := range ap.Types {
+		vec := vector.New(ap.Types[i])
+		ap.ctr.vecs[i] = vec
+		ap.ctr.bat.SetVector(int32(i), vec)
+	}
+	// init ufs
 	return nil
 }
 
@@ -45,28 +58,39 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	defer anal.Stop()
 	anal.Input(bat, isFirst)
 
+	length := bat.Length()
 	if ap.Seen > ap.Offset {
+		ap.ctr.bat.Reset()
+		for i, vec := range ap.ctr.vecs {
+			uf := ap.ctr.ufs[i]
+			srcVec := bat.GetVector(int32(i))
+			for j := 0; i < length; j++ {
+				if err := uf(vec, srcVec, int64(i)); err != nil {
+					return false, err
+				}
+			}
+		}
+		ap.ctr.bat.Zs = append(ap.ctr.bat.Zs, bat.Zs...)
 		return false, nil
 	}
-	length := bat.Length()
 	if ap.Seen+uint64(length) > ap.Offset {
-		sels := newSels(int64(ap.Offset-ap.Seen), int64(length)-int64(ap.Offset-ap.Seen), proc)
-		ap.Seen += uint64(length)
-		bat.Shrink(sels)
-		proc.Mp().PutSels(sels)
-		proc.SetInputBatch(bat)
+		ap.ctr.bat.Reset()
+		start, count := int64(ap.Offset-ap.Seen), int64(length)-int64(ap.Offset-ap.Seen)
+		for i, vec := range ap.ctr.vecs {
+			uf := ap.ctr.ufs[i]
+			srcVec := bat.GetVector(int32(i))
+			for j := int64(0); j < count; j++ {
+				if err := uf(vec, srcVec, j+start); err != nil {
+					return false, err
+				}
+			}
+		}
+		for i := int64(0); i < count; i++ {
+			ap.ctr.bat.Zs = append(ap.ctr.bat.Zs, i+start)
+		}
 		return false, nil
 	}
 	ap.Seen += uint64(length)
-	bat.Clean(proc.Mp())
-	proc.SetInputBatch(&batch.Batch{})
+	proc.SetInputBatch(emptyBatch)
 	return false, nil
-}
-
-func newSels(start, count int64, proc *process.Process) []int64 {
-	sels := proc.Mp().GetSels()
-	for i := int64(0); i < count; i++ {
-		sels = append(sels, start+i)
-	}
-	return sels[:count]
 }

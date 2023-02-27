@@ -14,12 +14,29 @@
 
 package offset
 
-import "github.com/matrixorigin/matrixone/pkg/vm/process"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+type container struct {
+	bat  *batch.Batch
+	vecs []*vector.Vector
+	ufs  []func(*vector.Vector, *vector.Vector, int64) error
+}
 
 type Argument struct {
 	Seen   uint64 // seen is the number of tuples seen so far
 	Offset uint64
+	Types  []types.Type // output vector types
+	ctr    *container
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	if ap.ctr.bat != nil {
+		ap.ctr.bat.Clean(proc.Mp())
+		ap.ctr.bat = nil
+	}
 }
