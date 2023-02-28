@@ -20,10 +20,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
-
-var emptyBatch = &batch.Batch{}
 
 func String(arg any, buf *bytes.Buffer) {
 	ap := arg.(*Argument)
@@ -33,14 +32,19 @@ func String(arg any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
+	ap.ctr.seen = 0
 	ap.ctr.bat = batch.NewWithSize(len(ap.Types))
 	ap.ctr.vecs = make([]*vector.Vector, len(ap.Types))
 	for i := range ap.Types {
 		vec := vector.New(ap.Types[i])
+		vector.PreAlloc(vec, 0, defines.DefaultVectorSize, proc.Mp())
 		ap.ctr.vecs[i] = vec
 		ap.ctr.bat.SetVector(int32(i), vec)
 	}
-	// init ufs
+	ap.ctr.ufs = make([]func(*vector.Vector, *vector.Vector, int64) error, len(ap.Types))
+	for i := range ap.Types {
+		ap.ctr.ufs[i] = vector.GetUnionOneFunction(ap.Types[i], proc.Mp())
+	}
 	return nil
 }
 
@@ -58,21 +62,32 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	anal.Start()
 	defer anal.Stop()
 	anal.Input(bat, isFirst)
-	if ap.Seen >= ap.Limit {
-		proc.Reg.InputBatch = nil
-		bat.Clean(proc.Mp())
+	if ap.ctr.seen >= ap.Limit {
+		proc.SetInputBatch(nil)
+		anal.Output(bat, isLast)
 		return true, nil
 	}
 	length := bat.Length()
-	newSeen := ap.Seen + uint64(length)
+	newSeen := ap.ctr.seen + uint64(length)
 	if newSeen >= ap.Limit { // limit - seen
-		batch.SetLength(bat, int(ap.Limit-ap.Seen))
-		ap.Seen = newSeen
-		anal.Output(bat, isLast)
-		proc.SetInputBatch(bat)
+		ap.ctr.bat.Reset()
+		for i, vec := range ap.ctr.vecs {
+			uf := ap.ctr.ufs[i]
+			count := int64(ap.Limit - ap.ctr.seen)
+			srcVec := bat.GetVector(int32(i))
+			for j := int64(0); j < count; j++ {
+				if err := uf(vec, srcVec, j); err != nil {
+					return false, err
+				}
+			}
+		}
+		ap.ctr.bat.Zs = append(ap.ctr.bat.Zs, bat.Zs[:length]...)
+		ap.ctr.seen = newSeen
+		anal.Output(ap.ctr.bat, isLast)
+		proc.SetInputBatch(ap.ctr.bat)
 		return true, nil
 	}
 	anal.Output(bat, isLast)
-	ap.Seen = newSeen
+	ap.ctr.seen = newSeen
 	return false, nil
 }

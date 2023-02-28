@@ -35,11 +35,8 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 			bat.Zs[i] = 1
 		}
 		if err := ap.Func(ap.Data, bat); err != nil {
-			bat.Clean(proc.Mp())
 			return true, err
 		}
-		bat.Clean(proc.Mp())
 	}
-
 	return false, nil
 }

@@ -69,8 +69,6 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (end bool, err er
 			return false, err
 		}
 		if bat != nil {
-			bat.Cnt = 1
-
 			analyzeIdx := p.instructions[0].Idx
 			a := proc.GetAnalyze(analyzeIdx)
 			a.S3IOByte(bat)

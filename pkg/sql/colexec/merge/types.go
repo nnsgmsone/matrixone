@@ -15,23 +15,28 @@
 package merge
 
 import (
-	"reflect"
-
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type container struct {
-	aliveMergeReceiver int
-	// receiverListener is a structure to listen all the merge receiver.
-	receiverListener []reflect.SelectCase
+	childrenCount int
+	bat           *batch.Batch
+	vecs          []*vector.Vector
+	ufs           []func(*vector.Vector, *vector.Vector, int64) error
 }
 
 type Argument struct {
-	ctr *container
+	ChildrenNumber int
+	Types          []types.Type // output vector types
+	ctr            *container
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	if arg.ctr != nil {
-		arg.ctr.receiverListener = nil
+func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	if ap.ctr.bat != nil {
+		ap.ctr.bat.Clean(proc.Mp())
+		ap.ctr.bat = nil
 	}
 }

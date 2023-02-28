@@ -77,9 +77,22 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	// reg and cancel
 	proc.Ctx = newctx
 	proc.Cancel = cancel
-	proc.Reg.MergeReceiver = &WaitRegister{
-		Ctx: newctx,
-		Ch:  make(chan *batch.Batch, regNumber),
+	if regNumber == -1 { // binary operator: like join
+		proc.Reg.MergeReceivers = make([]*WaitRegister, 2)
+		proc.Reg.MergeReceivers[0] = &WaitRegister{
+			Ctx: newctx,
+			Ch:  make(chan *batch.Batch, 1),
+		}
+		proc.Reg.MergeReceivers[1] = &WaitRegister{
+			Ctx: newctx,
+			Ch:  make(chan *batch.Batch, 1),
+		}
+	} else {
+		proc.Reg.MergeReceivers = make([]*WaitRegister, 1)
+		proc.Reg.MergeReceivers[0] = &WaitRegister{
+			Ctx: newctx,
+			Ch:  make(chan *batch.Batch, regNumber),
+		}
 	}
 	proc.DispatchNotifyCh = make(chan WrapCs)
 	proc.LoadLocalReader = p.LoadLocalReader

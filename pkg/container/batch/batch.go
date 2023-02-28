@@ -232,6 +232,10 @@ func (bat *Batch) GetSubBatch(cols []string) *Batch {
 
 // Reset batch's memory
 func (bat *Batch) Reset() {
+	for i := range bat.Vecs {
+		bat.Vecs[i].Reset()
+	}
+	bat.Zs = bat.Zs[:0]
 }
 
 func (bat *Batch) Clean(m *mpool.MPool) {

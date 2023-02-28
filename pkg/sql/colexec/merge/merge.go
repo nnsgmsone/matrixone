@@ -16,11 +16,11 @@ package merge
 
 import (
 	"bytes"
-	"reflect"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -31,15 +31,19 @@ func String(_ any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
-	ap.ctr.receiverListener = make([]reflect.SelectCase, len(proc.Reg.MergeReceivers))
-	for i, mr := range proc.Reg.MergeReceivers {
-		ap.ctr.receiverListener[i] = reflect.SelectCase{
-			Dir:  reflect.SelectRecv,
-			Chan: reflect.ValueOf(mr.Ch),
-		}
+	ap.ctr.childrenCount = ap.ChildrenNumber
+	ap.ctr.bat = batch.NewWithSize(len(ap.Types))
+	ap.ctr.vecs = make([]*vector.Vector, len(ap.Types))
+	for i := range ap.Types {
+		vec := vector.New(ap.Types[i])
+		vector.PreAlloc(vec, 0, defines.DefaultVectorSize, proc.Mp())
+		ap.ctr.vecs[i] = vec
+		ap.ctr.bat.SetVector(int32(i), vec)
 	}
-
-	ap.ctr.aliveMergeReceiver = len(proc.Reg.MergeReceivers)
+	ap.ctr.ufs = make([]func(*vector.Vector, *vector.Vector, int64) error, len(ap.Types))
+	for i := range ap.Types {
+		ap.ctr.ufs[i] = vector.GetUnionOneFunction(ap.Types[i], proc.Mp())
+	}
 	return nil
 }
 
@@ -51,31 +55,39 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	ctr := ap.ctr
 
 	for {
-		if ctr.aliveMergeReceiver == 0 {
+		if ctr.childrenCount == 0 {
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
 
 		start := time.Now()
-		chosen, value, ok := reflect.Select(ctr.receiverListener)
-		if !ok {
-			return false, moerr.NewInternalError(proc.Ctx, "pipeline closed unexpectedly")
+		bat := <-proc.Reg.MergeReceivers[0].Ch
+		if bat == nil {
+			ctr.childrenCount--
+			continue
 		}
 		anal.WaitStop(start)
-
-		pointer := value.UnsafePointer()
-		bat := (*batch.Batch)(pointer)
-		if bat == nil {
-			ctr.receiverListener = append(ctr.receiverListener[:chosen], ctr.receiverListener[chosen+1:]...)
-			ctr.aliveMergeReceiver--
+		length := bat.Length()
+		if length == 0 {
+			bat.SubCnt(1)
 			continue
 		}
-		if bat.Length() == 0 {
-			continue
+		ap.ctr.bat.Reset()
+		for i, vec := range ap.ctr.vecs {
+			uf := ap.ctr.ufs[i]
+			srcVec := bat.GetVector(int32(i))
+			for j := int64(0); j < int64(length); j++ {
+				if err := uf(vec, srcVec, j); err != nil {
+					bat.SubCnt(1)
+					return false, err
+				}
+			}
 		}
+		ap.ctr.bat.Zs = append(ap.ctr.bat.Zs, bat.Zs...)
 		anal.Input(bat, isFirst)
-		anal.Output(bat, isLast)
-		proc.SetInputBatch(bat)
+		bat.SubCnt(1)
+		anal.Output(ap.ctr.bat, isLast)
+		proc.SetInputBatch(ap.ctr.bat)
 		return false, nil
 	}
 }

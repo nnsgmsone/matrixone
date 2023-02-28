@@ -59,7 +59,7 @@ type Register struct {
 	InputBatch *batch.Batch
 	// MergeReceiver, receives result of multi previous operators from other pipelines
 	// e.g. merge operator.
-	MergeReceiver *WaitRegister
+	MergeReceivers []*WaitRegister
 }
 
 // Limitation specifies the maximum resources that can be used in one query.

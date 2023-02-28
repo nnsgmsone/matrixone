@@ -38,3 +38,7 @@ const (
 	// and execution flow will go to the func in handleTemp
 	TEMPORARY_TABLE_DN_ADDR = "%!%mo_temp_db_dn_address"
 )
+
+const (
+	DefaultVectorSize = 8192
+)

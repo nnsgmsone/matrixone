@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -33,14 +34,19 @@ func String(arg any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
+	ap.ctr.seen = 0
 	ap.ctr.bat = batch.NewWithSize(len(ap.Types))
 	ap.ctr.vecs = make([]*vector.Vector, len(ap.Types))
 	for i := range ap.Types {
 		vec := vector.New(ap.Types[i])
+		vector.PreAlloc(vec, 0, defines.DefaultVectorSize, proc.Mp())
 		ap.ctr.vecs[i] = vec
 		ap.ctr.bat.SetVector(int32(i), vec)
 	}
-	// init ufs
+	ap.ctr.ufs = make([]func(*vector.Vector, *vector.Vector, int64) error, len(ap.Types))
+	for i := range ap.Types {
+		ap.ctr.ufs[i] = vector.GetUnionOneFunction(ap.Types[i], proc.Mp())
+	}
 	return nil
 }
 
@@ -59,23 +65,13 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	anal.Input(bat, isFirst)
 
 	length := bat.Length()
-	if ap.Seen > ap.Offset {
-		ap.ctr.bat.Reset()
-		for i, vec := range ap.ctr.vecs {
-			uf := ap.ctr.ufs[i]
-			srcVec := bat.GetVector(int32(i))
-			for j := 0; i < length; j++ {
-				if err := uf(vec, srcVec, int64(i)); err != nil {
-					return false, err
-				}
-			}
-		}
-		ap.ctr.bat.Zs = append(ap.ctr.bat.Zs, bat.Zs...)
+	if ap.ctr.seen > ap.Offset {
+		proc.SetInputBatch(bat)
 		return false, nil
 	}
-	if ap.Seen+uint64(length) > ap.Offset {
+	if ap.ctr.seen+uint64(length) > ap.Offset {
 		ap.ctr.bat.Reset()
-		start, count := int64(ap.Offset-ap.Seen), int64(length)-int64(ap.Offset-ap.Seen)
+		start, count := int64(ap.Offset-ap.ctr.seen), int64(length)-int64(ap.Offset-ap.ctr.seen)
 		for i, vec := range ap.ctr.vecs {
 			uf := ap.ctr.ufs[i]
 			srcVec := bat.GetVector(int32(i))
@@ -88,9 +84,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		for i := int64(0); i < count; i++ {
 			ap.ctr.bat.Zs = append(ap.ctr.bat.Zs, i+start)
 		}
+		proc.SetInputBatch(ap.ctr.bat)
 		return false, nil
 	}
-	ap.Seen += uint64(length)
+	ap.ctr.seen += uint64(length)
 	proc.SetInputBatch(emptyBatch)
 	return false, nil
 }

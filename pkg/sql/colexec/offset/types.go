@@ -22,13 +22,13 @@ import (
 )
 
 type container struct {
+	seen uint64 // seen is the number of tuples seen so far
 	bat  *batch.Batch
 	vecs []*vector.Vector
 	ufs  []func(*vector.Vector, *vector.Vector, int64) error
 }
 
 type Argument struct {
-	Seen   uint64 // seen is the number of tuples seen so far
 	Offset uint64
 	Types  []types.Type // output vector types
 	ctr    *container
