@@ -15,26 +15,28 @@
 package mergelimit
 
 import (
-	"reflect"
-
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type container struct {
-	seen uint64
+	seen          uint64
+	childrenCount int
 
-	// aliveMergeReceiver is a count for no-close receiver
-	aliveMergeReceiver int
-	// receiverListener is a structure to listen all the merge receiver.
-	receiverListener []reflect.SelectCase
+	pm *colexec.PrivMem
 }
 
 type Argument struct {
+	ChildrenNumber int
 	// Limit records the limit number of this operator
 	Limit uint64
+	// output vector types
+	Types []types.Type
 	// ctr stores the attributes needn't do Serialization work
 	ctr *container
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	arg.ctr.pm.Clean(proc)
 }

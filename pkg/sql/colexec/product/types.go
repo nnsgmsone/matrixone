@@ -31,11 +31,12 @@ const (
 type container struct {
 	state int
 	bat   *batch.Batch
+	pm    *colexec.PrivMem
 }
 
 type Argument struct {
 	ctr    *container
-	Typs   []types.Type
+	Typs   []types.Type // output vector types
 	Result []colexec.ResultPos
 }
 

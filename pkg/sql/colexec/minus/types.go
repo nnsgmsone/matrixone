@@ -16,8 +16,8 @@ package minus
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -32,6 +32,9 @@ type Argument struct {
 
 	// hash table bucket related information.
 	IBucket, NBucket uint64
+
+	// output vector types
+	Types []types.Type
 }
 
 type container struct {
@@ -41,21 +44,12 @@ type container struct {
 	// hash table related
 	hashTable *hashmap.StrHashMap
 
-	// result batch of minus column execute operator
-	bat *batch.Batch
+	pm *colexec.PrivMem
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	mp := proc.Mp()
-	arg.ctr.cleanBatch(mp)
+	arg.ctr.pm.Clean(proc)
 	arg.ctr.cleanHashMap()
-}
-
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
-	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
-		ctr.bat = nil
-	}
 }
 
 func (ctr *container) cleanHashMap() {

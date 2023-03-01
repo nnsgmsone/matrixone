@@ -17,11 +17,8 @@ package mergelimit
 import (
 	"bytes"
 	"fmt"
-	"reflect"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -34,15 +31,8 @@ func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.seen = 0
-
-	ap.ctr.receiverListener = make([]reflect.SelectCase, len(proc.Reg.MergeReceivers))
-	for i, mr := range proc.Reg.MergeReceivers {
-		ap.ctr.receiverListener[i] = reflect.SelectCase{
-			Dir:  reflect.SelectRecv,
-			Chan: reflect.ValueOf(mr.Ch),
-		}
-	}
-	ap.ctr.aliveMergeReceiver = len(proc.Reg.MergeReceivers)
+	ap.ctr.childrenCount = ap.ChildrenNumber
+	ap.ctr.pm.InitByTypes(ap.Types, proc)
 	return nil
 }
 
@@ -54,23 +44,12 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	ctr := ap.ctr
 
 	for {
-		if ctr.aliveMergeReceiver == 0 {
-			proc.SetInputBatch(nil)
-			ap.Free(proc, false)
-			return true, nil
-		}
-
 		start := time.Now()
-		chosen, value, ok := reflect.Select(ctr.receiverListener)
-		if !ok {
-			return false, moerr.NewInternalError(proc.Ctx, "pipeline closed unexpectedly")
-		}
+		bat := <-proc.Reg.MergeReceivers[0].Ch
 		anal.WaitStop(start)
-		pointer := value.UnsafePointer()
-		bat := (*batch.Batch)(pointer)
+
 		if bat == nil {
-			ctr.receiverListener = append(ctr.receiverListener[:chosen], ctr.receiverListener[chosen+1:]...)
-			ctr.aliveMergeReceiver--
+			ctr.childrenCount--
 			continue
 		}
 
@@ -80,22 +59,31 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 
 		anal.Input(bat, isFirst)
 		if ap.ctr.seen >= ap.Limit {
-			bat.Clean(proc.Mp())
-			continue
+			proc.SetInputBatch(nil)
+			return true, nil
 		}
+
 		newSeen := ap.ctr.seen + uint64(bat.Length())
-		if newSeen < ap.Limit {
+		if newSeen > ap.Limit {
+			ap.ctr.pm.Bat.Reset()
+			count := int64(ap.Limit - ap.ctr.seen)
+			for i, vec := range ap.ctr.pm.Vecs {
+				uf := ap.ctr.pm.Ufs[i]
+				srcVec := bat.GetVector(int32(i))
+				for j := int64(0); j < count; j++ {
+					if err := uf(vec, srcVec, j); err != nil {
+						return false, err
+					}
+				}
+				ap.ctr.pm.Bat.Zs = append(ap.ctr.pm.Bat.Zs, bat.Zs[:count]...)
+			}
 			ap.ctr.seen = newSeen
-			anal.Output(bat, isLast)
-			proc.SetInputBatch(bat)
-			return false, nil
-		} else {
-			num := int(newSeen - ap.Limit)
-			batch.SetLength(bat, bat.Length()-num)
-			ap.ctr.seen = newSeen
-			anal.Output(bat, isLast)
-			proc.SetInputBatch(bat)
-			return false, nil
+			anal.Output(ap.ctr.pm.Bat, isLast)
+			proc.SetInputBatch(ap.ctr.pm.Bat)
+			return true, nil
 		}
+		ap.ctr.seen = newSeen
+		anal.Output(bat, isLast)
+		return false, nil
 	}
 }

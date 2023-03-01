@@ -18,7 +18,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -35,12 +37,17 @@ type container struct {
 	cmps  []compare.Compare
 
 	bat *batch.Batch
+
+	pm *colexec.PrivMem
 }
 
 type Argument struct {
 	Limit int64
 	ctr   *container
 	Fs    []*plan.OrderBySpec
+
+	// output vector types
+	Types []types.Type
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

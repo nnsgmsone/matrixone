@@ -18,7 +18,6 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -29,6 +28,7 @@ func String(_ any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
+	ap.ctr.pm.InitByTypes(ap.Typs, proc)
 	return nil
 }
 
@@ -56,10 +56,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			if len(bat.Zs) == 0 {
 				continue
 			}
-			if ctr.bat == nil {
-				bat.Clean(proc.Mp())
-				continue
-			}
+
 			if err := ctr.probe(bat, ap, proc, anal, isFirst, isLast); err != nil {
 				bat.Clean(proc.Mp())
 				ap.Free(proc, true)
@@ -86,36 +83,26 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
 	defer bat.Clean(proc.Mp())
 	anal.Input(bat, isFirst)
-	rbat := batch.NewWithSize(len(ap.Result))
-	rbat.Zs = proc.Mp().GetSels()
-	for i, rp := range ap.Result {
-		if rp.Rel == 0 {
-			rbat.Vecs[i] = vector.New(bat.Vecs[rp.Pos].Typ)
-		} else {
-			rbat.Vecs[i] = vector.New(ctr.bat.Vecs[rp.Pos].Typ)
-		}
-	}
+	ctr.pm.Bat.Reset()
 	count := bat.Length()
 	for i := 0; i < count; i++ {
 		for j := 0; j < len(ctr.bat.Zs); j++ {
 			for k, rp := range ap.Result {
+				uf := ctr.pm.Ufs[k]
 				if rp.Rel == 0 {
-					if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
-						rbat.Clean(proc.Mp())
+					if err := uf(ctr.pm.Bat.Vecs[k], bat.Vecs[rp.Pos], int64(i)); err != nil {
 						return err
 					}
 				} else {
-					if err := vector.UnionOne(rbat.Vecs[k], ctr.bat.Vecs[rp.Pos], int64(j), proc.Mp()); err != nil {
-						rbat.Clean(proc.Mp())
+					if err := uf(ctr.pm.Bat.Vecs[k], ctr.bat.Vecs[rp.Pos], int64(j)); err != nil {
 						return err
 					}
 				}
 			}
-			rbat.Zs = append(rbat.Zs, ctr.bat.Zs[j])
+			ctr.pm.Bat.Zs = append(ctr.pm.Bat.Zs, ctr.bat.Zs[j])
 		}
 	}
-	rbat.ExpandNulls()
-	anal.Output(rbat, isLast)
-	proc.SetInputBatch(rbat)
+	anal.Output(ctr.pm.Bat, isLast)
+	proc.SetInputBatch(ctr.pm.Bat)
 	return nil
 }
