@@ -15,13 +15,21 @@
 package projection
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+type container struct {
+	pm *colexec.PrivMem
+}
 type Argument struct {
-	Es []*plan.Expr
+	ctr   *container
+	Types []types.Type // output vector types
+	Es    []*plan.Expr
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	arg.ctr.pm.Clean(proc)
 }
