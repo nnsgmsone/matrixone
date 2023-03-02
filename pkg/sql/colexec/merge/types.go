@@ -35,6 +35,9 @@ type Argument struct {
 }
 
 func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	for len(proc.Reg.MergeReceivers[0].Ch) > 0 {
+		<-proc.Reg.MergeReceivers[0].Ch
+	}
 	if ap.ctr.bat != nil {
 		ap.ctr.bat.Clean(proc.Mp())
 		ap.ctr.bat = nil

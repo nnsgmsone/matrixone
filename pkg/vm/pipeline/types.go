@@ -90,21 +90,7 @@ type Pipeline struct {
 func (p *Pipeline) cleanup(proc *process.Process, pipelineFailed bool) {
 	// clean all the coming batches.
 	if pipelineFailed {
-		bat := proc.InputBatch()
-		if bat != nil {
-			bat.Clean(proc.Mp())
-		}
 		proc.SetInputBatch(nil)
-	}
-	for {
-		bat, ok := <-proc.Reg.MergeReceiver.Ch
-		if !ok {
-			break
-		}
-		if bat == nil {
-			break
-		}
-		bat.Clean(proc.Mp())
 	}
 	// clean operator hold memory.
 	for i := range p.instructions {

@@ -28,7 +28,8 @@ import (
 )
 
 const (
-	Rows = 10 // default rows
+	Rows           = 10 // default rows
+	BenchmarkCount = 100
 )
 
 // add unit tests for cases
@@ -56,59 +57,89 @@ func TestString(t *testing.T) {
 	}
 }
 
-func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
-		require.NoError(t, err)
-	}
-}
-
 func TestConnector(t *testing.T) {
 	for _, tc := range tcs {
+		go func() { // simulated consumers
+			for {
+				bat := <-tc.proc.Reg.MergeReceivers[0].Ch
+				if bat == nil {
+					break
+				}
+				bat.SubCnt(1)
+			}
+		}()
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
-		bat := newBatch(t, tc.types, tc.proc, Rows)
-		tc.proc.Reg.InputBatch = bat
 		{
-			for _, vec := range bat.Vecs {
-				if vec.IsOriginal() {
-					vec.FreeOriginal(tc.proc.Mp())
-				}
-			}
-		}
-		_, _ = Call(0, tc.proc, tc.arg, false, false)
-		tc.proc.Reg.InputBatch = &batch.Batch{}
-		_, _ = Call(0, tc.proc, tc.arg, false, false)
-		tc.proc.Reg.InputBatch = nil
-		_, _ = Call(0, tc.proc, tc.arg, false, false)
-		for len(tc.arg.Reg.Ch) > 0 {
-			bat := <-tc.arg.Reg.Ch
-			if bat == nil {
-				break
-			}
-			if len(bat.Zs) == 0 {
-				continue
-			}
+			bat := newBatch(t, tc.types, tc.proc, Rows)
+			tc.proc.SetInputBatch(bat)
+			_, err = Call(0, tc.proc, tc.arg, false, false)
+			require.NoError(t, err)
 			bat.Clean(tc.proc.Mp())
+		}
+		{
+			bat := newBatch(t, tc.types, tc.proc, Rows)
+			tc.proc.SetInputBatch(bat)
+			_, err = Call(0, tc.proc, tc.arg, false, false)
+			require.NoError(t, err)
+			bat.Clean(tc.proc.Mp())
+		}
+		{
+			tc.proc.SetInputBatch(&batch.Batch{})
+			_, _ = Call(0, tc.proc, tc.arg, false, false)
+		}
+		{
+			tc.proc.SetInputBatch(nil)
+			_, _ = Call(0, tc.proc, tc.arg, false, false)
 		}
 		tc.arg.Free(tc.proc, false)
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
+func BenchmarkConnector(b *testing.B) {
+	t := new(testing.T)
+	for i := 0; i < 1000; i++ {
+		tc := newTestCase()
+		go func() { // simulated consumers
+			for {
+				bat := <-tc.proc.Reg.MergeReceivers[0].Ch
+				if bat == nil {
+					break
+				}
+				bat.SubCnt(1)
+			}
+		}()
+		err := Prepare(tc.proc, tc.arg)
+		require.NoError(t, err)
+		b.ResetTimer()
+		for i := 0; i < BenchmarkCount; i++ {
+			bat := newBatch(t, tc.types, tc.proc, Rows)
+			tc.proc.SetInputBatch(bat)
+			_, err = Call(0, tc.proc, tc.arg, false, false)
+			require.NoError(t, err)
+			bat.Clean(tc.proc.Mp())
+		}
+		tc.proc.SetInputBatch(nil)
+		_, _ = Call(0, tc.proc, tc.arg, false, false)
+		tc.arg.Free(tc.proc, false)
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+	}
+}
+
 func newTestCase() connectorTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
-	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
+	proc := process.NewFromProc(testutil.NewProcessWithMPool(mpool.MustNewZero()),
+		ctx, 1)
 	return connectorTestCase{
 		proc: proc,
 		types: []types.Type{
 			{Oid: types.T_int8},
 		},
 		arg: &Argument{
-			Reg: &process.WaitRegister{
-				Ctx: ctx,
-				Ch:  make(chan *batch.Batch, 3),
+			Reg: proc.Reg.MergeReceivers[0],
+			Types: []types.Type{
+				{Oid: types.T_int8},
 			},
 		},
 		cancel: cancel,

@@ -15,28 +15,38 @@
 package connector
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// Argument pipe connector
-type Argument struct {
-	Reg *process.WaitRegister
+type container struct {
+	bat  *batch.Batch
+	vecs []*vector.Vector
+	ufs  []func(*vector.Vector, *vector.Vector, int64) error
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+// Argument pipe connector
+type Argument struct {
+	Types []types.Type // output vector types
+	Reg   *process.WaitRegister
+	ctr   *container
+}
+
+func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	if pipelineFailed {
-		for len(arg.Reg.Ch) > 0 {
-			bat := <-arg.Reg.Ch
-			if bat == nil {
-				break
-			}
-			bat.Clean(proc.Mp())
+		for len(ap.Reg.Ch) > 0 {
+			<-ap.Reg.Ch
 		}
 	}
-
 	select {
-	case arg.Reg.Ch <- nil:
-	case <-arg.Reg.Ctx.Done():
+	case ap.Reg.Ch <- nil:
+	case <-ap.Reg.Ctx.Done():
 	}
-	close(arg.Reg.Ch)
+	if ap.ctr.bat != nil {
+		ap.ctr.bat.Clean(proc.Mp())
+		ap.ctr.bat = nil
+	}
+
 }

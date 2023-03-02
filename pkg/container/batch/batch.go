@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"runtime"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
@@ -232,6 +233,9 @@ func (bat *Batch) GetSubBatch(cols []string) *Batch {
 
 // Reset batch's memory
 func (bat *Batch) Reset() {
+	for atomic.LoadInt64(&bat.Cnt) != 1 {
+		runtime.Gosched()
+	}
 	for i := range bat.Vecs {
 		bat.Vecs[i].Reset()
 	}
@@ -239,9 +243,6 @@ func (bat *Batch) Reset() {
 }
 
 func (bat *Batch) Clean(m *mpool.MPool) {
-	if atomic.AddInt64(&bat.Cnt, -1) != 0 {
-		return
-	}
 	for _, vec := range bat.Vecs {
 		if vec != nil {
 			vec.Free(m)
@@ -257,6 +258,7 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 		bat.Zs = nil
 	}
 	bat.Vecs = nil
+	bat.Aggs = nil
 }
 
 func (bat *Batch) CleanOnlyData() {
