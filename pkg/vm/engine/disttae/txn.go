@@ -539,15 +539,15 @@ func (txn *Transaction) readTable(ctx context.Context, name string, databaseId u
 	bats := make([]*batch.Batch, 0, 1)
 	accessed := make(map[string]uint8)
 	for _, dn := range dnList {
-		accessed[dn.GetUUID()] = 0
+		accessed[dn.ServiceID] = 0
 	}
 	if len(name) == 0 {
-		parts = txn.db.getPartitions(databaseId, tableId)
+		parts = txn.engine.getPartitions(databaseId, tableId)
 	} else {
-		parts = txn.db.getMetaPartitions(name)
+		parts = txn.engine.getMetaPartitions(name)
 	}
 	for i, dn := range txn.dnStores {
-		if _, ok := accessed[dn.GetUUID()]; !ok {
+		if _, ok := accessed[dn.ServiceID]; !ok {
 			continue
 		}
 		rds, err := parts[i].NewReader(ctx, 1, nil, defs, nil, nil, nil,

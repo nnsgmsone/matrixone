@@ -91,7 +91,7 @@ func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, ob
 	return bloomFilter, zoneMap, nil
 }
 
-func GetTableMeta(ctx context.Context, tbl *table, expr *plan.Expr) error {
+func GetTableMeta(ctx context.Context, tbl *txnTable, expr *plan.Expr) error {
 	priKeys := make([]*engine.Attribute, 0, 1)
 	if tbl.primaryIdx >= 0 {
 		for _, def := range tbl.defs {
@@ -116,10 +116,17 @@ func GetTableMeta(ctx context.Context, tbl *table, expr *plan.Expr) error {
 	}
 	_, created := tbl.db.txn.createMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId))
 	if !created && !tbl.updated {
-		if err := tbl.db.txn.db.Update(ctx, tbl.db.txn.dnStores[:1], tbl, tbl.db.txn.op, tbl.primaryIdx,
-			tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
-			return err
+		if tbl.db.txn.engine.UsePushModelOrNot() {
+			if err := tbl.db.txn.engine.UpdateOfPush(ctx, tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
+				return err
+			}
+		} else {
+			if err := tbl.db.txn.engine.UpdateOfPull(ctx, tbl.db.txn.dnStores[:1], tbl, tbl.db.txn.op, tbl.primaryIdx,
+				tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
+				return err
+			}
 		}
+
 		columnLength := len(tbl.tableDef.Cols) - 1 //we use this data to fetch zonemap, but row_id has no zonemap
 		meta, err := tbl.db.txn.getTableMeta(ctx, tbl.db.databaseId, genMetaTableName(tbl.tableId), true, columnLength, false)
 		if err != nil {

@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -25,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -59,7 +60,7 @@ const (
 	MO_PRIMARY_OFF                = 2
 )
 
-type DNStore = logservice.DNStore
+type DNStore = metadata.DNService
 
 type IDGenerator interface {
 	AllocateID(ctx context.Context) (uint64, error)
@@ -81,24 +82,24 @@ type MVCC interface {
 
 type Engine struct {
 	sync.RWMutex
-	mp                *mpool.MPool
-	fs                fileservice.FileService
-	db                *DB
-	cli               client.TxnClient
-	idGen             IDGenerator
-	getClusterDetails engine.GetClusterDetailsFunc
-	txns              map[string]*Transaction
-	catalog           *cache.CatalogCache
+	mp      *mpool.MPool
+	fs      fileservice.FileService
+	cli     client.TxnClient
+	idGen   IDGenerator
+	txns    map[string]*Transaction
+	catalog *cache.CatalogCache
 	// minimum heap of currently active transactions
 	txnHeap *transactionHeap
-}
 
-// DB is implementataion of cache
-type DB struct {
-	sync.RWMutex
 	dnMap      map[string]int
 	metaTables map[string]Partitions
 	partitions map[[2]uint64]Partitions
+
+	// XXX related to cn push model
+	usePushModel       bool
+	subscriber         *logTailSubscriber
+	receiveLogTailTime syncLogTailTimestamp
+	subscribed         subscribedTable
 }
 
 type Partitions []*Partition
@@ -108,6 +109,7 @@ type Partition struct {
 	lock chan struct{}
 	// multi-version data of logtail, implemented with reusee's memengine
 	data             *memtable.Table[RowID, DataValue, *DataRow]
+	state            atomic.Pointer[PartitionState]
 	columnsIndexDefs []ColumnsIndexDef
 	// last updated timestamp
 	ts timestamp.Timestamp
@@ -118,7 +120,7 @@ type Partition struct {
 // Transaction represents a transaction
 type Transaction struct {
 	sync.Mutex
-	db *DB
+	engine *Engine
 	// readOnly default value is true, once a write happen, then set to false
 	readOnly bool
 	// db       *DB
@@ -148,8 +150,6 @@ type Transaction struct {
 	// interim incremental rowid
 	rowId [2]uint64
 
-	catalog *cache.CatalogCache
-
 	// use to cache table
 	tableMap *sync.Map
 	// use to cache database
@@ -174,12 +174,11 @@ type Entry struct {
 
 type transactionHeap []*Transaction
 
-type database struct {
+// txnDatabase represents an opened database in a transaction
+type txnDatabase struct {
 	databaseId   uint64
 	databaseName string
-	db           *DB
 	txn          *Transaction
-	fs           fileservice.FileService
 }
 
 type tableKey struct {
@@ -203,11 +202,12 @@ type tableMeta struct {
 	defs          []engine.TableDef
 }
 
-type table struct {
+// txnTable represents an opened table in a transaction
+type txnTable struct {
 	tableId    uint64
 	tableName  string
 	dnList     []int
-	db         *database
+	db         *txnDatabase
 	meta       *tableMeta
 	parts      Partitions
 	insertExpr *plan.Expr
