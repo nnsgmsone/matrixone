@@ -17,7 +17,6 @@ package dispatch
 import (
 	"context"
 	"hash/crc32"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -41,7 +40,7 @@ const (
 // common sender: send to any LocalReceiver
 func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) error {
 	refCountAdd := int64(len(ap.LocalRegs) - 1)
-	atomic.AddInt64(&bat.Cnt, refCountAdd)
+	bat.AddCnt(int(refCountAdd) + 1)
 	if jm, ok := bat.Ht.(*hashmap.JoinMap); ok {
 		jm.IncRef(refCountAdd)
 		jm.SetDupCount(int64(len(ap.LocalRegs)))
@@ -54,7 +53,6 @@ func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) e
 		case reg.Ch <- bat:
 		}
 	}
-
 	return nil
 }
 
@@ -65,19 +63,12 @@ func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) e
 	reg := ap.LocalRegs[sendto]
 	select {
 	case <-reg.Ctx.Done():
-		for len(reg.Ch) > 0 { // free memory
-			bat := <-reg.Ch
-			if bat == nil {
-				break
-			}
-			bat.Clean(proc.Mp())
-		}
 		ap.LocalRegs = append(ap.LocalRegs[:sendto], ap.LocalRegs[sendto+1:]...)
 		return nil
 	case reg.Ch <- bat:
+		bat.AddCnt(1)
 		ap.sendCnt++
 	}
-
 	return nil
 }
 
@@ -111,7 +102,7 @@ func sendToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) error 
 	}
 
 	refCountAdd := int64(len(ap.LocalRegs) - 1)
-	atomic.AddInt64(&bat.Cnt, refCountAdd)
+	bat.AddCnt(int(refCountAdd) + 1)
 	if jm, ok := bat.Ht.(*hashmap.JoinMap); ok {
 		jm.IncRef(refCountAdd)
 		jm.SetDupCount(int64(len(ap.LocalRegs)))

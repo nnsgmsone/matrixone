@@ -23,6 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -40,12 +42,18 @@ type container struct {
 	remoteReceivers []*WrapperClientSession
 	// sendFunc is the rule you want to send batch
 	sendFunc func(bat *batch.Batch, ap *Argument, proc *process.Process) error
+
+	bat  *batch.Batch
+	vecs []*vector.Vector
+	ufs  []func(*vector.Vector, *vector.Vector, int64) error
 }
 
 type Argument struct {
 	ctr      *container
 	prepared bool
 	sendCnt  int
+
+	Types []types.Type // output vector types
 
 	// FuncId means the sendFunc
 	FuncId int
@@ -55,9 +63,9 @@ type Argument struct {
 	RemoteRegs []colexec.ReceiveInfo
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	if arg.ctr.remoteReceivers != nil {
-		for _, r := range arg.ctr.remoteReceivers {
+func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	if ap.ctr.remoteReceivers != nil {
+		for _, r := range ap.ctr.remoteReceivers {
 			timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
 			_ = cancel
 			message := cnclient.AcquireMessage()
@@ -78,23 +86,21 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	}
 
 	if pipelineFailed {
-		for i := range arg.LocalRegs {
-			for len(arg.LocalRegs[i].Ch) > 0 {
-				bat := <-arg.LocalRegs[i].Ch
-				if bat == nil {
-					break
-				}
-				bat.Clean(proc.Mp())
+		for i := range ap.LocalRegs {
+			for len(ap.LocalRegs[i].Ch) > 0 {
+				<-ap.LocalRegs[i].Ch
 			}
 		}
 	}
 
-	for i := range arg.LocalRegs {
+	for i := range ap.LocalRegs {
 		select {
-		case <-arg.LocalRegs[i].Ctx.Done():
-		case arg.LocalRegs[i].Ch <- nil:
+		case <-ap.LocalRegs[i].Ctx.Done():
+		case ap.LocalRegs[i].Ch <- nil:
 		}
-		close(arg.LocalRegs[i].Ch)
 	}
-
+	if ap.ctr.bat != nil {
+		ap.ctr.bat.Clean(proc.Mp())
+		ap.ctr.bat = nil
+	}
 }

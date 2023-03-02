@@ -48,5 +48,4 @@ func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		ap.ctr.bat.Clean(proc.Mp())
 		ap.ctr.bat = nil
 	}
-
 }

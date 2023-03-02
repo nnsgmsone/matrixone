@@ -57,50 +57,50 @@ func TestString(t *testing.T) {
 	}
 }
 
-func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
-		require.NoError(t, err)
-	}
-}
-
 func TestDispatch(t *testing.T) {
 	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
-		require.NoError(t, err)
-		bat := newBatch(t, tc.types, tc.proc, Rows)
-		tc.proc.Reg.InputBatch = bat
-		{
-			for _, vec := range bat.Vecs {
-				if vec.IsOriginal() {
-					vec.FreeOriginal(tc.proc.Mp())
-				}
-			}
-		}
-		_, _ = Call(0, tc.proc, tc.arg, false, false)
-		tc.proc.Reg.InputBatch = &batch.Batch{}
-		_, _ = Call(0, tc.proc, tc.arg, false, false)
-		tc.proc.Reg.InputBatch = nil
-		_, _ = Call(0, tc.proc, tc.arg, false, false)
-		tc.arg.Free(tc.proc, false)
-		for _, re := range tc.arg.LocalRegs {
-			for len(re.Ch) > 0 {
-				bat = <-re.Ch
+		go func() { // simulated consumers
+			for {
+				bat := <-tc.proc.Reg.MergeReceivers[0].Ch
 				if bat == nil {
 					break
 				}
-				bat.Clean(tc.proc.Mp())
+				bat.SubCnt(1)
 			}
+		}()
+		err := Prepare(tc.proc, tc.arg)
+		require.NoError(t, err)
+		{
+			bat := newBatch(t, tc.types, tc.proc, Rows)
+			tc.proc.SetInputBatch(bat)
+			_, err = Call(0, tc.proc, tc.arg, false, false)
+			require.NoError(t, err)
+			bat.Clean(tc.proc.Mp())
 		}
+		{
+			bat := newBatch(t, tc.types, tc.proc, Rows)
+			tc.proc.SetInputBatch(bat)
+			_, err = Call(0, tc.proc, tc.arg, false, false)
+			require.NoError(t, err)
+			bat.Clean(tc.proc.Mp())
+		}
+		{
+			tc.proc.SetInputBatch(&batch.Batch{})
+			_, _ = Call(0, tc.proc, tc.arg, false, false)
+		}
+		{
+			tc.proc.SetInputBatch(nil)
+			_, _ = Call(0, tc.proc, tc.arg, false, false)
+		}
+		tc.arg.Free(tc.proc, false)
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
 func newTestCase(all bool) dispatchTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
-	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
-	reg := &process.WaitRegister{Ctx: ctx, Ch: make(chan *batch.Batch, 3)}
+	proc := process.NewFromProc(testutil.NewProcessWithMPool(mpool.MustNewZero()),
+		ctx, 1)
 	return dispatchTestCase{
 		proc: proc,
 		types: []types.Type{
@@ -108,7 +108,10 @@ func newTestCase(all bool) dispatchTestCase {
 		},
 		arg: &Argument{
 			FuncId:    SendToAllLocalFunc,
-			LocalRegs: []*process.WaitRegister{reg},
+			LocalRegs: []*process.WaitRegister{proc.Reg.MergeReceivers[0]},
+			Types: []types.Type{
+				{Oid: types.T_int8},
+			},
 		},
 		cancel: cancel,
 	}

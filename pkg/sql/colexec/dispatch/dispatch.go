@@ -18,7 +18,9 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -30,6 +32,18 @@ func String(arg any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
+	ap.ctr.bat = batch.NewWithSize(len(ap.Types))
+	ap.ctr.vecs = make([]*vector.Vector, len(ap.Types))
+	for i := range ap.Types {
+		vec := vector.New(ap.Types[i])
+		vector.PreAlloc(vec, 0, defines.DefaultVectorSize, proc.Mp())
+		ap.ctr.vecs[i] = vec
+		ap.ctr.bat.SetVector(int32(i), vec)
+	}
+	ap.ctr.ufs = make([]func(*vector.Vector, *vector.Vector, int64) error, len(ap.Types))
+	for i := range ap.Types {
+		ap.ctr.ufs[i] = vector.GetUnionOneFunction(ap.Types[i], proc.Mp())
+	}
 
 	switch ap.FuncId {
 	case SendToAllFunc:
@@ -74,28 +88,24 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	if bat == nil {
 		return true, nil
 	}
-
-	if bat.Length() == 0 {
+	length := bat.Length()
+	if length == 0 {
 		return false, nil
 	}
 
-	for i, vec := range bat.Vecs {
-		if vec.IsOriginal() {
-			cloneVec, err := vector.Dup(vec, proc.Mp())
-			if err != nil {
-				bat.Clean(proc.Mp())
+	ap.ctr.bat.Reset()
+	for i, vec := range ap.ctr.vecs {
+		uf := ap.ctr.ufs[i]
+		srcVec := bat.GetVector(int32(i))
+		for j := int64(0); j < int64(length); j++ {
+			if err := uf(vec, srcVec, j); err != nil {
 				return false, err
 			}
-			bat.Vecs[i] = cloneVec
 		}
 	}
 
-	if err := ap.ctr.sendFunc(bat, ap, proc); err != nil {
+	if err := ap.ctr.sendFunc(ap.ctr.bat, ap, proc); err != nil {
 		return false, err
 	}
-	if len(ap.LocalRegs) == 0 {
-		return true, nil
-	}
-	proc.SetInputBatch(nil)
 	return false, nil
 }

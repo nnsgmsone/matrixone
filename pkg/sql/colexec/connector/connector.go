@@ -70,8 +70,8 @@ func Call(_ int, proc *process.Process, arg any, _ bool, _ bool) (bool, error) {
 	select {
 	case <-reg.Ctx.Done():
 		return true, nil
-	case reg.Ch <- bat:
-		bat.AddCnt(1)
+	case reg.Ch <- ap.ctr.bat:
+		ap.ctr.bat.AddCnt(1)
 		proc.SetInputBatch(nil)
 		return false, nil
 	}
