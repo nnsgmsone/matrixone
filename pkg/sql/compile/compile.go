@@ -839,16 +839,18 @@ func (c *Compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
-	currentFirstFlag := c.anal.isFirst
-	for i := range ss {
-		ss[i].appendInstruction(vm.Instruction{
-			Op:      vm.Projection,
-			Idx:     c.anal.curr,
-			IsFirst: currentFirstFlag,
-			Arg:     constructProjection(n),
-		})
+	if len(n.ProjectList) > 0 {
+		currentFirstFlag := c.anal.isFirst
+		for i := range ss {
+			ss[i].appendInstruction(vm.Instruction{
+				Op:      vm.Projection,
+				Idx:     c.anal.curr,
+				IsFirst: currentFirstFlag,
+				Arg:     constructProjection(n),
+			})
+		}
+		c.anal.isFirst = false
 	}
-	c.anal.isFirst = false
 	return ss
 }
 

@@ -18,6 +18,8 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -55,4 +57,10 @@ type Server struct {
 type UuidCsChanMap struct {
 	sync.Mutex
 	mp map[uuid.UUID]chan process.WrapCs
+}
+
+type PrivMem struct {
+	Bat  *batch.Batch
+	Vecs []*vector.Vector
+	Ufs  []func(*vector.Vector, *vector.Vector, int64) error
 }

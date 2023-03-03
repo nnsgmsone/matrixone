@@ -30,7 +30,9 @@ func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString(fmt.Sprintf("filter(%s)", ap.E))
 }
 
-func Prepare(_ *process.Process, _ any) error {
+func Prepare(proc *process.Process, arg any) error {
+	ap := arg.(*Argument)
+	ap.ctr.pm.InitByTypes(ap.Types, proc)
 	return nil
 }
 
@@ -47,6 +49,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	anal.Start()
 	defer anal.Stop()
 	anal.Input(bat, isFirst)
+
 	vec, err := colexec.EvalExpr(bat, proc, ap.E)
 	if err != nil {
 		bat.Clean(proc.Mp())
@@ -61,21 +64,19 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		return false, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
 	}
 	bs := vector.GetColumn[bool](vec)
-	if vec.IsScalar() {
-		if !bs[0] {
-			bat.Shrink(nil)
-		}
-	} else {
-		sels := proc.Mp().GetSels()
-		for i, b := range bs {
-			if b {
-				sels = append(sels, int64(i))
+	ap.ctr.pm.Bat.Reset()
+	for i := range bat.Vecs {
+		uf := ap.ctr.pm.Ufs[i]
+		for j := range bs {
+			if bs[j] {
+				if err := uf(ap.ctr.pm.Bat.Vecs[i], bat.Vecs[i], int64(j)); err != nil {
+					return false, err
+				}
 			}
 		}
-		bat.Shrink(sels)
-		proc.Mp().PutSels(sels)
 	}
-	anal.Output(bat, isLast)
-	proc.SetInputBatch(bat)
+
+	anal.Output(ap.ctr.pm.Bat, isLast)
+	proc.SetInputBatch(ap.ctr.pm.Bat)
 	return false, nil
 }

@@ -19,8 +19,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -44,6 +42,7 @@ func Prepare(proc *process.Process, arg any) error {
 	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.inserted = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.resetInserted = make([]uint8, hashmap.UnitLimit)
+	ap.ctr.pm.InitByTypes(ap.Types, proc)
 	return nil
 }
 
@@ -159,20 +158,10 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 		}
 
 		analyzer.Input(bat, isFirst)
-		//data to send to the next op
-		var outputBat *batch.Batch
 		//counter to record whether a row should add to output batch or not
 		var cnt int
-
-		//init output batch
-		{
-			outputBat = batch.NewWithSize(len(bat.Vecs))
-			for i := range bat.Vecs {
-				outputBat.Vecs[i] = vector.New(bat.Vecs[i].Typ)
-			}
-		}
-
 		// probe hashTable
+		ctr.pm.Bat.Reset()
 		{
 			itr := ctr.hashTable.NewIterator()
 			count := bat.Length()
@@ -206,25 +195,27 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 
 					ctr.inserted[j] = 1
 					ctr.counter[v-1]--
-					outputBat.Zs = append(outputBat.Zs, 1)
+					ctr.pm.Bat.Zs = append(ctr.pm.Bat.Zs, 1)
 					cnt++
 
 				}
 				if cnt > 0 {
 					for colNum := range bat.Vecs {
-						if err := vector.UnionBatch(outputBat.Vecs[colNum], bat.Vecs[colNum], int64(i), cnt, ctr.inserted[:n], proc.Mp()); err != nil {
-							bat.Clean(proc.Mp())
-							return false, err
+						uf := ctr.pm.Ufs[colNum]
+						for j := 0; j < n; j++ {
+							if ctr.inserted[j] == 1 {
+								if err := uf(ctr.pm.Bat.Vecs[colNum], bat.Vecs[colNum], int64(j)); err != nil {
+									return false, err
+								}
+							}
 						}
 					}
 				}
 			}
 
 		}
-		analyzer.Alloc(int64(outputBat.Size()))
-		analyzer.Output(outputBat, isLast)
-		proc.SetInputBatch(outputBat)
-		bat.Clean(proc.Mp())
+		analyzer.Output(ctr.pm.Bat, isLast)
+		proc.SetInputBatch(ctr.pm.Bat)
 		return false, nil
 	}
 }

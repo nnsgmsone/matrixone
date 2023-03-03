@@ -18,9 +18,6 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -33,18 +30,7 @@ func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.seen = 0
-	ap.ctr.bat = batch.NewWithSize(len(ap.Types))
-	ap.ctr.vecs = make([]*vector.Vector, len(ap.Types))
-	for i := range ap.Types {
-		vec := vector.New(ap.Types[i])
-		vector.PreAlloc(vec, 0, defines.DefaultVectorSize, proc.Mp())
-		ap.ctr.vecs[i] = vec
-		ap.ctr.bat.SetVector(int32(i), vec)
-	}
-	ap.ctr.ufs = make([]func(*vector.Vector, *vector.Vector, int64) error, len(ap.Types))
-	for i := range ap.Types {
-		ap.ctr.ufs[i] = vector.GetUnionOneFunction(ap.Types[i], proc.Mp())
-	}
+	ap.ctr.pm.InitByTypes(ap.Types, proc)
 	return nil
 }
 
@@ -64,27 +50,27 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	anal.Input(bat, isFirst)
 	if ap.ctr.seen >= ap.Limit {
 		proc.SetInputBatch(nil)
-		anal.Output(bat, isLast)
 		return true, nil
 	}
 	length := bat.Length()
 	newSeen := ap.ctr.seen + uint64(length)
-	if newSeen >= ap.Limit { // limit - seen
-		ap.ctr.bat.Reset()
-		for i, vec := range ap.ctr.vecs {
-			uf := ap.ctr.ufs[i]
-			count := int64(ap.Limit - ap.ctr.seen)
+
+	if newSeen >= ap.Limit {
+		ap.ctr.pm.Bat.Reset()
+		count := int64(ap.Limit - ap.ctr.seen)
+		for i, vec := range ap.ctr.pm.Vecs {
+			uf := ap.ctr.pm.Ufs[i]
 			srcVec := bat.GetVector(int32(i))
 			for j := int64(0); j < count; j++ {
 				if err := uf(vec, srcVec, j); err != nil {
 					return false, err
 				}
 			}
+			ap.ctr.pm.Bat.Zs = append(ap.ctr.pm.Bat.Zs, bat.Zs[:count]...)
 		}
-		ap.ctr.bat.Zs = append(ap.ctr.bat.Zs, bat.Zs[:length]...)
 		ap.ctr.seen = newSeen
-		anal.Output(ap.ctr.bat, isLast)
-		proc.SetInputBatch(ap.ctr.bat)
+		anal.Output(ap.ctr.pm.Bat, isLast)
+		proc.SetInputBatch(ap.ctr.pm.Bat)
 		return true, nil
 	}
 	anal.Output(bat, isLast)

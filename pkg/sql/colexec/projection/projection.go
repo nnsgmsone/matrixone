@@ -17,7 +17,6 @@ package projection
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -34,52 +33,43 @@ func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString(")")
 }
 
-func Prepare(_ *process.Process, _ any) error {
+func Prepare(proc *process.Process, arg any) error {
+	ap := arg.(*Argument)
+	ap.ctr = new(container)
+	ap.ctr.pm.InitByTypes(ap.Types, proc)
 	return nil
 }
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
-	anal := proc.GetAnalyze(idx)
-	anal.Start()
-	defer anal.Stop()
-
 	bat := proc.InputBatch()
 	if bat == nil {
-		proc.SetInputBatch(nil)
 		return true, nil
 	}
 	if bat.Length() == 0 {
 		return false, nil
 	}
+
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
+	defer anal.Stop()
 	anal.Input(bat, isFirst)
 	ap := arg.(*Argument)
-	rbat := batch.NewWithSize(len(ap.Es))
 	for i, e := range ap.Es {
+		ap.ctr.pm.Bat.Reset()
 		vec, err := colexec.EvalExpr(bat, proc, e)
 		if err != nil || vec.ConstExpand(false, proc.Mp()) == nil {
-			bat.Clean(proc.Mp())
-			rbat.Clean(proc.Mp())
 			return false, err
 		}
-		rbat.Vecs[i] = vec
-	}
-	for i, vec := range bat.Vecs {
-		isSame := false
-		for _, rVec := range rbat.Vecs {
-			if vec == rVec {
-				bat.Vecs[i] = nil
-				isSame = true
-				break
+		uf := ap.ctr.pm.Ufs[i]
+		len := vec.Length()
+		for j := 0; j < len; j++ {
+			if err := uf(ap.ctr.pm.Bat.Vecs[i], vec, int64(j)); err != nil {
+				return false, err
 			}
 		}
-		if !isSame && vec != nil {
-			anal.Alloc(int64(vec.Size()))
-		}
+		ap.ctr.pm.Bat.Zs = append(ap.ctr.pm.Bat.Zs, bat.Zs...)
 	}
-	rbat.Zs = bat.Zs
-	bat.Zs = nil
-	bat.Clean(proc.Mp())
-	anal.Output(rbat, isLast)
-	proc.SetInputBatch(rbat)
+	proc.SetInputBatch(ap.ctr.pm.Bat)
+	anal.Output(ap.ctr.pm.Bat, isLast)
 	return false, nil
 }

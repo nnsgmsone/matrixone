@@ -17,11 +17,8 @@ package mergeoffset
 import (
 	"bytes"
 	"fmt"
-	"reflect"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -34,15 +31,8 @@ func Prepare(proc *process.Process, arg interface{}) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.seen = 0
-
-	ap.ctr.receiverListener = make([]reflect.SelectCase, len(proc.Reg.MergeReceivers))
-	for i, mr := range proc.Reg.MergeReceivers {
-		ap.ctr.receiverListener[i] = reflect.SelectCase{
-			Dir:  reflect.SelectRecv,
-			Chan: reflect.ValueOf(mr.Ch),
-		}
-	}
-	ap.ctr.aliveMergeReceiver = len(proc.Reg.MergeReceivers)
+	ap.ctr.childrenCount = ap.ChildrenNumber
+	ap.ctr.pm.InitByTypes(ap.Types, proc)
 	return nil
 }
 
@@ -54,24 +44,12 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 	ctr := ap.ctr
 
 	for {
-		if ctr.aliveMergeReceiver == 0 {
-			proc.SetInputBatch(nil)
-			ap.Free(proc, false)
-			return true, nil
-		}
-
 		start := time.Now()
-		chosen, value, ok := reflect.Select(ctr.receiverListener)
-		if !ok {
-			return false, moerr.NewInternalError(proc.Ctx, "pipeline closed unexpectedly")
-		}
+		bat := <-proc.Reg.MergeReceivers[0].Ch
 		anal.WaitStop(start)
 
-		pointer := value.UnsafePointer()
-		bat := (*batch.Batch)(pointer)
 		if bat == nil {
-			ctr.receiverListener = append(ctr.receiverListener[:chosen], ctr.receiverListener[chosen+1:]...)
-			ctr.aliveMergeReceiver--
+			ctr.childrenCount--
 			continue
 		}
 
@@ -81,30 +59,31 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 
 		anal.Input(bat, isFirst)
 		if ap.ctr.seen > ap.Offset {
-			anal.Output(bat, isLast)
 			proc.SetInputBatch(bat)
 			return false, nil
 		}
 		length := len(bat.Zs)
 		// bat = PartOne + PartTwo, and PartTwo is required.
 		if ap.ctr.seen+uint64(length) > ap.Offset {
-			sels := newSels(int64(ap.Offset-ap.ctr.seen), int64(length)-int64(ap.Offset-ap.ctr.seen), proc)
+			ap.ctr.pm.Bat.Reset()
+			start, count := int64(ap.Offset-ap.ctr.seen), int64(length)-int64(ap.Offset-ap.ctr.seen)
+			for i, vec := range ap.ctr.pm.Vecs {
+				uf := ap.ctr.pm.Ufs[i]
+				srcVec := bat.GetVector(int32(i))
+				for j := int64(0); j < count; j++ {
+					if err := uf(vec, srcVec, j+start); err != nil {
+						return false, err
+					}
+				}
+			}
+			for i := int64(0); i < count; i++ {
+				ap.ctr.pm.Bat.Zs = append(ap.ctr.pm.Bat.Zs, i+start)
+			}
+			proc.SetInputBatch(ap.ctr.pm.Bat)
+			anal.Output(ap.ctr.pm.Bat, isLast)
 			ap.ctr.seen += uint64(length)
-			bat.Shrink(sels)
-			proc.Mp().PutSels(sels)
-			anal.Output(bat, isLast)
-			proc.SetInputBatch(bat)
 			return false, nil
 		}
 		ap.ctr.seen += uint64(length)
-		bat.Clean(proc.Mp())
 	}
-}
-
-func newSels(start, count int64, proc *process.Process) []int64 {
-	sels := proc.Mp().GetSels()
-	for i := int64(0); i < count; i++ {
-		sels = append(sels, start+i)
-	}
-	return sels[:count]
 }

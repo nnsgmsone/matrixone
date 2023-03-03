@@ -19,8 +19,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -31,7 +29,7 @@ func String(_ any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, argument any) error {
 	var err error
 	arg := argument.(*Argument)
-	arg.ctr.btc = nil
+	arg.ctr.pm.InitByTypes(arg.Types, proc)
 	arg.ctr.hashTable, err = hashmap.NewStrMap(true, arg.IBucket, arg.NBucket, proc.Mp())
 	if err != nil {
 		return err
@@ -150,12 +148,9 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 
 		analyze.Input(btc, isFirst)
 
-		c.btc = batch.NewWithSize(len(btc.Vecs))
-		for i := range btc.Vecs {
-			c.btc.Vecs[i] = vector.New(btc.Vecs[i].Typ)
-		}
 		needInsert := make([]uint8, hashmap.UnitLimit)
 		resetsNeedInsert := make([]uint8, hashmap.UnitLimit)
+		c.pm.Bat.Reset()
 		cnt := btc.Length()
 		itr := c.hashTable.NewIterator()
 		for i := 0; i < cnt; i += hashmap.UnitLimit {
@@ -193,24 +188,26 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 
 				needInsert[j] = 1
 				c.cnts[v-1][0] = 0
-				c.btc.Zs = append(c.btc.Zs, 1)
+				c.pm.Bat.Zs = append(c.pm.Bat.Zs, 1)
 				insertcnt++
 			}
 
 			if insertcnt > 0 {
 				for pos := range btc.Vecs {
-					if err := vector.UnionBatch(c.btc.Vecs[pos], btc.Vecs[pos], int64(i), insertcnt, needInsert, proc.Mp()); err != nil {
-						btc.Clean(proc.Mp())
-						return false, err
+					uf := c.pm.Ufs[pos]
+					for j := 0; j < n; j++ {
+						if needInsert[j] == 1 {
+							if err := uf(c.pm.Bat.Vecs[pos], btc.Vecs[pos], int64(j)); err != nil {
+								return false, err
+							}
+						}
 					}
 				}
 			}
 		}
 
-		btc.Clean(proc.Mp())
-		analyze.Alloc(int64(c.btc.Size()))
-		analyze.Output(c.btc, isLast)
-		proc.SetInputBatch(c.btc)
+		analyze.Output(c.pm.Bat, isLast)
+		proc.SetInputBatch(c.pm.Bat)
 		return false, nil
 	}
 }

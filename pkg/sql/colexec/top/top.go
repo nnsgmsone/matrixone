@@ -39,7 +39,7 @@ func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString(fmt.Sprintf("], %v)", ap.Limit))
 }
 
-func Prepare(_ *process.Process, arg any) error {
+func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	if ap.Limit > 1024 {
@@ -48,6 +48,7 @@ func Prepare(_ *process.Process, arg any) error {
 		ap.ctr.sels = make([]int64, 0, ap.Limit)
 	}
 	ap.ctr.poses = make([]int32, 0, len(ap.Fs))
+	ap.ctr.pm.InitByTypes(ap.Types, proc)
 	return nil
 }
 
@@ -69,7 +70,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				return false, nil
 			}
 			if ap.Limit == 0 {
-				bat.Clean(proc.Mp())
 				proc.SetInputBatch(nil)
 				return true, nil
 			}

@@ -16,7 +16,8 @@ package intersect
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -32,6 +33,9 @@ type Argument struct {
 	// hash table bucket related information.
 	IBucket uint64
 	NBucket uint64
+
+	// output vector types
+	Types []types.Type
 }
 
 type container struct {
@@ -44,11 +48,10 @@ type container struct {
 	// Hash table for checking duplicate data
 	hashTable *hashmap.StrHashMap
 
-	// Result batch of intersec column execute operator
-	btc *batch.Batch
-
 	// process bucket mark
 	inBuckets []uint8
+
+	pm *colexec.PrivMem
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
@@ -57,14 +60,5 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		ctr.hashTable.Free()
 		ctr.hashTable = nil
 	}
-	if ctr.btc != nil {
-		ctr.btc.Clean(proc.Mp())
-		ctr.btc = nil
-	}
-	if ctr.cnts != nil {
-		for i := range ctr.cnts {
-			proc.Mp().PutSels(ctr.cnts[i])
-		}
-		ctr.cnts = nil
-	}
+	ctr.pm.Clean(proc)
 }

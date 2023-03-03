@@ -15,13 +15,23 @@
 package restrict
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+type container struct {
+	pm *colexec.PrivMem
+}
 type Argument struct {
+	ctr *container
+
 	E *plan.Expr
+	// output vector types
+	Types []types.Type
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	arg.ctr.pm.Clean(proc)
 }

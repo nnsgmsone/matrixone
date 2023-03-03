@@ -16,6 +16,8 @@ package intersectall
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -34,6 +36,8 @@ type container struct {
 
 	inserted      []uint8
 	resetInserted []uint8
+
+	pm *colexec.PrivMem
 }
 
 type Argument struct {
@@ -43,6 +47,9 @@ type Argument struct {
 	IBucket uint64
 	// buckets count
 	NBucket uint64
+
+	// output vector types
+	Types []types.Type
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

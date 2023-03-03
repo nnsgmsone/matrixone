@@ -15,17 +15,15 @@
 package merge
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type container struct {
 	childrenCount int
-	bat           *batch.Batch
-	vecs          []*vector.Vector
-	ufs           []func(*vector.Vector, *vector.Vector, int64) error
+
+	pm *colexec.PrivMem
 }
 
 type Argument struct {
@@ -38,8 +36,5 @@ func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	for len(proc.Reg.MergeReceivers[0].Ch) > 0 {
 		<-proc.Reg.MergeReceivers[0].Ch
 	}
-	if ap.ctr.bat != nil {
-		ap.ctr.bat.Clean(proc.Mp())
-		ap.ctr.bat = nil
-	}
+	ap.ctr.pm.Clean(proc)
 }

@@ -18,9 +18,6 @@ import (
 	"bytes"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -32,18 +29,7 @@ func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.childrenCount = ap.ChildrenNumber
-	ap.ctr.bat = batch.NewWithSize(len(ap.Types))
-	ap.ctr.vecs = make([]*vector.Vector, len(ap.Types))
-	for i := range ap.Types {
-		vec := vector.New(ap.Types[i])
-		vector.PreAlloc(vec, 0, defines.DefaultVectorSize, proc.Mp())
-		ap.ctr.vecs[i] = vec
-		ap.ctr.bat.SetVector(int32(i), vec)
-	}
-	ap.ctr.ufs = make([]func(*vector.Vector, *vector.Vector, int64) error, len(ap.Types))
-	for i := range ap.Types {
-		ap.ctr.ufs[i] = vector.GetUnionOneFunction(ap.Types[i], proc.Mp())
-	}
+	ap.ctr.pm.InitByTypes(ap.Types, proc)
 	return nil
 }
 
@@ -72,9 +58,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			bat.SubCnt(1)
 			continue
 		}
-		ap.ctr.bat.Reset()
-		for i, vec := range ap.ctr.vecs {
-			uf := ap.ctr.ufs[i]
+		ap.ctr.pm.Bat.Reset()
+		for i, vec := range ap.ctr.pm.Vecs {
+			uf := ap.ctr.pm.Ufs[i]
 			srcVec := bat.GetVector(int32(i))
 			for j := int64(0); j < int64(length); j++ {
 				if err := uf(vec, srcVec, j); err != nil {
@@ -83,11 +69,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				}
 			}
 		}
-		ap.ctr.bat.Zs = append(ap.ctr.bat.Zs, bat.Zs...)
+		ap.ctr.pm.Bat.Zs = append(ap.ctr.pm.Bat.Zs, bat.Zs...)
 		anal.Input(bat, isFirst)
 		bat.SubCnt(1)
-		anal.Output(ap.ctr.bat, isLast)
-		proc.SetInputBatch(ap.ctr.bat)
+		anal.Output(ap.ctr.pm.Bat, isLast)
+		proc.SetInputBatch(ap.ctr.pm.Bat)
 		return false, nil
 	}
 }
