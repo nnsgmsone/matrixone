@@ -23,15 +23,14 @@ import (
 )
 
 func (pm *PrivMem) InitByTypes(typs []types.Type, proc *process.Process) error {
-	pm.Bat = batch.NewWithSize(len(typs))
-	pm.Vecs = make([]*vector.Vector, len(typs))
+	pm.OutBat = batch.NewWithSize(len(typs))
+	pm.OutVecs = make([]*vector.Vector, len(typs))
 	pm.Ufs = make([]func(*vector.Vector, *vector.Vector, int64) error, len(typs))
 	for i := range typs {
 		vec := vector.New(typs[i])
 		vector.PreAlloc(vec, 0, defines.DefaultVectorSize, proc.Mp())
-		pm.Vecs[i] = vec
-		pm.Bat.SetVector(int32(i), vec)
-
+		pm.OutVecs[i] = vec
+		pm.OutBat.SetVector(int32(i), vec)
 		pm.Ufs[i] = vector.GetUnionOneFunction(typs[i], proc.Mp())
 	}
 
@@ -39,9 +38,9 @@ func (pm *PrivMem) InitByTypes(typs []types.Type, proc *process.Process) error {
 }
 
 func (pm *PrivMem) Clean(proc *process.Process) error {
-	if pm.Bat != nil {
-		pm.Bat.Clean(proc.Mp())
-		pm.Bat = nil
+	if pm.OutBat != nil {
+		pm.OutBat.Clean(proc.Mp())
+		pm.OutBat = nil
 	}
 	return nil
 }

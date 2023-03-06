@@ -161,7 +161,7 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 		//counter to record whether a row should add to output batch or not
 		var cnt int
 		// probe hashTable
-		ctr.pm.Bat.Reset()
+		ctr.pm.OutBat.Reset()
 		{
 			itr := ctr.hashTable.NewIterator()
 			count := bat.Length()
@@ -195,7 +195,7 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 
 					ctr.inserted[j] = 1
 					ctr.counter[v-1]--
-					ctr.pm.Bat.Zs = append(ctr.pm.Bat.Zs, 1)
+					ctr.pm.OutBat.Zs = append(ctr.pm.OutBat.Zs, 1)
 					cnt++
 
 				}
@@ -204,7 +204,7 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 						uf := ctr.pm.Ufs[colNum]
 						for j := 0; j < n; j++ {
 							if ctr.inserted[j] == 1 {
-								if err := uf(ctr.pm.Bat.Vecs[colNum], bat.Vecs[colNum], int64(j)); err != nil {
+								if err := uf(ctr.pm.OutBat.Vecs[colNum], bat.Vecs[colNum], int64(j)); err != nil {
 									return false, err
 								}
 							}
@@ -214,8 +214,8 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 			}
 
 		}
-		analyzer.Output(ctr.pm.Bat, isLast)
-		proc.SetInputBatch(ctr.pm.Bat)
+		analyzer.Output(ctr.pm.OutBat, isLast)
+		proc.SetInputBatch(ctr.pm.OutBat)
 		return false, nil
 	}
 }

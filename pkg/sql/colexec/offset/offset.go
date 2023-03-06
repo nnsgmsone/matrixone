@@ -57,9 +57,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		return false, nil
 	}
 	if ap.ctr.seen+uint64(length) > ap.Offset {
-		ap.ctr.pm.Bat.Reset()
+		ap.ctr.pm.OutBat.Reset()
 		start, count := int64(ap.Offset-ap.ctr.seen), int64(length)-int64(ap.Offset-ap.ctr.seen)
-		for i, vec := range ap.ctr.pm.Vecs {
+		for i, vec := range ap.ctr.pm.OutVecs {
 			uf := ap.ctr.pm.Ufs[i]
 			srcVec := bat.GetVector(int32(i))
 			for j := int64(0); j < count; j++ {
@@ -69,9 +69,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			}
 		}
 		for i := int64(0); i < count; i++ {
-			ap.ctr.pm.Bat.Zs = append(ap.ctr.pm.Bat.Zs, i+start)
+			ap.ctr.pm.OutBat.Zs = append(ap.ctr.pm.OutBat.Zs, i+start)
 		}
-		proc.SetInputBatch(ap.ctr.pm.Bat)
+		proc.SetInputBatch(ap.ctr.pm.OutBat)
 		return false, nil
 	}
 	ap.ctr.seen += uint64(length)

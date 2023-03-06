@@ -149,7 +149,7 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 		}
 		ana.Input(bat, isFirst)
 
-		ctr.pm.Bat.Reset()
+		ctr.pm.OutBat.Reset()
 		count := vector.Length(bat.Vecs[0])
 		itr := ctr.hashTable.NewIterator()
 		for i := 0; i < count; i += hashmap.UnitLimit {
@@ -171,7 +171,7 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 					// ensure that the same value will only be inserted once.
 					rows++
 					inserted[j] = 1
-					ctr.pm.Bat.Zs = append(ctr.pm.Bat.Zs, 1)
+					ctr.pm.OutBat.Zs = append(ctr.pm.OutBat.Zs, 1)
 				}
 			}
 
@@ -182,7 +182,7 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 					uf := ctr.pm.Ufs[pos]
 					for j := 0; j < n; j++ {
 						if inserted[j] == 1 {
-							if err := uf(ctr.pm.Bat.Vecs[pos], bat.Vecs[pos], int64(j)); err != nil {
+							if err := uf(ctr.pm.OutBat.Vecs[pos], bat.Vecs[pos], int64(j)); err != nil {
 								return false, err
 							}
 						}
@@ -190,8 +190,8 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 				}
 			}
 		}
-		ana.Output(ctr.pm.Bat, isLast)
-		proc.SetInputBatch(ctr.pm.Bat)
+		ana.Output(ctr.pm.OutBat, isLast)
+		proc.SetInputBatch(ctr.pm.OutBat)
 		return false, nil
 	}
 }

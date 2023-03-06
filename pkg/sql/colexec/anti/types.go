@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -30,11 +31,6 @@ const (
 	End
 )
 
-type evalVector struct {
-	needFree bool
-	vec      *vector.Vector
-}
-
 type container struct {
 	state int
 
@@ -44,8 +40,9 @@ type container struct {
 
 	bat *batch.Batch
 
-	evecs []evalVector
-	vecs  []*vector.Vector
+	vecs []*vector.Vector
+
+	pm *colexec.PrivMem
 
 	mp *hashmap.JoinMap
 }
@@ -54,7 +51,6 @@ type Argument struct {
 	ctr        *container
 	Ibucket    uint64
 	Nbucket    uint64
-	Result     []int32
 	Typs       []types.Type
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
@@ -65,8 +61,8 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	if ctr != nil {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
-		ctr.cleanEvalVectors(mp)
 		ctr.cleanHashMap()
+		ctr.pm.Clean(proc)
 	}
 }
 
@@ -81,14 +77,5 @@ func (ctr *container) cleanHashMap() {
 	if ctr.mp != nil {
 		ctr.mp.Free()
 		ctr.mp = nil
-	}
-}
-
-func (ctr *container) cleanEvalVectors(mp *mpool.MPool) {
-	for i := range ctr.evecs {
-		if ctr.evecs[i].needFree && ctr.evecs[i].vec != nil {
-			ctr.evecs[i].vec.Free(mp)
-			ctr.evecs[i].vec = nil
-		}
 	}
 }

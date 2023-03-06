@@ -34,8 +34,8 @@ func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
-	ap.ctr.evecs = make([]evalVector, len(ap.Conditions[0]))
 	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
+	ap.ctr.pm.InitByTypes(ap.Typs, proc)
 	return nil
 }
 
@@ -101,48 +101,42 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
 	defer bat.Clean(proc.Mp())
 	anal.Input(bat, isFirst)
-	rbat := batch.NewWithSize(len(ap.Result))
-	rbat.Zs = proc.Mp().GetSels()
-	for i, pos := range ap.Result {
-		rbat.Vecs[i] = vector.New(bat.Vecs[pos].Typ)
-	}
+	ctr.pm.OutBat.Reset()
 	count := bat.Length()
+
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
 		for k := 0; k < n; k++ {
-			for j, pos := range ap.Result {
-				if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[pos], int64(i+k), proc.Mp()); err != nil {
-					rbat.Clean(proc.Mp())
+			for pos := range bat.Vecs {
+				uf := ctr.pm.Ufs[pos]
+				if err := uf(ctr.pm.OutBat.Vecs[pos], bat.Vecs[pos], int64(i+k)); err != nil {
+					ctr.pm.Clean(proc)
 					return err
 				}
 			}
-			rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
+			ctr.pm.OutBat.Zs = append(ctr.pm.OutBat.Zs, bat.Zs[i+k])
 		}
 	}
-	rbat.ExpandNulls()
-	anal.Output(rbat, isLast)
-	proc.SetInputBatch(rbat)
+	ctr.pm.OutBat.ExpandNulls()
+	anal.Output(ctr.pm.OutBat, isLast)
+	proc.SetInputBatch(ctr.pm.OutBat)
 	return nil
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
 	defer bat.Clean(proc.Mp())
 	anal.Input(bat, isFirst)
-	rbat := batch.NewWithSize(len(ap.Result))
-	rbat.Zs = proc.Mp().GetSels()
-	for i, pos := range ap.Result {
-		rbat.Vecs[i] = vector.New(bat.Vecs[pos].Typ)
-	}
+	ctr.pm.OutBat.Reset()
+
 	if (ctr.bat.Length() == 1 && ctr.hasNull) || ctr.bat.Length() == 0 {
-		anal.Output(rbat, isLast)
-		proc.SetInputBatch(rbat)
+		anal.Output(ctr.pm.OutBat, isLast)
+		proc.SetInputBatch(ctr.pm.OutBat)
 		return nil
 	}
 
-	ap.ctr.cleanEvalVectors(proc.Mp())
 	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc); err != nil {
 		return err
 	}
@@ -164,7 +158,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			}
 			if vals[k] == 0 {
 				eligible = append(eligible, int64(i+k))
-				rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
+				ctr.pm.OutBat.Zs = append(ctr.pm.OutBat.Zs, bat.Zs[i+k])
 				continue
 			}
 			if ap.Cond != nil {
@@ -187,20 +181,25 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					continue
 				}
 				eligible = append(eligible, int64(i+k))
-				rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
+				ctr.pm.OutBat.Zs = append(ctr.pm.OutBat.Zs, bat.Zs[i+k])
 			}
 		}
-		for j, pos := range ap.Result {
-			if err := vector.Union(rbat.Vecs[j], bat.Vecs[pos], eligible, true, proc.Mp()); err != nil {
-				rbat.Clean(proc.Mp())
-				return err
+
+		for pos := range bat.Vecs {
+			uf := ctr.pm.Ufs[pos]
+			for _, e := range eligible {
+				if err := uf(ctr.pm.OutVecs[pos], bat.Vecs[pos], e); err != nil {
+					ctr.pm.Clean(proc)
+					return err
+				}
 			}
 		}
+
 		eligible = eligible[:0]
 	}
-	rbat.ExpandNulls()
-	anal.Output(rbat, isLast)
-	proc.SetInputBatch(rbat)
+	ctr.pm.OutBat.ExpandNulls()
+	anal.Output(ctr.pm.OutBat, isLast)
+	proc.SetInputBatch(ctr.pm.OutBat)
 	return nil
 }
 
@@ -208,18 +207,9 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
 		if err != nil || vec.ConstExpand(false, proc.Mp()) == nil {
-			ctr.cleanEvalVectors(proc.Mp())
 			return err
 		}
 		ctr.vecs[i] = vec
-		ctr.evecs[i].vec = vec
-		ctr.evecs[i].needFree = true
-		for j := range bat.Vecs {
-			if bat.Vecs[j] == vec {
-				ctr.evecs[i].needFree = false
-				break
-			}
-		}
 	}
 	return nil
 }

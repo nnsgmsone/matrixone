@@ -64,19 +64,19 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		return false, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
 	}
 	bs := vector.GetColumn[bool](vec)
-	ap.ctr.pm.Bat.Reset()
+	ap.ctr.pm.OutBat.Reset()
 	for i := range bat.Vecs {
 		uf := ap.ctr.pm.Ufs[i]
 		for j := range bs {
 			if bs[j] {
-				if err := uf(ap.ctr.pm.Bat.Vecs[i], bat.Vecs[i], int64(j)); err != nil {
+				if err := uf(ap.ctr.pm.OutBat.Vecs[i], bat.Vecs[i], int64(j)); err != nil {
 					return false, err
 				}
 			}
 		}
 	}
 
-	anal.Output(ap.ctr.pm.Bat, isLast)
-	proc.SetInputBatch(ap.ctr.pm.Bat)
+	anal.Output(ap.ctr.pm.OutBat, isLast)
+	proc.SetInputBatch(ap.ctr.pm.OutBat)
 	return false, nil
 }

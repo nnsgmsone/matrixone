@@ -150,7 +150,7 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 
 		needInsert := make([]uint8, hashmap.UnitLimit)
 		resetsNeedInsert := make([]uint8, hashmap.UnitLimit)
-		c.pm.Bat.Reset()
+		c.pm.OutBat.Reset()
 		cnt := btc.Length()
 		itr := c.hashTable.NewIterator()
 		for i := 0; i < cnt; i += hashmap.UnitLimit {
@@ -188,7 +188,7 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 
 				needInsert[j] = 1
 				c.cnts[v-1][0] = 0
-				c.pm.Bat.Zs = append(c.pm.Bat.Zs, 1)
+				c.pm.OutBat.Zs = append(c.pm.OutBat.Zs, 1)
 				insertcnt++
 			}
 
@@ -197,7 +197,7 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 					uf := c.pm.Ufs[pos]
 					for j := 0; j < n; j++ {
 						if needInsert[j] == 1 {
-							if err := uf(c.pm.Bat.Vecs[pos], btc.Vecs[pos], int64(j)); err != nil {
+							if err := uf(c.pm.OutBat.Vecs[pos], btc.Vecs[pos], int64(j)); err != nil {
 								return false, err
 							}
 						}
@@ -206,8 +206,8 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 			}
 		}
 
-		analyze.Output(c.pm.Bat, isLast)
-		proc.SetInputBatch(c.pm.Bat)
+		analyze.Output(c.pm.OutBat, isLast)
+		proc.SetInputBatch(c.pm.OutBat)
 		return false, nil
 	}
 }

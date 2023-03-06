@@ -55,7 +55,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	anal.Input(bat, isFirst)
 	ap := arg.(*Argument)
 	for i, e := range ap.Es {
-		ap.ctr.pm.Bat.Reset()
+		ap.ctr.pm.OutBat.Reset()
 		vec, err := colexec.EvalExpr(bat, proc, e)
 		if err != nil || vec.ConstExpand(false, proc.Mp()) == nil {
 			return false, err
@@ -63,13 +63,13 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		uf := ap.ctr.pm.Ufs[i]
 		len := vec.Length()
 		for j := 0; j < len; j++ {
-			if err := uf(ap.ctr.pm.Bat.Vecs[i], vec, int64(j)); err != nil {
+			if err := uf(ap.ctr.pm.OutBat.Vecs[i], vec, int64(j)); err != nil {
 				return false, err
 			}
 		}
-		ap.ctr.pm.Bat.Zs = append(ap.ctr.pm.Bat.Zs, bat.Zs...)
+		ap.ctr.pm.OutBat.Zs = append(ap.ctr.pm.OutBat.Zs, bat.Zs...)
 	}
-	proc.SetInputBatch(ap.ctr.pm.Bat)
-	anal.Output(ap.ctr.pm.Bat, isLast)
+	proc.SetInputBatch(ap.ctr.pm.OutBat)
+	anal.Output(ap.ctr.pm.OutBat, isLast)
 	return false, nil
 }

@@ -52,7 +52,7 @@ var (
 
 func init() {
 	tcs = []antiTestCase{
-		newTestCase(mpool.MustNewZero(), []bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0},
+		newTestCase(mpool.MustNewZero(), []bool{false}, []types.Type{{Oid: types.T_int8}}, 
 			[][]*plan.Expr{
 				{
 					newExpr(0, types.Type{Oid: types.T_int8}),
@@ -61,7 +61,7 @@ func init() {
 					newExpr(0, types.Type{Oid: types.T_int8}),
 				},
 			}),
-		newTestCase(mpool.MustNewZero(), []bool{true}, []types.Type{{Oid: types.T_int8}}, []int32{0},
+		newTestCase(mpool.MustNewZero(), []bool{true}, []types.Type{{Oid: types.T_int8}}, 
 			[][]*plan.Expr{
 				{
 					newExpr(0, types.Type{Oid: types.T_int8}),
@@ -128,7 +128,7 @@ func TestAnti(t *testing.T) {
 func BenchmarkAnti(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		tcs = []antiTestCase{
-			newTestCase(mpool.MustNewZero(), []bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0},
+			newTestCase(mpool.MustNewZero(), []bool{false}, []types.Type{{Oid: types.T_int8}},
 				[][]*plan.Expr{
 					{
 						newExpr(0, types.Type{Oid: types.T_int8}),
@@ -137,7 +137,7 @@ func BenchmarkAnti(b *testing.B) {
 						newExpr(0, types.Type{Oid: types.T_int8}),
 					},
 				}),
-			newTestCase(mpool.MustNewZero(), []bool{true}, []types.Type{{Oid: types.T_int8}}, []int32{0},
+			newTestCase(mpool.MustNewZero(), []bool{true}, []types.Type{{Oid: types.T_int8}},
 				[][]*plan.Expr{
 					{
 						newExpr(0, types.Type{Oid: types.T_int8}),
@@ -185,7 +185,7 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 	}
 }
 
-func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) antiTestCase {
+func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, cs [][]*plan.Expr) antiTestCase {
 	proc := testutil.NewProcessWithMPool(m)
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -242,7 +242,6 @@ func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs []
 		cancel: cancel,
 		arg: &Argument{
 			Typs:       ts,
-			Result:     rp,
 			Conditions: cs,
 			Cond:       cond,
 		},

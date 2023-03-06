@@ -91,7 +91,6 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Cond:       t.Cond,
 			Typs:       t.Typs,
 			Conditions: t.Conditions,
-			Result:     t.Result,
 		}
 	case vm.Group:
 		t := sourceIns.Arg.(*group.Argument)
@@ -731,7 +730,6 @@ func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti
 	cond, conds := extraJoinConditions(n.OnList)
 	return &anti.Argument{
 		Typs:       typs,
-		Result:     result,
 		Cond:       cond,
 		Conditions: constructJoinConditions(conds, proc),
 	}

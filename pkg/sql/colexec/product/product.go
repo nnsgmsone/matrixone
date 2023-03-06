@@ -83,26 +83,26 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
 	defer bat.Clean(proc.Mp())
 	anal.Input(bat, isFirst)
-	ctr.pm.Bat.Reset()
+	ctr.pm.OutBat.Reset()
 	count := bat.Length()
 	for i := 0; i < count; i++ {
 		for j := 0; j < len(ctr.bat.Zs); j++ {
 			for k, rp := range ap.Result {
 				uf := ctr.pm.Ufs[k]
 				if rp.Rel == 0 {
-					if err := uf(ctr.pm.Bat.Vecs[k], bat.Vecs[rp.Pos], int64(i)); err != nil {
+					if err := uf(ctr.pm.OutBat.Vecs[k], bat.Vecs[rp.Pos], int64(i)); err != nil {
 						return err
 					}
 				} else {
-					if err := uf(ctr.pm.Bat.Vecs[k], ctr.bat.Vecs[rp.Pos], int64(j)); err != nil {
+					if err := uf(ctr.pm.OutBat.Vecs[k], ctr.bat.Vecs[rp.Pos], int64(j)); err != nil {
 						return err
 					}
 				}
 			}
-			ctr.pm.Bat.Zs = append(ctr.pm.Bat.Zs, ctr.bat.Zs[j])
+			ctr.pm.OutBat.Zs = append(ctr.pm.OutBat.Zs, ctr.bat.Zs[j])
 		}
 	}
-	anal.Output(ctr.pm.Bat, isLast)
-	proc.SetInputBatch(ctr.pm.Bat)
+	anal.Output(ctr.pm.OutBat, isLast)
+	proc.SetInputBatch(ctr.pm.OutBat)
 	return nil
 }
