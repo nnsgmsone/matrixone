@@ -22,6 +22,8 @@ import (
 )
 
 type container struct {
+	colexec.MemforNextOp
+
 	// operator state: Build, Probe or End
 	state int
 
@@ -36,8 +38,6 @@ type container struct {
 
 	inserted      []uint8
 	resetInserted []uint8
-
-	pm *colexec.PrivMem
 }
 
 type Argument struct {
@@ -57,6 +57,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	if ctr != nil {
 		ctr.cleanHashMap()
 	}
+	ctr.CleanMemForNextOp(proc)
 }
 
 func (ctr *container) cleanHashMap() {

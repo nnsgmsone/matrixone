@@ -22,25 +22,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func (pm *PrivMem) InitByTypes(typs []types.Type, proc *process.Process) error {
-	pm.OutBat = batch.NewWithSize(len(typs))
-	pm.OutVecs = make([]*vector.Vector, len(typs))
-	pm.Ufs = make([]func(*vector.Vector, *vector.Vector, int64) error, len(typs))
+func (m *MemforNextOp) InitByTypes(typs []types.Type, proc *process.Process) error {
+	m.OutBat = batch.NewWithSize(len(typs))
+	m.OutVecs = make([]*vector.Vector, len(typs))
+	m.Ufs = make([]func(*vector.Vector, *vector.Vector, int64) error, len(typs))
 	for i := range typs {
 		vec := vector.New(typs[i])
 		vector.PreAlloc(vec, 0, defines.DefaultVectorSize, proc.Mp())
-		pm.OutVecs[i] = vec
-		pm.OutBat.SetVector(int32(i), vec)
-		pm.Ufs[i] = vector.GetUnionOneFunction(typs[i], proc.Mp())
+		m.OutVecs[i] = vec
+		m.OutBat.SetVector(int32(i), vec)
+		m.Ufs[i] = vector.GetUnionOneFunction(typs[i], proc.Mp())
 	}
 
 	return nil
 }
 
-func (pm *PrivMem) Clean(proc *process.Process) error {
-	if pm.OutBat != nil {
-		pm.OutBat.Clean(proc.Mp())
-		pm.OutBat = nil
+func (m *MemforNextOp) CleanMemForNextOp(proc *process.Process) error {
+	if m.OutBat != nil {
+		m.OutBat.Clean(proc.Mp())
+		m.OutBat = nil
 	}
 	return nil
 }

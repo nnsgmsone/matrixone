@@ -29,7 +29,7 @@ func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.childrenCount = ap.ChildrenNumber
-	ap.ctr.pm.InitByTypes(ap.Types, proc)
+	ap.ctr.InitByTypes(ap.Types, proc)
 	return nil
 }
 
@@ -58,9 +58,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			bat.SubCnt(1)
 			continue
 		}
-		ap.ctr.pm.OutBat.Reset()
-		for i, vec := range ap.ctr.pm.OutVecs {
-			uf := ap.ctr.pm.Ufs[i]
+		ap.ctr.OutBat.Reset()
+		for i, vec := range ap.ctr.OutVecs {
+			uf := ap.ctr.Ufs[i]
 			srcVec := bat.GetVector(int32(i))
 			for j := int64(0); j < int64(length); j++ {
 				if err := uf(vec, srcVec, j); err != nil {
@@ -69,11 +69,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				}
 			}
 		}
-		ap.ctr.pm.OutBat.Zs = append(ap.ctr.pm.OutBat.Zs, bat.Zs...)
+		ap.ctr.OutBat.Zs = append(ap.ctr.OutBat.Zs, bat.Zs...)
 		anal.Input(bat, isFirst)
 		bat.SubCnt(1)
-		anal.Output(ap.ctr.pm.OutBat, isLast)
-		proc.SetInputBatch(ap.ctr.pm.OutBat)
+		anal.Output(ap.ctr.OutBat, isLast)
+		proc.SetInputBatch(ap.ctr.OutBat)
 		return false, nil
 	}
 }

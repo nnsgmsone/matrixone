@@ -30,15 +30,15 @@ const (
 )
 
 type container struct {
+	colexec.MemforNextOp
+
 	n     int // result vector number
 	state int
 	sels  []int64
 	poses []int32 // sorted list of attributes
 	cmps  []compare.Compare
 
-	bat *batch.Batch
-
-	pm *colexec.PrivMem
+	bat *batch.Batch // this bat should not be used
 }
 
 type Argument struct {

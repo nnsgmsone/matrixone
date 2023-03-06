@@ -21,9 +21,9 @@ import (
 )
 
 type container struct {
-	childrenCount int
+	colexec.MemforNextOp
 
-	pm *colexec.PrivMem
+	childrenCount int
 }
 
 type Argument struct {
@@ -36,5 +36,5 @@ func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	for len(proc.Reg.MergeReceivers[0].Ch) > 0 {
 		<-proc.Reg.MergeReceivers[0].Ch
 	}
-	ap.ctr.pm.Clean(proc)
+	ap.ctr.CleanMemForNextOp(proc)
 }

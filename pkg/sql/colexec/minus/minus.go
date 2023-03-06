@@ -31,7 +31,7 @@ func Prepare(proc *process.Process, argument any) error {
 	var err error
 	arg := argument.(*Argument)
 	{
-		arg.ctr.pm.InitByTypes(arg.Types, proc)
+		arg.ctr.InitByTypes(arg.Types, proc)
 		arg.ctr.hashTable, err = hashmap.NewStrMap(true, arg.IBucket, arg.NBucket, proc.Mp())
 		if err != nil {
 			return err
@@ -149,7 +149,7 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 		}
 		ana.Input(bat, isFirst)
 
-		ctr.pm.OutBat.Reset()
+		ctr.OutBat.Reset()
 		count := vector.Length(bat.Vecs[0])
 		itr := ctr.hashTable.NewIterator()
 		for i := 0; i < count; i += hashmap.UnitLimit {
@@ -171,7 +171,7 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 					// ensure that the same value will only be inserted once.
 					rows++
 					inserted[j] = 1
-					ctr.pm.OutBat.Zs = append(ctr.pm.OutBat.Zs, 1)
+					ctr.OutBat.Zs = append(ctr.OutBat.Zs, 1)
 				}
 			}
 
@@ -179,10 +179,10 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 			insertCount := int(newHashGroup - oldHashGroup)
 			if insertCount > 0 {
 				for pos := range bat.Vecs {
-					uf := ctr.pm.Ufs[pos]
+					uf := ctr.Ufs[pos]
 					for j := 0; j < n; j++ {
 						if inserted[j] == 1 {
-							if err := uf(ctr.pm.OutBat.Vecs[pos], bat.Vecs[pos], int64(j)); err != nil {
+							if err := uf(ctr.OutBat.Vecs[pos], bat.Vecs[pos], int64(j)); err != nil {
 								return false, err
 							}
 						}
@@ -190,8 +190,8 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 				}
 			}
 		}
-		ana.Output(ctr.pm.OutBat, isLast)
-		proc.SetInputBatch(ctr.pm.OutBat)
+		ana.Output(ctr.OutBat, isLast)
+		proc.SetInputBatch(ctr.OutBat)
 		return false, nil
 	}
 }

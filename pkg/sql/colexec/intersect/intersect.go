@@ -29,12 +29,13 @@ func String(_ any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, argument any) error {
 	var err error
 	arg := argument.(*Argument)
-	arg.ctr.pm.InitByTypes(arg.Types, proc)
+	arg.ctr = new(container)
 	arg.ctr.hashTable, err = hashmap.NewStrMap(true, arg.IBucket, arg.NBucket, proc.Mp())
 	if err != nil {
 		return err
 	}
 	arg.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
+	arg.ctr.InitByTypes(arg.Types, proc)
 	return nil
 }
 
@@ -150,7 +151,7 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 
 		needInsert := make([]uint8, hashmap.UnitLimit)
 		resetsNeedInsert := make([]uint8, hashmap.UnitLimit)
-		c.pm.OutBat.Reset()
+		c.OutBat.Reset()
 		cnt := btc.Length()
 		itr := c.hashTable.NewIterator()
 		for i := 0; i < cnt; i += hashmap.UnitLimit {
@@ -188,16 +189,16 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 
 				needInsert[j] = 1
 				c.cnts[v-1][0] = 0
-				c.pm.OutBat.Zs = append(c.pm.OutBat.Zs, 1)
+				c.OutBat.Zs = append(c.OutBat.Zs, 1)
 				insertcnt++
 			}
 
 			if insertcnt > 0 {
 				for pos := range btc.Vecs {
-					uf := c.pm.Ufs[pos]
+					uf := c.Ufs[pos]
 					for j := 0; j < n; j++ {
 						if needInsert[j] == 1 {
-							if err := uf(c.pm.OutBat.Vecs[pos], btc.Vecs[pos], int64(j)); err != nil {
+							if err := uf(c.OutBat.Vecs[pos], btc.Vecs[pos], int64(j)); err != nil {
 								return false, err
 							}
 						}
@@ -206,8 +207,8 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 			}
 		}
 
-		analyze.Output(c.pm.OutBat, isLast)
-		proc.SetInputBatch(c.pm.OutBat)
+		analyze.Output(c.OutBat, isLast)
+		proc.SetInputBatch(c.OutBat)
 		return false, nil
 	}
 }

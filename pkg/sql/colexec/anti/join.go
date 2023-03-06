@@ -35,7 +35,7 @@ func Prepare(proc *process.Process, arg any) error {
 	ap.ctr = new(container)
 	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
-	ap.ctr.pm.InitByTypes(ap.Typs, proc)
+	ap.ctr.InitByTypes(ap.Typs, proc)
 	return nil
 }
 
@@ -101,7 +101,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
 	defer bat.Clean(proc.Mp())
 	anal.Input(bat, isFirst)
-	ctr.pm.OutBat.Reset()
+	ctr.OutBat.Reset()
 	count := bat.Length()
 
 	for i := 0; i < count; i += hashmap.UnitLimit {
@@ -111,29 +111,29 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 		}
 		for k := 0; k < n; k++ {
 			for pos := range bat.Vecs {
-				uf := ctr.pm.Ufs[pos]
-				if err := uf(ctr.pm.OutBat.Vecs[pos], bat.Vecs[pos], int64(i+k)); err != nil {
-					ctr.pm.Clean(proc)
+				uf := ctr.Ufs[pos]
+				if err := uf(ctr.OutBat.Vecs[pos], bat.Vecs[pos], int64(i+k)); err != nil {
+					ctr.CleanMemForNextOp(proc)
 					return err
 				}
 			}
-			ctr.pm.OutBat.Zs = append(ctr.pm.OutBat.Zs, bat.Zs[i+k])
+			ctr.OutBat.Zs = append(ctr.OutBat.Zs, bat.Zs[i+k])
 		}
 	}
-	ctr.pm.OutBat.ExpandNulls()
-	anal.Output(ctr.pm.OutBat, isLast)
-	proc.SetInputBatch(ctr.pm.OutBat)
+	ctr.OutBat.ExpandNulls()
+	anal.Output(ctr.OutBat, isLast)
+	proc.SetInputBatch(ctr.OutBat)
 	return nil
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
 	defer bat.Clean(proc.Mp())
 	anal.Input(bat, isFirst)
-	ctr.pm.OutBat.Reset()
+	ctr.OutBat.Reset()
 
 	if (ctr.bat.Length() == 1 && ctr.hasNull) || ctr.bat.Length() == 0 {
-		anal.Output(ctr.pm.OutBat, isLast)
-		proc.SetInputBatch(ctr.pm.OutBat)
+		anal.Output(ctr.OutBat, isLast)
+		proc.SetInputBatch(ctr.OutBat)
 		return nil
 	}
 
@@ -158,7 +158,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			}
 			if vals[k] == 0 {
 				eligible = append(eligible, int64(i+k))
-				ctr.pm.OutBat.Zs = append(ctr.pm.OutBat.Zs, bat.Zs[i+k])
+				ctr.OutBat.Zs = append(ctr.OutBat.Zs, bat.Zs[i+k])
 				continue
 			}
 			if ap.Cond != nil {
@@ -181,15 +181,15 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					continue
 				}
 				eligible = append(eligible, int64(i+k))
-				ctr.pm.OutBat.Zs = append(ctr.pm.OutBat.Zs, bat.Zs[i+k])
+				ctr.OutBat.Zs = append(ctr.OutBat.Zs, bat.Zs[i+k])
 			}
 		}
 
 		for pos := range bat.Vecs {
-			uf := ctr.pm.Ufs[pos]
+			uf := ctr.Ufs[pos]
 			for _, e := range eligible {
-				if err := uf(ctr.pm.OutVecs[pos], bat.Vecs[pos], e); err != nil {
-					ctr.pm.Clean(proc)
+				if err := uf(ctr.OutVecs[pos], bat.Vecs[pos], e); err != nil {
+					ctr.CleanMemForNextOp(proc)
 					return err
 				}
 			}
@@ -197,9 +197,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 
 		eligible = eligible[:0]
 	}
-	ctr.pm.OutBat.ExpandNulls()
-	anal.Output(ctr.pm.OutBat, isLast)
-	proc.SetInputBatch(ctr.pm.OutBat)
+	ctr.OutBat.ExpandNulls()
+	anal.Output(ctr.OutBat, isLast)
+	proc.SetInputBatch(ctr.OutBat)
 	return nil
 }
 

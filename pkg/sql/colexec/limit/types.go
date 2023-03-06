@@ -21,8 +21,9 @@ import (
 )
 
 type container struct {
+	colexec.MemforNextOp
+
 	seen uint64 // seen is the number of tuples seen so far
-	pm   *colexec.PrivMem
 }
 
 type Argument struct {
@@ -32,5 +33,5 @@ type Argument struct {
 }
 
 func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	ap.ctr.pm.Clean(proc)
+	ap.ctr.CleanMemForNextOp(proc)
 }

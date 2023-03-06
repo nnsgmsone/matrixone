@@ -29,9 +29,10 @@ const (
 )
 
 type container struct {
+	colexec.MemforNextOp
+
 	state int
 	bat   *batch.Batch
-	pm    *colexec.PrivMem
 }
 
 type Argument struct {
@@ -46,6 +47,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
 	}
+	ctr.CleanMemForNextOp(proc)
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {

@@ -48,7 +48,7 @@ func Prepare(proc *process.Process, arg any) error {
 		ap.ctr.sels = make([]int64, 0, ap.Limit)
 	}
 	ap.ctr.poses = make([]int32, 0, len(ap.Fs))
-	ap.ctr.pm.InitByTypes(ap.Types, proc)
+	ap.ctr.InitByTypes(ap.Types, proc)
 	return nil
 }
 

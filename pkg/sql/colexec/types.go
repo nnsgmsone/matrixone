@@ -59,10 +59,10 @@ type UuidCsChanMap struct {
 	mp map[uuid.UUID]chan process.WrapCs
 }
 
-// PrivMem managed by operator
-// If one operator need to pass a batch out, the output bat will goes to PrivMem.Bat and send to next operator
-type PrivMem struct {
+// MemforNextOp managed by operator itself and held by the container of all operators
+// This piece of memory is used to manage the Batch passed from this operator to the next operator
+type MemforNextOp struct {
 	OutBat  *batch.Batch // output bat that delivers to next operator
 	OutVecs []*vector.Vector
-	Ufs     []func(*vector.Vector, *vector.Vector, int64) error
+	Ufs     []func(*vector.Vector, *vector.Vector, int64) error // function pointers for type conversion
 }

@@ -38,17 +38,17 @@ type Argument struct {
 }
 
 type container struct {
+	colexec.MemforNextOp
+
 	// operator execution stage.
 	state int
 
 	// hash table related
 	hashTable *hashmap.StrHashMap
-
-	pm *colexec.PrivMem
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	arg.ctr.pm.Clean(proc)
+	arg.ctr.CleanMemForNextOp(proc)
 	arg.ctr.cleanHashMap()
 }
 

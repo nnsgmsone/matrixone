@@ -21,10 +21,10 @@ import (
 )
 
 type container struct {
+	colexec.MemforNextOp
+
 	seen          uint64
 	childrenCount int
-
-	pm *colexec.PrivMem
 }
 
 type Argument struct {
@@ -38,5 +38,5 @@ type Argument struct {
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	arg.ctr.pm.Clean(proc)
+	arg.ctr.CleanMemForNextOp(proc)
 }

@@ -32,6 +32,8 @@ const (
 )
 
 type container struct {
+	colexec.MemforNextOp
+
 	state int
 
 	hasNull bool
@@ -41,8 +43,6 @@ type container struct {
 	bat *batch.Batch
 
 	vecs []*vector.Vector
-
-	pm *colexec.PrivMem
 
 	mp *hashmap.JoinMap
 }
@@ -62,7 +62,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
 		ctr.cleanHashMap()
-		ctr.pm.Clean(proc)
+		ctr.CleanMemForNextOp(proc)
 	}
 }
 

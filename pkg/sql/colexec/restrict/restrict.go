@@ -32,7 +32,7 @@ func String(arg any, buf *bytes.Buffer) {
 
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
-	ap.ctr.pm.InitByTypes(ap.Types, proc)
+	ap.ctr.InitByTypes(ap.Types, proc)
 	return nil
 }
 
@@ -64,19 +64,19 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		return false, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
 	}
 	bs := vector.GetColumn[bool](vec)
-	ap.ctr.pm.OutBat.Reset()
+	ap.ctr.OutBat.Reset()
 	for i := range bat.Vecs {
-		uf := ap.ctr.pm.Ufs[i]
+		uf := ap.ctr.Ufs[i]
 		for j := range bs {
 			if bs[j] {
-				if err := uf(ap.ctr.pm.OutBat.Vecs[i], bat.Vecs[i], int64(j)); err != nil {
+				if err := uf(ap.ctr.OutBat.Vecs[i], bat.Vecs[i], int64(j)); err != nil {
 					return false, err
 				}
 			}
 		}
 	}
 
-	anal.Output(ap.ctr.pm.OutBat, isLast)
-	proc.SetInputBatch(ap.ctr.pm.OutBat)
+	anal.Output(ap.ctr.OutBat, isLast)
+	proc.SetInputBatch(ap.ctr.OutBat)
 	return false, nil
 }

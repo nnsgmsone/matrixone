@@ -42,7 +42,7 @@ func Prepare(proc *process.Process, arg any) error {
 	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.inserted = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.resetInserted = make([]uint8, hashmap.UnitLimit)
-	ap.ctr.pm.InitByTypes(ap.Types, proc)
+	ap.ctr.InitByTypes(ap.Types, proc)
 	return nil
 }
 
@@ -161,7 +161,7 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 		//counter to record whether a row should add to output batch or not
 		var cnt int
 		// probe hashTable
-		ctr.pm.OutBat.Reset()
+		ctr.OutBat.Reset()
 		{
 			itr := ctr.hashTable.NewIterator()
 			count := bat.Length()
@@ -195,16 +195,16 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 
 					ctr.inserted[j] = 1
 					ctr.counter[v-1]--
-					ctr.pm.OutBat.Zs = append(ctr.pm.OutBat.Zs, 1)
+					ctr.OutBat.Zs = append(ctr.OutBat.Zs, 1)
 					cnt++
 
 				}
 				if cnt > 0 {
 					for colNum := range bat.Vecs {
-						uf := ctr.pm.Ufs[colNum]
+						uf := ctr.Ufs[colNum]
 						for j := 0; j < n; j++ {
 							if ctr.inserted[j] == 1 {
-								if err := uf(ctr.pm.OutBat.Vecs[colNum], bat.Vecs[colNum], int64(j)); err != nil {
+								if err := uf(ctr.OutBat.Vecs[colNum], bat.Vecs[colNum], int64(j)); err != nil {
 									return false, err
 								}
 							}
@@ -214,8 +214,8 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 			}
 
 		}
-		analyzer.Output(ctr.pm.OutBat, isLast)
-		proc.SetInputBatch(ctr.pm.OutBat)
+		analyzer.Output(ctr.OutBat, isLast)
+		proc.SetInputBatch(ctr.OutBat)
 		return false, nil
 	}
 }
