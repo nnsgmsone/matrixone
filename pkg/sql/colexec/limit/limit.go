@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -30,6 +31,7 @@ func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.seen = 0
+	ap.ctr.pm = new(colexec.PrivMem)
 	ap.ctr.pm.InitByTypes(ap.Types, proc)
 	return nil
 }
@@ -66,8 +68,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 					return false, err
 				}
 			}
-			ap.ctr.pm.Bat.Zs = append(ap.ctr.pm.Bat.Zs, bat.Zs[:count]...)
 		}
+		ap.ctr.pm.Bat.Zs = append(ap.ctr.pm.Bat.Zs, bat.Zs[:count]...)
 		ap.ctr.seen = newSeen
 		anal.Output(ap.ctr.pm.Bat, isLast)
 		proc.SetInputBatch(ap.ctr.pm.Bat)
