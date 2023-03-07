@@ -42,41 +42,38 @@ var (
 )
 
 func init() {
+	testTypes := []types.Type{{Oid: types.T_int8}}
 	tcs = []limitTestCase{
 		{
-			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
-			types: []types.Type{
-				{Oid: types.T_int8},
-			},
+			proc:  testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			types: testTypes,
 			arg: &Argument{
 				Limit: 8,
-				Types: []types.Type{
-					{Oid: types.T_int8},
-				},
+				Types: testTypes,
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
-			types: []types.Type{
-				{Oid: types.T_int8},
-			},
+			proc:  testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			types: testTypes,
 			arg: &Argument{
 				Limit: 10,
-				Types: []types.Type{
-					{Oid: types.T_int8},
-				},
+				Types: testTypes,
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
-			types: []types.Type{
-				{Oid: types.T_int8},
-			},
+			proc:  testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			types: testTypes,
 			arg: &Argument{
 				Limit: 12,
-				Types: []types.Type{
-					{Oid: types.T_int8},
-				},
+				Types: testTypes,
+			},
+		},
+		{
+			proc:  testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			types: testTypes,
+			arg: &Argument{
+				Limit: 0,
+				Types: testTypes,
 			},
 		},
 	}
@@ -93,28 +90,41 @@ func TestLimit(t *testing.T) {
 	for _, tc := range tcs {
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
-		{
-			bat := newBatch(t, tc.types, tc.proc, Rows)
-			tc.proc.SetInputBatch(bat)
-			_, err = Call(0, tc.proc, tc.arg, false, false)
-			require.NoError(t, err)
-			bat.Clean(tc.proc.Mp())
+
+		// test input normal batch
+		inputBatch := newBatch(t, tc.types, tc.proc, Rows)
+		end := false
+		tc.proc.SetInputBatch(inputBatch)
+		end, err = Call(0, tc.proc, tc.arg, false, false)
+		require.NoError(t, err)
+		outputBatch := tc.proc.Reg.InputBatch
+		if outputBatch != nil {
+			outputLen := outputBatch.Length()
+			expectLen := minValue(outputLen, int(tc.arg.Limit))
+			require.Equal(t, expectLen, outputLen)
+			require.Equal(t, inputBatch.Zs[:expectLen], outputBatch.Zs[:expectLen])
+		} else { // corner case: limit == 0
+			require.Equal(t, 0, int(tc.arg.Limit))
+			require.Equal(t, true, end)
 		}
-		{
-			bat := newBatch(t, tc.types, tc.proc, Rows)
-			tc.proc.SetInputBatch(bat)
-			_, err = Call(0, tc.proc, tc.arg, false, false)
-			require.NoError(t, err)
-			bat.Clean(tc.proc.Mp())
-		}
-		{
+
+		{ // test input empty batch
+			newEnd := false
 			tc.proc.SetInputBatch(&batch.Batch{})
-			_, _ = Call(0, tc.proc, tc.arg, false, false)
+			newEnd, err = Call(0, tc.proc, tc.arg, false, false)
+			require.Equal(t, end, newEnd)
+			require.NoError(t, err)
 		}
-		{
+
+		{ // test input nil batch
 			tc.proc.SetInputBatch(nil)
-			_, _ = Call(0, tc.proc, tc.arg, false, false)
+			end, err = Call(0, tc.proc, tc.arg, false, false)
+			require.Equal(t, true, end)
+			require.NoError(t, err)
 		}
+
+		// test mem
+		inputBatch.Clean(tc.proc.Mp())
 		tc.arg.Free(tc.proc, false)
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
@@ -123,4 +133,11 @@ func TestLimit(t *testing.T) {
 // create a new block based on the type information
 func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
+}
+
+func minValue(a, b int) int {
+	if a > b {
+		return b
+	}
+	return a
 }

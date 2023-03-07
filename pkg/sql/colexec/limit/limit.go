@@ -40,18 +40,21 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	if bat == nil {
 		return true, nil
 	}
-	if bat.Length() == 0 {
-		return false, nil
-	}
 	ap := arg.(*Argument)
-	anal := proc.GetAnalyze(idx)
-	anal.Start()
-	defer anal.Stop()
-	anal.Input(bat, isFirst)
 	if ap.ctr.seen >= ap.Limit {
 		proc.SetInputBatch(nil)
 		return true, nil
 	}
+
+	if bat.Length() == 0 {
+		return false, nil
+	}
+
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
+	defer anal.Stop()
+	anal.Input(bat, isFirst)
+
 	length := bat.Length()
 	newSeen := ap.ctr.seen + uint64(length)
 
@@ -66,8 +69,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 					return false, err
 				}
 			}
-			ap.ctr.OutBat.Zs = append(ap.ctr.OutBat.Zs, bat.Zs[:count]...)
 		}
+		ap.ctr.OutBat.Zs = append(ap.ctr.OutBat.Zs, bat.Zs[:count]...)
 		ap.ctr.seen = newSeen
 		anal.Output(ap.ctr.OutBat, isLast)
 		proc.SetInputBatch(ap.ctr.OutBat)

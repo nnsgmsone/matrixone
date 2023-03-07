@@ -44,6 +44,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	ctr := ap.ctr
 
 	for {
+		if ctr.childrenCount == 0 {
+			return true, nil
+		}
+
 		start := time.Now()
 		bat := <-proc.Reg.MergeReceivers[0].Ch
 		anal.WaitStop(start)
@@ -75,8 +79,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 						return false, err
 					}
 				}
-				ap.ctr.OutBat.Zs = append(ap.ctr.OutBat.Zs, bat.Zs[:count]...)
 			}
+			ap.ctr.OutBat.Zs = append(ap.ctr.OutBat.Zs, bat.Zs[:count]...)
 			ap.ctr.seen = newSeen
 			anal.Output(ap.ctr.OutBat, isLast)
 			proc.SetInputBatch(ap.ctr.OutBat)
