@@ -17,11 +17,10 @@ package group
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -30,13 +29,7 @@ import (
 const (
 	H8 = iota
 	HStr
-	HIndex
 )
-
-type evalVector struct {
-	needFree bool
-	vec      *vector.Vector
-}
 
 type container struct {
 	typ       int
@@ -45,19 +38,16 @@ type container struct {
 
 	intHashMap *hashmap.IntHashMap
 	strHashMap *hashmap.StrHashMap
-	idx        *index.LowCardinalityIndex
 
-	aggVecs   []evalVector
-	groupVecs []evalVector
+	aggVecs   []*vector.Vector
+	groupVecs []*vector.Vector
 
 	// multiVecs are used for group_concat,
 	// cause that group_concat can have many cols like group(a,b,c)
 	// in this cases, len(multiVecs[0]) will be 3
-	multiVecs [][]evalVector
+	multiVecs [][]*vector.Vector
 
-	vecs []*vector.Vector
-
-	bat *batch.Batch
+	pms []*colexec.PrivMem
 }
 
 type Argument struct {
