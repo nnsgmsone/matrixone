@@ -15,9 +15,7 @@
 package top
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compare"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -27,6 +25,7 @@ import (
 const (
 	Build = iota
 	Eval
+	End
 )
 
 type container struct {
@@ -36,9 +35,8 @@ type container struct {
 	poses []int32 // sorted list of attributes
 	cmps  []compare.Compare
 
-	bat *batch.Batch
-
-	pm *colexec.PrivMem
+	init bool // means that it has been initialized
+	pm   *colexec.PrivMem
 }
 
 type Argument struct {
@@ -50,19 +48,8 @@ type Argument struct {
 	Types []types.Type
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	ctr := arg.ctr
-	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
-	}
-}
-
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
-	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
-		ctr.bat = nil
-	}
+func (ap *Argument) Free(proc *process.Process, _ bool) {
+	ap.ctr.pm.Clean(proc)
 }
 
 func (ctr *container) compare(vi, vj int, i, j int64) int {

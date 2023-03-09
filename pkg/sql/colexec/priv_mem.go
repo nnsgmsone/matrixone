@@ -22,6 +22,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func (pm *PrivMem) Dup(proc *process.Process) (*PrivMem, error) {
+	rpm := new(PrivMem)
+	rpm.Bat = batch.NewWithSize(len(pm.Ufs))
+	rpm.Vecs = make([]*vector.Vector, len(pm.Ufs))
+	rpm.Ufs = make([]func(*vector.Vector, *vector.Vector, int64) error, len(pm.Ufs))
+	for i := range pm.Ufs {
+		vec := vector.New(pm.Vecs[i].GetType())
+		vector.PreAlloc(vec, 0, defines.DefaultVectorSize, proc.Mp())
+		rpm.Vecs[i] = vec
+		rpm.Bat.SetVector(int32(i), vec)
+		rpm.Ufs[i] = pm.Ufs[i]
+	}
+	return rpm, nil
+}
+
 func (pm *PrivMem) InitByTypes(typs []types.Type, proc *process.Process) error {
 	pm.Bat = batch.NewWithSize(len(typs))
 	pm.Vecs = make([]*vector.Vector, len(typs))
@@ -34,7 +49,6 @@ func (pm *PrivMem) InitByTypes(typs []types.Type, proc *process.Process) error {
 
 		pm.Ufs[i] = vector.GetUnionOneFunction(typs[i], proc.Mp())
 	}
-
 	return nil
 }
 
