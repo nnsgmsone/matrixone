@@ -36,6 +36,7 @@ func String(arg any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
+	ap.ctr.pm = new(colexec.PrivMem)
 	ap.ctr.pm.InitByTypes(ap.Types, proc)
 	return nil
 }
@@ -54,21 +55,23 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	defer anal.Stop()
 	anal.Input(bat, isFirst)
 	ap := arg.(*Argument)
+	ap.ctr.pm.Bat.Reset()
 	for i, e := range ap.Es {
-		ap.ctr.pm.Bat.Reset()
 		vec, err := colexec.EvalExpr(bat, proc, e)
-		if err != nil || vec.ConstExpand(false, proc.Mp()) == nil {
+		if err != nil {
 			return false, err
 		}
 		uf := ap.ctr.pm.Ufs[i]
 		len := vec.Length()
 		for j := 0; j < len; j++ {
-			if err := uf(ap.ctr.pm.Bat.Vecs[i], vec, int64(j)); err != nil {
+			if err := uf(ap.ctr.pm.Vecs[i], vec, int64(j)); err != nil {
+				vec.Free(proc.Mp())
 				return false, err
 			}
 		}
-		ap.ctr.pm.Bat.Zs = append(ap.ctr.pm.Bat.Zs, bat.Zs...)
+		vec.Free(proc.Mp())
 	}
+	ap.ctr.pm.Bat.Zs = append(ap.ctr.pm.Bat.Zs, bat.Zs...)
 	proc.SetInputBatch(ap.ctr.pm.Bat)
 	anal.Output(ap.ctr.pm.Bat, isLast)
 	return false, nil
