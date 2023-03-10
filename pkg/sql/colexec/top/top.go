@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -96,6 +95,7 @@ func (ctr *container) build(ap *Argument, bat *batch.Batch, proc *process.Proces
 	for _, f := range ap.Fs {
 		vec, err := colexec.EvalExpr(bat, proc, f.Expr)
 		if err != nil {
+			ctr.freeBatch(bat, proc)
 			return err
 		}
 		flg := true
@@ -115,6 +115,7 @@ func (ctr *container) build(ap *Argument, bat *batch.Batch, proc *process.Proces
 			}
 		}
 	}
+	defer ctr.freeBatch(bat, proc)
 	if !ctr.init {
 		ctr.init = true
 		mp := make(map[int]int)
@@ -205,7 +206,7 @@ func (ctr *container) eval(limit int64, proc *process.Process) error {
 		return err
 	}
 	for i := ctr.n; i < len(ctr.pm.Bat.Vecs); i++ {
-		vector.Clean(ctr.pm.Bat.Vecs[i], proc.Mp())
+		ctr.pm.Bat.Vecs[i].Free(proc.Mp())
 	}
 	ctr.pm.Bat.Vecs = ctr.pm.Bat.Vecs[:ctr.n]
 	proc.SetInputBatch(ctr.pm.Bat)

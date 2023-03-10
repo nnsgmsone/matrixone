@@ -47,7 +47,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
-
 		start := time.Now()
 		bat := <-proc.Reg.MergeReceivers[0].Ch
 		if bat == nil {

@@ -22,8 +22,7 @@ import (
 
 type container struct {
 	childrenCount int
-
-	pm *colexec.PrivMem
+	pm            *colexec.PrivMem
 }
 
 type Argument struct {

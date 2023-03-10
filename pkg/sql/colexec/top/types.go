@@ -16,6 +16,7 @@ package top
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/compare"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -50,6 +51,13 @@ type Argument struct {
 
 func (ap *Argument) Free(proc *process.Process, _ bool) {
 	ap.ctr.pm.Clean(proc)
+}
+
+func (ctr *container) freeBatch(bat *batch.Batch, proc *process.Process) {
+	for i := ctr.n; i < bat.VectorCount(); i++ {
+		bat.Vecs[i].Free(proc.Mp())
+	}
+	bat.Vecs = bat.Vecs[:ctr.n]
 }
 
 func (ctr *container) compare(vi, vj int, i, j int64) int {

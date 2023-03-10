@@ -17,6 +17,7 @@ package mergetop
 import (
 	"bytes"
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -29,8 +30,7 @@ import (
 )
 
 const (
-	Rows          = 10     // default rows
-	BenchmarkRows = 100000 // default rows for benchmark
+	Rows = 10 // default rows
 )
 
 // add unit tests for cases
@@ -64,98 +64,52 @@ func TestString(t *testing.T) {
 	}
 }
 
-func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
-		require.NoError(t, err)
-	}
-}
-
 func TestTop(t *testing.T) {
 	for _, tc := range tcs {
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.ds, tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
-		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(t, tc.ds, tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[1].Ch <- &batch.Batch{}
-		tc.proc.Reg.MergeReceivers[1].Ch <- nil
-		for {
-			if ok, err := Call(0, tc.proc, tc.arg, false, false); ok || err != nil {
-				if tc.proc.Reg.InputBatch != nil {
-					tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-				}
-				break
-			}
-		}
-		for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
-			for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
-				bat := <-tc.proc.Reg.MergeReceivers[i].Ch
-				if bat != nil {
-					bat.Clean(tc.proc.Mp())
-				}
-			}
-		}
-		require.Equal(t, tc.proc.Mp().CurrNB(), int64(0))
-	}
-}
+		var wg sync.WaitGroup
 
-func BenchmarkTop(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		tcs = []topTestCase{
-			newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
-			newTestCase([]bool{true}, []types.Type{{Oid: types.T_int8}}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
-		}
-		t := new(testing.T)
-		for _, tc := range tcs {
-			err := Prepare(tc.proc, tc.arg)
-			require.NoError(t, err)
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.ds, tc.types, tc.proc, BenchmarkRows)
-			tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(t, tc.ds, tc.types, tc.proc, BenchmarkRows)
-			tc.proc.Reg.MergeReceivers[1].Ch <- &batch.Batch{}
-			tc.proc.Reg.MergeReceivers[1].Ch <- nil
+		wg.Add(1)
+		go func() {
 			for {
 				if ok, err := Call(0, tc.proc, tc.arg, false, false); ok || err != nil {
-					if tc.proc.Reg.InputBatch != nil {
-						tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-					}
+					wg.Done()
 					break
 				}
 			}
-			for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
-				for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
-					bat := <-tc.proc.Reg.MergeReceivers[i].Ch
-					if bat != nil {
-						bat.Clean(tc.proc.Mp())
-					}
-				}
-			}
-		}
+		}()
+		bat0 := newBatch(t, tc.ds, tc.types, tc.proc, Rows)
+		bat0.AddCnt(1)
+		tc.proc.Reg.MergeReceivers[0].Ch <- bat0
+		tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
+		tc.proc.Reg.MergeReceivers[0].Ch <- nil
+		bat1 := newBatch(t, tc.ds, tc.types, tc.proc, Rows)
+		bat1.AddCnt(1)
+		tc.proc.Reg.MergeReceivers[0].Ch <- bat1
+		tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
+		tc.proc.Reg.MergeReceivers[0].Ch <- nil
+		wg.Wait()
+		bat0.Clean(tc.proc.Mp())
+		bat1.Clean(tc.proc.Mp())
+		tc.arg.Free(tc.proc, false)
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
 func newTestCase(ds []bool, ts []types.Type, limit int64, fs []*plan.OrderBySpec) topTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
-	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
-	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
-		Ctx: ctx,
-		Ch:  make(chan *batch.Batch, 3),
-	}
-	proc.Reg.MergeReceivers[1] = &process.WaitRegister{
-		Ctx: ctx,
-		Ch:  make(chan *batch.Batch, 3),
-	}
+	proc := process.NewFromProc(testutil.NewProcessWithMPool(mpool.MustNewZero()),
+		ctx, 2)
 	return topTestCase{
 		ds:    ds,
 		types: ts,
 		proc:  proc,
 		arg: &Argument{
-			Fs:    fs,
-			Limit: limit,
+			Fs:             fs,
+			Types:          ts,
+			Limit:          limit,
+			ChildrenNumber: 2,
 		},
 		cancel: cancel,
 	}
