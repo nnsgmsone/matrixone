@@ -50,6 +50,9 @@ type container struct {
 	inserted  []uint8
 	zInserted []uint8
 
+	chunkInserted []uint8
+	chunkValues   []uint64
+
 	intHashMap *hashmap.IntHashMap
 	strHashMap *hashmap.StrHashMap
 
@@ -66,9 +69,7 @@ type container struct {
 	isEmpty bool // Indicates if it is an empty table
 
 	pmIdx int
-	// number of rows of all chunks excluding the last chunk
-	pmRows int
-	pms    []*colexec.PrivMem
+	pms   []*colexec.PrivMem
 }
 
 type Argument struct {

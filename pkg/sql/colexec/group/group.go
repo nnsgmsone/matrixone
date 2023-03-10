@@ -69,6 +69,8 @@ func Prepare(proc *process.Process, arg any) error {
 	ap.ctr.isEmpty = true
 	ap.ctr.inserted = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
+	ap.ctr.chunkInserted = make([]uint8, hashmap.UnitLimit)
+	ap.ctr.chunkValues = make([]uint64, hashmap.UnitLimit)
 	ap.ctr.pms = make([]*colexec.PrivMem, 1)
 	ap.ctr.pms[0] = new(colexec.PrivMem)
 	ap.ctr.pms[0].InitByTypes(ap.Types, proc)
@@ -257,7 +259,9 @@ func (ctr *container) buildWithGroup(ap *Argument, bat *batch.Batch, proc *proce
 		pm.InitByTypes(ap.Types, proc)
 		ctr.pms = append(ctr.pms, pm)
 		pm.Bat.Aggs = make([]agg.Agg[any], len(ap.Aggs)+len(ap.MultiAggs))
-		ctr.pmRows += rows
+		if err := ap.initAggInfo(proc); err != nil {
+			return err
+		}
 	}
 	if ctr.typ == H8 {
 		return ctr.processH8(bat, proc)
@@ -332,12 +336,6 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 		if v == 0 {
 			continue
 		}
-		vals[k] = v - uint64(ctr.pmRows)
-	}
-	for k, v := range vals[:n] {
-		if v == 0 {
-			continue
-		}
 		if v > hashRows {
 			ctr.inserted[k] = 1
 			hashRows++
@@ -345,8 +343,6 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 			pm.Bat.Zs = append(pm.Bat.Zs, 0)
 		}
 		valCnt++
-		ai := int64(v) - 1
-		pm.Bat.Zs[ai] = bat.Zs[i]
 	}
 	if cnt > 0 {
 		for j, vec := range pm.Vecs {
@@ -369,16 +365,34 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 	if valCnt == 0 {
 		return nil
 	}
-	for j, ag := range pm.Bat.Aggs {
-		if j < len(ctr.aggVecs) {
-			err := ag.BatchFill(int64(i), ctr.inserted[:n], vals, bat.Zs, []*vector.Vector{ctr.aggVecs[j].vec})
-			if err != nil {
-				return err
+	rows := int64(0)
+	for _, pm0 := range ctr.pms {
+		ctr.chunkValues = ctr.chunkValues[:0]
+		ctr.chunkInserted = ctr.chunkInserted[:0]
+		oldRows := rows
+		rows += int64(pm.Bat.Length())
+		for k, v := range vals[:n] {
+			if v == 0 {
+				continue
 			}
-		} else {
-			err := ag.BatchFill(int64(i), ctr.inserted[:n], vals, bat.Zs, ctr.ToVecotrs(j-len(ctr.aggVecs)))
-			if err != nil {
-				return err
+			ai := int64(v) - 1
+			if ai < rows && ai >= oldRows {
+				pm.Bat.Zs[ai-oldRows] += bat.Zs[i+k]
+				ctr.chunkValues = append(ctr.chunkValues, v)
+				ctr.chunkInserted = append(ctr.chunkInserted, ctr.inserted[k])
+			}
+		}
+		for j, ag := range pm0.Bat.Aggs {
+			if j < len(ctr.aggVecs) {
+				err := ag.BatchFill(int64(i), ctr.chunkInserted, ctr.chunkValues, bat.Zs, []*vector.Vector{ctr.aggVecs[j].vec})
+				if err != nil {
+					return err
+				}
+			} else {
+				err := ag.BatchFill(int64(i), ctr.chunkInserted, ctr.chunkValues, bat.Zs, ctr.ToVecotrs(j-len(ctr.aggVecs)))
+				if err != nil {
+					return err
+				}
 			}
 		}
 	}
