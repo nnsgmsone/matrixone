@@ -61,15 +61,26 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		if err != nil {
 			return false, err
 		}
+		needFree := true
+		for i := range bat.Vecs {
+			if vec == bat.Vecs[i] {
+				needFree = false
+			}
+		}
 		uf := ap.ctr.pm.Ufs[i]
 		len := vec.Length()
 		for j := 0; j < len; j++ {
 			if err := uf(ap.ctr.pm.Vecs[i], vec, int64(j)); err != nil {
-				vec.Free(proc.Mp())
+				if needFree {
+					vec.Free(proc.Mp())
+				}
 				return false, err
 			}
 		}
-		vec.Free(proc.Mp())
+		if needFree {
+			anal.Alloc(int64(vec.Size()))
+			vec.Free(proc.Mp())
+		}
 	}
 	ap.ctr.pm.Bat.Zs = append(ap.ctr.pm.Bat.Zs, bat.Zs...)
 	proc.SetInputBatch(ap.ctr.pm.Bat)

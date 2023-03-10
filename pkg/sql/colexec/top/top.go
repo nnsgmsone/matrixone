@@ -74,9 +74,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				return true, nil
 			}
 			err := ctr.build(ap, bat, proc, anal)
-			if err != nil {
-				ap.Free(proc, true)
-			}
 			return false, err
 		case Eval:
 			ctr.state = End

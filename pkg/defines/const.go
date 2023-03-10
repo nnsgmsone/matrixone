@@ -40,5 +40,6 @@ const (
 )
 
 const (
+	DefaultVectorRows = 8192
 	DefaultVectorSize = 8192
 )

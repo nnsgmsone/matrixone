@@ -27,27 +27,48 @@ import (
 )
 
 const (
+	Build = iota
+	BuildWithGroup
+	Eval
+	EvalWithGroup
+	End
+)
+
+const (
 	H8 = iota
 	HStr
 )
 
+type evalVector struct {
+	needFree bool
+	vec      *vector.Vector
+}
+
 type container struct {
 	typ       int
+	state     int
 	inserted  []uint8
 	zInserted []uint8
 
 	intHashMap *hashmap.IntHashMap
 	strHashMap *hashmap.StrHashMap
 
-	aggVecs   []*vector.Vector
-	groupVecs []*vector.Vector
+	aggVecs   []evalVector
+	groupVecs []evalVector
 
 	// multiVecs are used for group_concat,
 	// cause that group_concat can have many cols like group(a,b,c)
 	// in this cases, len(multiVecs[0]) will be 3
-	multiVecs [][]*vector.Vector
+	multiVecs [][]evalVector
 
-	pms []*colexec.PrivMem
+	vecs []*vector.Vector
+
+	isEmpty bool // Indicates if it is an empty table
+
+	pmIdx int
+	// number of rows of all chunks excluding the last chunk
+	pmRows int
+	pms    []*colexec.PrivMem
 }
 
 type Argument struct {
@@ -61,16 +82,11 @@ type Argument struct {
 	MultiAggs []group_concat.Argument // multiAggs, for now it's group_concat
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	ctr := arg.ctr
-	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
-		ctr.cleanHashMap()
-		ctr.cleanAggVectors(mp)
-		ctr.cleanGroupVectors(mp)
-		ctr.cleanMultiAggVecs(mp)
+func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	for i := range ap.ctr.pms {
+		ap.ctr.pms[i].Clean(proc)
 	}
+	ap.ctr.cleanHashMap()
 }
 
 func (ctr *container) ToInputType(idx int) (t []types.Type) {
@@ -85,13 +101,6 @@ func (ctr *container) ToVecotrs(idx int) (vecs []*vector.Vector) {
 		vecs = append(vecs, ctr.multiVecs[idx][i].vec)
 	}
 	return
-}
-
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
-	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
-		ctr.bat = nil
-	}
 }
 
 func (ctr *container) cleanAggVectors(mp *mpool.MPool) {

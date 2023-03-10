@@ -1340,7 +1340,7 @@ func GetUnionOneFunction(typ types.Type, m *mpool.MPool) func(v, w *Vector, sel 
 		}
 	case types.T_uint32:
 		return func(v, w *Vector, sel int64) error {
-			ws := MustTCols[bool](w)
+			ws := MustTCols[uint32](w)
 			return appendOne(v, ws[sel], nulls.Contains(w.Nsp, uint64(sel)), m)
 		}
 	case types.T_uint64:
