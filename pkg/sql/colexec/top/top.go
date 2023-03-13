@@ -132,7 +132,7 @@ func (ctr *container) build(ap *Argument, bat *batch.Batch, proc *process.Proces
 					nullsLast = desc
 				}
 			}
-			ctr.cmps[i] = compare.New(bat.Vecs[i].Typ, desc, nullsLast)
+			ctr.cmps[i] = compare.New(*bat.Vecs[i].GetType(), desc, nullsLast)
 		}
 	}
 	proc.SetInputBatch(&batch.Batch{})

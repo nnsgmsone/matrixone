@@ -16,6 +16,8 @@ package service
 
 import (
 	"context"
+	"math"
+	gotrace "runtime/trace"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -29,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	taelogtail "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -118,7 +119,8 @@ type LogtailServer struct {
 
 	rt     runtime.Runtime
 	logger *log.MOLogger
-	clock  clock.Clock
+
+	nowFn func() (timestamp.Timestamp, timestamp.Timestamp)
 
 	cfg *options.LogtailServerCfg
 
@@ -145,14 +147,14 @@ func NewLogtailServer(
 	s := &LogtailServer{
 		rt:         rt,
 		logger:     rt.Logger(),
-		clock:      rt.Clock(),
 		cfg:        cfg,
 		ssmgr:      NewSessionManager(),
-		waterline:  NewWaterliner(rt.Clock()),
+		waterline:  NewWaterliner(logtail.Now),
 		subscribed: NewTableStacker(),
 		errChan:    make(chan sessionError),
 		subChan:    make(chan subscription, 10),
 		logtail:    logtail,
+		nowFn:      logtail.Now,
 	}
 
 	for _, opt := range opts {
@@ -392,7 +394,10 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 				to := s.waterline.Waterline()
 
 				// fetch total logtail for table
-				tail, subErr := s.logtail.TableLogtail(sendCtx, table, from, to)
+				var tail logtail.TableLogtail
+				gotrace.WithRegion(ctx, "subscription-pull-logtail", func() {
+					tail, subErr = s.logtail.TableLogtail(sendCtx, table, from, to)
+				})
 				if subErr != nil {
 					logger.Error("fail to fetch table total logtail", zap.Error(subErr), zap.Any("table", table))
 					if err := sub.session.SendErrorResponse(
@@ -428,22 +433,31 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 				}()
 
 				from := s.waterline.Waterline()
-				to, _ := s.clock.Now()
+				to, _ := s.nowFn()
 
-				tables := s.subscribed.ListTable()
-				wraps := make([]wrapLogtail, 0, len(tables))
-				for _, t := range tables {
-					tail, err := s.logtail.TableLogtail(ctx, t.table, from, to)
-					if err != nil {
-						logger.Error("fail to fetch additional logtail", zap.Error(err), zap.Any("table", t.table))
-						risk += 1
-						return
-					}
+				// fetch additional logtail for tables
+				var tails []logtail.TableLogtail
+				var err error
+				gotrace.WithRegion(ctx, "publishment-pull-logtail", func() {
+					tails, err = s.logtail.RangeLogtail(ctx, from, to)
+				})
+				if err != nil {
+					logger.Error("fail to fetch additional logtail", zap.Error(err))
+					risk += 1
+					return
+				}
+				if len(tails) == 1 && tails[0].Table.TbId == math.MaxUint64 {
+					panic("unexpected checkpoint within time range")
+				}
+
+				// format table ID beforehand
+				wraps := make([]wrapLogtail, 0, len(tails))
+				for _, tail := range tails {
 					// skip empty logtail
 					if tail.CkpLocation == "" && len(tail.Commands) == 0 {
 						continue
 					}
-					wraps = append(wraps, wrapLogtail{id: t.id, tail: tail})
+					wraps = append(wraps, wrapLogtail{id: TableID(tail.GetTable().String()), tail: tail})
 				}
 
 				// publish additional logtail for all subscribed tables

@@ -92,7 +92,7 @@ func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
 
 func (ctr *container) ToInputType(idx int) (t []types.Type) {
 	for i := range ctr.multiVecs[idx] {
-		t = append(t, ctr.multiVecs[idx][i].vec.Typ)
+		t = append(t, *ctr.multiVecs[idx][i].vec.GetType())
 	}
 	return
 }

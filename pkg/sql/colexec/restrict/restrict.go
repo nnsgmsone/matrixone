@@ -64,7 +64,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	if !vec.GetType().IsBoolean() {
 		return false, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
 	}
-	bs := vector.GetColumn[bool](vec)
+	bs := vector.MustFixedCol[bool](vec)
 	ap.ctr.pm.Bat.Reset()
 	for i, vec := range ap.ctr.pm.Vecs {
 		uf := ap.ctr.pm.Ufs[i]

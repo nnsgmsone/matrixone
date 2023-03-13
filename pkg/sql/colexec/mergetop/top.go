@@ -145,7 +145,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 						nullsLast = desc
 					}
 				}
-				ctr.cmps[i] = compare.New(bat.Vecs[i].Typ, desc, nullsLast)
+				ctr.cmps[i] = compare.New(*bat.Vecs[i].GetType(), desc, nullsLast)
 			}
 		}
 		if err := ctr.processBatch(ap.Limit, bat, proc); err != nil {

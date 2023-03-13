@@ -130,11 +130,10 @@ func newTestCase(flgs []bool, ts []types.Type, exprs []*plan.Expr, aggs []agg.Ag
 	for i, expr := range exprs {
 		t := expr.Typ
 		typs[i] = types.Type{
-			Oid:       types.T(t.Id),
-			Width:     t.Width,
-			Precision: t.Precision,
-			Size:      t.Size,
-			Scale:     t.Scale,
+			Oid:   types.T(t.Id),
+			Width: t.Width,
+			Size:  t.Size,
+			Scale: t.Scale,
 		}
 	}
 	return groupTestCase{

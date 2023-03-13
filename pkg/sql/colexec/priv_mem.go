@@ -28,8 +28,8 @@ func (pm *PrivMem) Dup(proc *process.Process) (*PrivMem, error) {
 	rpm.Vecs = make([]*vector.Vector, len(pm.Ufs))
 	rpm.Ufs = make([]func(*vector.Vector, *vector.Vector, int64) error, len(pm.Ufs))
 	for i := range pm.Ufs {
-		vec := vector.New(pm.Vecs[i].GetType())
-		vector.PreAlloc(vec, 0, defines.DefaultVectorSize, proc.Mp())
+		vec := vector.NewVec(*pm.Vecs[i].GetType())
+		vec.PreExtend(defines.DefaultVectorRows, proc.Mp())
 		rpm.Vecs[i] = vec
 		rpm.Bat.SetVector(int32(i), vec)
 		rpm.Ufs[i] = pm.Ufs[i]
@@ -42,11 +42,10 @@ func (pm *PrivMem) InitByTypes(typs []types.Type, proc *process.Process) error {
 	pm.Vecs = make([]*vector.Vector, len(typs))
 	pm.Ufs = make([]func(*vector.Vector, *vector.Vector, int64) error, len(typs))
 	for i := range typs {
-		vec := vector.New(typs[i])
-		vector.PreAlloc(vec, 0, defines.DefaultVectorSize, proc.Mp())
+		vec := vector.NewVec(typs[i])
+		vec.PreExtend(defines.DefaultVectorRows, proc.Mp())
 		pm.Vecs[i] = vec
 		pm.Bat.SetVector(int32(i), vec)
-
 		pm.Ufs[i] = vector.GetUnionOneFunction(typs[i], proc.Mp())
 	}
 	return nil

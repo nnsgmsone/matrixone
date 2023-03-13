@@ -131,7 +131,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			if ctr.isEmpty {
 				b := batch.NewWithSize(len(ap.Types))
 				for i := range b.Vecs {
-					b.Vecs[i] = vector.New(ap.Types[i])
+					b.Vecs[i] = vector.NewVec(ap.Types[i])
 				}
 				if err := ctr.build(ap, b, proc, anal); err != nil {
 					ctr.state = End
@@ -473,7 +473,7 @@ func (ap *Argument) initAggInfo(proc *process.Process) error {
 
 	for i, ag := range ap.Aggs {
 		if ap.ctr.pms[ap.ctr.pmIdx].Bat.Aggs[i], err = agg.New(ag.Op, ag.Dist,
-			ap.ctr.aggVecs[i].vec.Typ); err != nil {
+			*ap.ctr.aggVecs[i].vec.GetType()); err != nil {
 			return err
 		}
 	}

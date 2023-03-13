@@ -35,8 +35,8 @@ func Prepare(proc *process.Process, arg any) error {
 	ap.ctr.bat = batch.NewWithSize(len(ap.Types))
 	ap.ctr.vecs = make([]*vector.Vector, len(ap.Types))
 	for i := range ap.Types {
-		vec := vector.New(ap.Types[i])
-		vector.PreAlloc(vec, 0, defines.DefaultVectorSize, proc.Mp())
+		vec := vector.NewVec(ap.Types[i])
+		vec.PreExtend(defines.DefaultVectorRows, proc.Mp())
 		ap.ctr.vecs[i] = vec
 		ap.ctr.bat.SetVector(int32(i), vec)
 	}
@@ -108,4 +108,19 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		return false, err
 	}
 	return false, nil
+}
+
+func (arg *Argument) waitRemoteRegsReady(proc *process.Process) {
+	cnt := len(arg.RemoteRegs)
+	for cnt > 0 {
+		csinfo := <-proc.DispatchNotifyCh
+		arg.ctr.remoteReceivers = append(arg.ctr.remoteReceivers, &WrapperClientSession{
+			msgId:  csinfo.MsgId,
+			cs:     csinfo.Cs,
+			uuid:   csinfo.Uid,
+			doneCh: csinfo.DoneCh,
+		})
+		cnt--
+	}
+	arg.prepared = true
 }
