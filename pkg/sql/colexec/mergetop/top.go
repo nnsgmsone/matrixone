@@ -18,13 +18,10 @@ import (
 	"bytes"
 	"container/heap"
 	"fmt"
-	"reflect"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -51,78 +48,65 @@ func Prepare(proc *process.Process, arg any) error {
 		ap.ctr.sels = make([]int64, 0, ap.Limit)
 	}
 	ap.ctr.poses = make([]int32, 0, len(ap.Fs))
-
-	ap.ctr.receiverListener = make([]reflect.SelectCase, len(proc.Reg.MergeReceivers))
-	for i, mr := range proc.Reg.MergeReceivers {
-		ap.ctr.receiverListener[i] = reflect.SelectCase{
-			Dir:  reflect.SelectRecv,
-			Chan: reflect.ValueOf(mr.Ch),
-		}
-	}
-	ap.ctr.aliveMergeReceiver = len(proc.Reg.MergeReceivers)
+	ap.ctr.childrenCount = ap.ChildrenNumber
+	ap.ctr.pm = new(colexec.PrivMem)
+	ap.ctr.pm.InitByTypes(ap.Types, proc)
 	return nil
 }
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+	ap := arg.(*Argument)
+	ctr := ap.ctr
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
-	ap := arg.(*Argument)
-	ctr := ap.ctr
-
 	if ap.Limit == 0 {
-		ap.Free(proc, false)
 		proc.SetInputBatch(nil)
 		return true, nil
 	}
-
-	if err := ctr.build(ap, proc, anal, isFirst); err != nil {
-		ap.Free(proc, true)
-		return false, err
+	for {
+		switch ctr.state {
+		case Build:
+			if err := ctr.build(ap, proc, anal, isFirst); err != nil {
+				ctr.state = End
+				return false, err
+			}
+			ctr.state = Eval
+		case Eval:
+			err := ctr.eval(ap.Limit, proc, anal, isLast)
+			ctr.state = End
+			return true, err
+		case End:
+			proc.SetInputBatch(nil)
+			return true, nil
+		}
 	}
-
-	if ctr.bat == nil {
-		ap.Free(proc, false)
-		proc.SetInputBatch(nil)
-		return true, nil
-	}
-	err := ctr.eval(ap.Limit, proc, anal, isLast)
-	ap.Free(proc, err != nil)
-	return err == nil, err
 }
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
 	for {
-		if ctr.aliveMergeReceiver == 0 {
+		if ctr.childrenCount == 0 {
 			return nil
 		}
-
 		start := time.Now()
-		chosen, value, ok := reflect.Select(ctr.receiverListener)
-		if !ok {
-			return moerr.NewInternalError(proc.Ctx, "pipeline closed unexpectedly")
+		bat := <-proc.Reg.MergeReceivers[0].Ch
+		if bat == nil {
+			ctr.childrenCount--
+			continue
 		}
 		anal.WaitStop(start)
-
-		pointer := value.UnsafePointer()
-		bat := (*batch.Batch)(pointer)
-		if bat == nil {
-			ctr.receiverListener = append(ctr.receiverListener[:chosen], ctr.receiverListener[chosen+1:]...)
-			ctr.aliveMergeReceiver--
+		length := bat.Length()
+		if length == 0 {
+			bat.SubCnt(1)
 			continue
 		}
-
-		if bat.Length() == 0 {
-			continue
-		}
-
 		anal.Input(bat, isFirst)
-
 		ctr.n = len(bat.Vecs)
 		ctr.poses = ctr.poses[:0]
 		for _, f := range ap.Fs {
 			vec, err := colexec.EvalExpr(bat, proc, f.Expr)
 			if err != nil {
+				ctr.freeBatch(bat, proc)
 				return err
 			}
 			flg := true
@@ -142,14 +126,11 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 				}
 			}
 		}
-		if ctr.bat == nil {
+		if !ctr.init {
+			ctr.init = true
 			mp := make(map[int]int)
 			for i, pos := range ctr.poses {
 				mp[int(pos)] = i
-			}
-			ctr.bat = batch.NewWithSize(len(bat.Vecs))
-			for i, vec := range bat.Vecs {
-				ctr.bat.Vecs[i] = vector.New(vec.Typ)
 			}
 			ctr.cmps = make([]compare.Compare, len(bat.Vecs))
 			for i := range ctr.cmps {
@@ -164,14 +145,14 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 						nullsLast = desc
 					}
 				}
-				ctr.cmps[i] = compare.New(bat.Vecs[i].Typ, desc, nullsLast)
+				ctr.cmps[i] = compare.New(*bat.Vecs[i].GetType(), desc, nullsLast)
 			}
 		}
 		if err := ctr.processBatch(ap.Limit, bat, proc); err != nil {
-			bat.Clean(proc.Mp())
+			bat.SubCnt(1)
 			return err
 		}
-		bat.Clean(proc.Mp())
+		bat.SubCnt(1)
 	}
 }
 
@@ -184,14 +165,18 @@ func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.
 		if start > length {
 			start = length
 		}
-		for i := int64(0); i < start; i++ {
-			for j, vec := range ctr.bat.Vecs {
-				if err := vector.UnionOne(vec, bat.Vecs[j], i, proc.Mp()); err != nil {
+		for i, vec := range ctr.pm.Vecs {
+			uf := ctr.pm.Ufs[i]
+			srcVec := bat.GetVector(int32(i))
+			for j := int64(0); j < start; j++ {
+				if err := uf(vec, srcVec, j); err != nil {
 					return err
 				}
 			}
+		}
+		for i := int64(0); i < start; i++ {
 			ctr.sels = append(ctr.sels, n)
-			ctr.bat.Zs = append(ctr.bat.Zs, bat.Zs[i])
+			ctr.pm.Bat.Zs = append(ctr.pm.Bat.Zs, bat.Zs[i])
 			n++
 		}
 		if n == limit {
@@ -212,7 +197,7 @@ func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.
 				if err := cmp.Copy(1, 0, i, ctr.sels[0], proc); err != nil {
 					return err
 				}
-				ctr.bat.Zs[0] = bat.Zs[i]
+				ctr.pm.Bat.Zs[0] = bat.Zs[i]
 			}
 			heap.Fix(ctr, 0)
 		}
@@ -225,30 +210,27 @@ func (ctr *container) eval(limit int64, proc *process.Process, anal process.Anal
 		ctr.sort()
 	}
 	for i, cmp := range ctr.cmps {
-		ctr.bat.Vecs[i] = cmp.Vector()
+		ctr.pm.Bat.SetVector(int32(i), cmp.Vector())
 	}
 	sels := make([]int64, len(ctr.sels))
 	for i, j := 0, len(ctr.sels); i < j; i++ {
 		sels[len(sels)-1-i] = heap.Pop(ctr).(int64)
 	}
-	if err := ctr.bat.Shuffle(sels, proc.Mp()); err != nil {
+	if err := ctr.pm.Bat.Shuffle(sels, proc.Mp()); err != nil {
 		return err
 	}
-	for i := ctr.n; i < len(ctr.bat.Vecs); i++ {
-		vector.Clean(ctr.bat.Vecs[i], proc.Mp())
+	for i := ctr.n; i < len(ctr.pm.Bat.Vecs); i++ {
+		ctr.pm.Bat.Vecs[i].Free(proc.Mp())
 	}
-	ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
-	ctr.bat.ExpandNulls()
-	anal.Output(ctr.bat, isLast)
-	proc.SetInputBatch(ctr.bat)
-	ctr.bat = nil
+	ctr.pm.Bat.Vecs = ctr.pm.Bat.Vecs[:ctr.n]
+	proc.SetInputBatch(ctr.pm.Bat)
 	return nil
 }
 
 // do sort work for heap, and result order will be set in container.sels
 func (ctr *container) sort() {
 	for i, cmp := range ctr.cmps {
-		cmp.Set(0, ctr.bat.Vecs[i])
+		cmp.Set(0, ctr.pm.Vecs[i])
 	}
 	heap.Init(ctr)
 }

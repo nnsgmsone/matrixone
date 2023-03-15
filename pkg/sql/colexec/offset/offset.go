@@ -72,7 +72,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			ap.ctr.OutBat.Zs = append(ap.ctr.OutBat.Zs, i+start)
 		}
 		proc.SetInputBatch(ap.ctr.OutBat)
-		return false, nil
+		return true, nil
 	}
 	ap.ctr.seen += uint64(length)
 	proc.SetInputBatch(emptyBatch)

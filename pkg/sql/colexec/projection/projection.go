@@ -57,15 +57,28 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	ap.ctr.OutBat.Reset()
 	for i, e := range ap.Es {
 		vec, err := colexec.EvalExpr(bat, proc, e)
-		if err != nil || vec.ConstExpand(false, proc.Mp()) == nil {
+		if err != nil {
 			return false, err
+		}
+		needFree := true
+		for i := range bat.Vecs {
+			if vec == bat.Vecs[i] {
+				needFree = false
+			}
 		}
 		uf := ap.ctr.Ufs[i]
 		len := vec.Length()
 		for j := 0; j < len; j++ {
 			if err := uf(ap.ctr.OutBat.Vecs[i], vec, int64(j)); err != nil {
+				if needFree {
+					vec.Free(proc.Mp())
+				}
 				return false, err
 			}
+		}
+		if needFree {
+			anal.Alloc(int64(vec.Size()))
+			vec.Free(proc.Mp())
 		}
 	}
 	ap.ctr.OutBat.Zs = append(ap.ctr.OutBat.Zs, bat.Zs...)

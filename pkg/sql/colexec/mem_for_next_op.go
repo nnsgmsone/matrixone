@@ -27,14 +27,28 @@ func (m *MemforNextOp) InitByTypes(typs []types.Type, proc *process.Process) err
 	m.OutVecs = make([]*vector.Vector, len(typs))
 	m.Ufs = make([]func(*vector.Vector, *vector.Vector, int64) error, len(typs))
 	for i := range typs {
-		vec := vector.New(typs[i])
-		vector.PreAlloc(vec, 0, defines.DefaultVectorSize, proc.Mp())
+		vec := vector.NewVec(typs[i])
+		vec.PreExtend(defines.DefaultVectorRows, proc.Mp())
 		m.OutVecs[i] = vec
 		m.OutBat.SetVector(int32(i), vec)
 		m.Ufs[i] = vector.GetUnionOneFunction(typs[i], proc.Mp())
 	}
-
 	return nil
+}
+
+func (m *MemforNextOp) Dup(proc *process.Process) (*MemforNextOp, error) {
+	dupm := new(MemforNextOp)
+	dupm.OutBat = batch.NewWithSize(len(m.Ufs))
+	dupm.OutVecs = make([]*vector.Vector, len(m.Ufs))
+	dupm.Ufs = make([]func(*vector.Vector, *vector.Vector, int64) error, len(m.Ufs))
+	for i := range m.Ufs {
+		vec := vector.NewVec(*m.OutVecs[i].GetType())
+		vec.PreExtend(defines.DefaultVectorRows, proc.Mp())
+		dupm.OutVecs[i] = vec
+		dupm.OutBat.SetVector(int32(i), vec)
+		dupm.Ufs[i] = m.Ufs[i]
+	}
+	return dupm, nil
 }
 
 func (m *MemforNextOp) CleanMemForNextOp(proc *process.Process) error {

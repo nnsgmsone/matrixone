@@ -169,7 +169,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					if err != nil {
 						return err
 					}
-					bs := vec.Col.([]bool)
+					bs := vector.MustFixedCol[bool](vec)
 					if bs[0] {
 						matched = true
 						vec.Free(proc.Mp())
@@ -206,7 +206,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process) error {
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
-		if err != nil || vec.ConstExpand(false, proc.Mp()) == nil {
+		if err != nil {
+			ctr.CleanMemForNextOp(proc)
 			return err
 		}
 		ctr.vecs[i] = vec

@@ -74,13 +74,6 @@ func TestString(t *testing.T) {
 	}
 }
 
-func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
-		require.NoError(t, err)
-	}
-}
-
 func TestProjection(t *testing.T) {
 	for _, tc := range tcs {
 		err := Prepare(tc.proc, tc.arg)
@@ -94,7 +87,7 @@ func TestProjection(t *testing.T) {
 			resultBat := tc.proc.Reg.InputBatch // compare output batch with resultBat
 			for i, v := range expeactBatch.Vecs {
 				// TODO: could add data check
-				require.Equal(t, v.Typ.Oid, resultBat.Vecs[i].Typ.Oid)
+				require.Equal(t, v.GetType(), resultBat.Vecs[i].GetType())
 			}
 			require.Equal(t, resultBat.Zs, expeactBatch.Zs)
 		}

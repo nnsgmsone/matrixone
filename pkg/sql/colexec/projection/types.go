@@ -24,6 +24,7 @@ import (
 type container struct {
 	colexec.MemforNextOp
 }
+
 type Argument struct {
 	ctr   *container
 	Types []types.Type // output vector types

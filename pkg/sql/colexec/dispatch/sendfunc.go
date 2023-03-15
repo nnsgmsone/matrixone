@@ -17,6 +17,7 @@ package dispatch
 import (
 	"context"
 	"hash/crc32"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -40,7 +41,7 @@ const (
 // common sender: send to any LocalReceiver
 func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) error {
 	refCountAdd := int64(len(ap.LocalRegs) - 1)
-	bat.AddCnt(int(refCountAdd) + 1)
+	atomic.AddInt64(&bat.Cnt, refCountAdd)
 	if jm, ok := bat.Ht.(*hashmap.JoinMap); ok {
 		jm.IncRef(refCountAdd)
 		jm.SetDupCount(int64(len(ap.LocalRegs)))
@@ -53,6 +54,7 @@ func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) e
 		case reg.Ch <- bat:
 		}
 	}
+
 	return nil
 }
 
@@ -63,33 +65,29 @@ func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) e
 	reg := ap.LocalRegs[sendto]
 	select {
 	case <-reg.Ctx.Done():
+		for len(reg.Ch) > 0 { // free memory
+			bat := <-reg.Ch
+			if bat == nil {
+				break
+			}
+			bat.Clean(proc.Mp())
+		}
 		ap.LocalRegs = append(ap.LocalRegs[:sendto], ap.LocalRegs[sendto+1:]...)
 		return nil
 	case reg.Ch <- bat:
-		bat.AddCnt(1)
 		ap.sendCnt++
 	}
+
 	return nil
 }
 
 // common sender: send to all receiver
 func sendToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) error {
 	if !ap.prepared {
-		cnt := len(ap.RemoteRegs)
-		for cnt > 0 {
-			csinfo := <-proc.DispatchNotifyCh
-			ap.ctr.remoteReceivers = append(ap.ctr.remoteReceivers, &WrapperClientSession{
-				msgId:  csinfo.MsgId,
-				cs:     csinfo.Cs,
-				uuid:   csinfo.Uid,
-				doneCh: csinfo.DoneCh,
-			})
-			cnt--
-		}
-		ap.prepared = true
+		ap.waitRemoteRegsReady(proc)
 	}
 
-	if ap.ctr.remoteReceivers != nil {
+	{ // send to remote regs
 		encodeData, errEncode := types.Encode(bat)
 		if errEncode != nil {
 			return errEncode
@@ -102,7 +100,7 @@ func sendToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) error 
 	}
 
 	refCountAdd := int64(len(ap.LocalRegs) - 1)
-	bat.AddCnt(int(refCountAdd) + 1)
+	atomic.AddInt64(&bat.Cnt, refCountAdd)
 	if jm, ok := bat.Ht.(*hashmap.JoinMap); ok {
 		jm.IncRef(refCountAdd)
 		jm.SetDupCount(int64(len(ap.LocalRegs)))
@@ -129,7 +127,7 @@ func sendBatchToClientSession(encodeBatData []byte, wcs *WrapperClientSession) e
 			msg.Id = wcs.msgId
 			msg.Data = encodeBatData
 			msg.Cmd = pipeline.BatchMessage
-			msg.Sid = pipeline.BatchEnd
+			msg.Sid = pipeline.Last
 			msg.Checksum = checksum
 		}
 		if err := wcs.cs.Write(timeoutCtx, msg); err != nil {
@@ -141,10 +139,10 @@ func sendBatchToClientSession(encodeBatData []byte, wcs *WrapperClientSession) e
 	start := 0
 	for start < len(encodeBatData) {
 		end := start + maxMessageSizeToMoRpc
-		sid := pipeline.BatchWaitingNext
+		sid := pipeline.WaitingNext
 		if end > len(encodeBatData) {
 			end = len(encodeBatData)
-			sid = pipeline.BatchEnd
+			sid = pipeline.Last
 		}
 		timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
 		_ = cancel

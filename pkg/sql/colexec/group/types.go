@@ -17,20 +17,26 @@ package group
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
+	Build = iota
+	BuildWithGroup
+	Eval
+	EvalWithGroup
+	End
+)
+
+const (
 	H8 = iota
 	HStr
-	HIndex
 )
 
 type evalVector struct {
@@ -40,12 +46,15 @@ type evalVector struct {
 
 type container struct {
 	typ       int
+	state     int
 	inserted  []uint8
 	zInserted []uint8
 
+	chunkInserted []uint8
+	chunkValues   []uint64
+
 	intHashMap *hashmap.IntHashMap
 	strHashMap *hashmap.StrHashMap
-	idx        *index.LowCardinalityIndex
 
 	aggVecs   []evalVector
 	groupVecs []evalVector
@@ -57,7 +66,10 @@ type container struct {
 
 	vecs []*vector.Vector
 
-	bat *batch.Batch
+	isEmpty bool // Indicates if it is an empty table
+
+	pmIdx int
+	pms   []*colexec.PrivMem
 }
 
 type Argument struct {
@@ -71,21 +83,16 @@ type Argument struct {
 	MultiAggs []group_concat.Argument // multiAggs, for now it's group_concat
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	ctr := arg.ctr
-	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
-		ctr.cleanHashMap()
-		ctr.cleanAggVectors(mp)
-		ctr.cleanGroupVectors(mp)
-		ctr.cleanMultiAggVecs(mp)
+func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	for i := range ap.ctr.pms {
+		ap.ctr.pms[i].Clean(proc)
 	}
+	ap.ctr.cleanHashMap()
 }
 
 func (ctr *container) ToInputType(idx int) (t []types.Type) {
 	for i := range ctr.multiVecs[idx] {
-		t = append(t, ctr.multiVecs[idx][i].vec.Typ)
+		t = append(t, *ctr.multiVecs[idx][i].vec.GetType())
 	}
 	return
 }
@@ -95,13 +102,6 @@ func (ctr *container) ToVecotrs(idx int) (vecs []*vector.Vector) {
 		vecs = append(vecs, ctr.multiVecs[idx][i].vec)
 	}
 	return
-}
-
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
-	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
-		ctr.bat = nil
-	}
 }
 
 func (ctr *container) cleanAggVectors(mp *mpool.MPool) {

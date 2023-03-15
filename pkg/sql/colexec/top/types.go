@@ -15,7 +15,6 @@
 package top
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,6 +26,7 @@ import (
 const (
 	Build = iota
 	Eval
+	End
 )
 
 type container struct {
@@ -38,7 +38,8 @@ type container struct {
 	poses []int32 // sorted list of attributes
 	cmps  []compare.Compare
 
-	bat *batch.Batch // this bat should not be used
+	bat  *batch.Batch // this bat should not be used
+	init bool         // means that it has been initialized
 }
 
 type Argument struct {
@@ -50,19 +51,15 @@ type Argument struct {
 	Types []types.Type
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	ctr := arg.ctr
-	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
-	}
+func (ap *Argument) Free(proc *process.Process, _ bool) {
+	ap.ctr.CleanMemForNextOp(proc)
 }
 
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
-	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
-		ctr.bat = nil
+func (ctr *container) freeBatch(bat *batch.Batch, proc *process.Process) {
+	for i := ctr.n; i < bat.VectorCount(); i++ {
+		bat.Vecs[i].Free(proc.Mp())
 	}
+	bat.Vecs = bat.Vecs[:ctr.n]
 }
 
 func (ctr *container) compare(vi, vj int, i, j int64) int {

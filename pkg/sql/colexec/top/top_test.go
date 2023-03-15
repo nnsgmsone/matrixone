@@ -28,8 +28,7 @@ import (
 )
 
 const (
-	Rows          = 10     // default rows
-	BenchmarkRows = 100000 // default rows for benchmark
+	Rows = 10 // default rows
 )
 
 // add unit tests for cases
@@ -58,56 +57,34 @@ func TestString(t *testing.T) {
 	}
 }
 
-func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
-		require.NoError(t, err)
-	}
-}
-
 func TestTop(t *testing.T) {
 	for _, tc := range tcs {
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
-		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
-		_, _ = Call(0, tc.proc, tc.arg, false, false)
-		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
-		_, _ = Call(0, tc.proc, tc.arg, false, false)
-		tc.proc.Reg.InputBatch = &batch.Batch{}
-		_, _ = Call(0, tc.proc, tc.arg, false, false)
-		tc.proc.Reg.InputBatch = nil
-		_, _ = Call(0, tc.proc, tc.arg, false, false)
-		if tc.proc.Reg.InputBatch != nil {
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-		}
-		tc.proc.Reg.InputBatch = nil
-		_, _ = Call(0, tc.proc, tc.arg, false, false)
-		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
-	}
-}
-
-func BenchmarkTop(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		tcs = []topTestCase{
-			newTestCase(mpool.MustNewZero(), []types.Type{{Oid: types.T_int8}}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
-			newTestCase(mpool.MustNewZero(), []types.Type{{Oid: types.T_int8}}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
-		}
-		t := new(testing.T)
-		for _, tc := range tcs {
-			err := Prepare(tc.proc, tc.arg)
+		{
+			bat := newBatch(t, tc.types, tc.proc, Rows)
+			tc.proc.SetInputBatch(bat)
+			_, err = Call(0, tc.proc, tc.arg, false, false)
 			require.NoError(t, err)
-			tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, BenchmarkRows)
-			_, _ = Call(0, tc.proc, tc.arg, false, false)
-			tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, BenchmarkRows)
-			_, _ = Call(0, tc.proc, tc.arg, false, false)
-			tc.proc.Reg.InputBatch = &batch.Batch{}
-			_, _ = Call(0, tc.proc, tc.arg, false, false)
-			tc.proc.Reg.InputBatch = nil
-			_, _ = Call(0, tc.proc, tc.arg, false, false)
-			if tc.proc.Reg.InputBatch != nil {
-				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-			}
+			bat.Clean(tc.proc.Mp())
 		}
+		{
+			bat := newBatch(t, tc.types, tc.proc, Rows)
+			tc.proc.SetInputBatch(bat)
+			_, err = Call(0, tc.proc, tc.arg, false, false)
+			require.NoError(t, err)
+			bat.Clean(tc.proc.Mp())
+		}
+		{
+			tc.proc.SetInputBatch(&batch.Batch{})
+			_, _ = Call(0, tc.proc, tc.arg, false, false)
+		}
+		{
+			tc.proc.SetInputBatch(nil)
+			_, _ = Call(0, tc.proc, tc.arg, false, false)
+		}
+		tc.arg.Free(tc.proc, false)
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
@@ -117,6 +94,7 @@ func newTestCase(m *mpool.MPool, ts []types.Type, limit int64, fs []*plan.OrderB
 		proc:  testutil.NewProcessWithMPool(m),
 		arg: &Argument{
 			Fs:    fs,
+			Types: ts,
 			Limit: limit,
 		},
 	}

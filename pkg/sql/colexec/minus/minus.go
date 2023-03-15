@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -110,7 +109,7 @@ func (ctr *container) buildHashTable(proc *process.Process, ana process.Analyze,
 		ana.Input(bat, isFirst)
 
 		itr := ctr.hashTable.NewIterator()
-		count := vector.Length(bat.Vecs[0])
+		count := bat.Vecs[0].Length()
 		for i := 0; i < count; i += hashmap.UnitLimit {
 			n := count - i
 			if n > hashmap.UnitLimit {
@@ -148,9 +147,9 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 			continue
 		}
 		ana.Input(bat, isFirst)
-
 		ctr.OutBat.Reset()
-		count := vector.Length(bat.Vecs[0])
+		count := bat.Vecs[0].Length()
+
 		itr := ctr.hashTable.NewIterator()
 		for i := 0; i < count; i += hashmap.UnitLimit {
 			oldHashGroup := ctr.hashTable.GroupCount()
