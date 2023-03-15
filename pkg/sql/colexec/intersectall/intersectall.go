@@ -160,18 +160,6 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 		analyzer.Input(bat, isFirst)
 		//counter to record whether a row should add to output batch or not
 		var cnt int
-<<<<<<< HEAD
-=======
-
-		//init output batch
-		{
-			outputBat = batch.NewWithSize(len(bat.Vecs))
-			for i := range bat.Vecs {
-				outputBat.Vecs[i] = vector.NewVec(*bat.Vecs[i].GetType())
-			}
-		}
-
->>>>>>> upstream/main
 		// probe hashTable
 		ctr.OutBat.Reset()
 		{

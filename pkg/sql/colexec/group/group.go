@@ -71,8 +71,8 @@ func Prepare(proc *process.Process, arg any) error {
 	ap.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.chunkInserted = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.chunkValues = make([]uint64, hashmap.UnitLimit)
-	ap.ctr.pms = make([]*colexec.PrivMem, 1)
-	ap.ctr.pms[0] = new(colexec.PrivMem)
+	ap.ctr.pms = make([]*colexec.MemforNextOp, 1)
+	ap.ctr.pms[0] = new(colexec.MemforNextOp)
 	ap.ctr.pms[0].InitByTypes(ap.Types, proc)
 	if len(ap.Exprs) == 0 {
 		ap.ctr.state = Build
@@ -92,7 +92,7 @@ func Prepare(proc *process.Process, arg any) error {
 		ap.ctr.vecs = make([]*vector.Vector, len(ap.Exprs))
 		ap.ctr.groupVecs = make([]evalVector, len(ap.Exprs))
 	}
-	ap.ctr.pms[ap.ctr.pmIdx].Bat.Aggs = make([]agg.Agg[any], len(ap.Aggs)+len(ap.MultiAggs))
+	ap.ctr.pms[ap.ctr.pmIdx].OutBat.Aggs = make([]agg.Agg[any], len(ap.Aggs)+len(ap.MultiAggs))
 	return nil
 }
 
@@ -138,29 +138,29 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 					return false, err
 				}
 			}
-			anal.Alloc(int64(ctr.pms[0].Bat.Size()))
-			anal.Output(ctr.pms[0].Bat, isLast)
-			proc.SetInputBatch(ctr.pms[0].Bat)
+			anal.Alloc(int64(ctr.pms[0].OutBat.Size()))
+			anal.Output(ctr.pms[0].OutBat, isLast)
+			proc.SetInputBatch(ctr.pms[0].OutBat)
 			return true, nil
 		case EvalWithGroup:
 			pm := ctr.pms[ctr.pmIdx]
 			if ap.NeedEval {
-				for i, ag := range pm.Bat.Aggs {
+				for i, ag := range pm.OutBat.Aggs {
 					vec, err := ag.Eval(proc.Mp())
 					if err != nil {
 						ctr.state = End
 						return false, err
 					}
-					pm.Bat.Aggs[i] = nil
-					pm.Bat.Vecs = append(pm.Bat.Vecs, vec)
+					pm.OutBat.Aggs[i] = nil
+					pm.OutBat.Vecs = append(pm.OutBat.Vecs, vec)
 					anal.Alloc(int64(vec.Size()))
 				}
-				for i := range pm.Bat.Zs {
-					pm.Bat.Zs[i] = 1
+				for i := range pm.OutBat.Zs {
+					pm.OutBat.Zs[i] = 1
 				}
 			}
-			anal.Output(pm.Bat, isLast)
-			proc.SetInputBatch(pm.Bat)
+			anal.Output(pm.OutBat, isLast)
+			proc.SetInputBatch(pm.OutBat)
 			ctr.pmIdx--
 			if ctr.pmIdx == -1 {
 				ctr.state = End
@@ -192,8 +192,8 @@ func (ctr *container) build(ap *Argument, bat *batch.Batch, proc *process.Proces
 		if err := ap.initAggInfo(proc); err != nil {
 			return err
 		}
-		ap.ctr.pms[ap.ctr.pmIdx].Bat.Zs = append(ap.ctr.pms[ap.ctr.pmIdx].Bat.Zs, 0)
-		for _, ag := range ap.ctr.pms[ap.ctr.pmIdx].Bat.Aggs {
+		ap.ctr.pms[ap.ctr.pmIdx].OutBat.Zs = append(ap.ctr.pms[ap.ctr.pmIdx].OutBat.Zs, 0)
+		for _, ag := range ap.ctr.pms[ap.ctr.pmIdx].OutBat.Aggs {
 			if err := ag.Grows(1, proc.Mp()); err != nil {
 				return err
 			}
@@ -253,12 +253,12 @@ func (ctr *container) buildWithGroup(ap *Argument, bat *batch.Batch, proc *proce
 			return err
 		}
 	}
-	if rows := ctr.pms[ctr.pmIdx].Bat.Length(); rows > defines.DefaultVectorRows {
-		pm := new(colexec.PrivMem)
+	if rows := ctr.pms[ctr.pmIdx].OutBat.Length(); rows > defines.DefaultVectorRows {
+		pm := new(colexec.MemforNextOp)
 		ctr.pmIdx++
 		pm.InitByTypes(ap.Types, proc)
 		ctr.pms = append(ctr.pms, pm)
-		pm.Bat.Aggs = make([]agg.Agg[any], len(ap.Aggs)+len(ap.MultiAggs))
+		pm.OutBat.Aggs = make([]agg.Agg[any], len(ap.Aggs)+len(ap.MultiAggs))
 		if err := ap.initAggInfo(proc); err != nil {
 			return err
 		}
@@ -271,9 +271,9 @@ func (ctr *container) buildWithGroup(ap *Argument, bat *batch.Batch, proc *proce
 
 func (ctr *container) processH0(bat *batch.Batch, ap *Argument, proc *process.Process) error {
 	for _, z := range bat.Zs {
-		ctr.pms[ctr.pmIdx].Bat.Zs[0] += z
+		ctr.pms[ctr.pmIdx].OutBat.Zs[0] += z
 	}
-	for i, ag := range ctr.pms[ctr.pmIdx].Bat.Aggs {
+	for i, ag := range ctr.pms[ctr.pmIdx].OutBat.Aggs {
 		if i < len(ctr.aggVecs) {
 			if err := ag.BulkFill(0, bat.Zs, []*vector.Vector{ctr.aggVecs[i].vec}); err != nil {
 				return err
@@ -340,12 +340,12 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 			ctr.inserted[k] = 1
 			hashRows++
 			cnt++
-			pm.Bat.Zs = append(pm.Bat.Zs, 0)
+			pm.OutBat.Zs = append(pm.OutBat.Zs, 0)
 		}
 		valCnt++
 	}
 	if cnt > 0 {
-		for j, vec := range pm.Vecs {
+		for j, vec := range pm.OutVecs {
 			uf := pm.Ufs[j]
 			srcVec := ctr.groupVecs[j].vec
 			for k, flg := range ctr.inserted[:n] {
@@ -356,7 +356,7 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 				}
 			}
 		}
-		for _, ag := range pm.Bat.Aggs {
+		for _, ag := range pm.OutBat.Aggs {
 			if err := ag.Grows(cnt, proc.Mp()); err != nil {
 				return err
 			}
@@ -370,19 +370,19 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 		ctr.chunkValues = ctr.chunkValues[:0]
 		ctr.chunkInserted = ctr.chunkInserted[:0]
 		oldRows := rows
-		rows += int64(pm.Bat.Length())
+		rows += int64(pm.OutBat.Length())
 		for k, v := range vals[:n] {
 			if v == 0 {
 				continue
 			}
 			ai := int64(v) - 1
 			if ai < rows && ai >= oldRows {
-				pm.Bat.Zs[ai-oldRows] += bat.Zs[i+k]
+				pm.OutBat.Zs[ai-oldRows] += bat.Zs[i+k]
 				ctr.chunkValues = append(ctr.chunkValues, v)
 				ctr.chunkInserted = append(ctr.chunkInserted, ctr.inserted[k])
 			}
 		}
-		for j, ag := range pm0.Bat.Aggs {
+		for j, ag := range pm0.OutBat.Aggs {
 			if j < len(ctr.aggVecs) {
 				err := ag.BatchFill(int64(i), ctr.chunkInserted, ctr.chunkValues, bat.Zs, []*vector.Vector{ctr.aggVecs[j].vec})
 				if err != nil {
@@ -472,13 +472,13 @@ func (ap *Argument) initAggInfo(proc *process.Process) error {
 	var err error
 
 	for i, ag := range ap.Aggs {
-		if ap.ctr.pms[ap.ctr.pmIdx].Bat.Aggs[i], err = agg.New(ag.Op, ag.Dist,
+		if ap.ctr.pms[ap.ctr.pmIdx].OutBat.Aggs[i], err = agg.New(ag.Op, ag.Dist,
 			*ap.ctr.aggVecs[i].vec.GetType()); err != nil {
 			return err
 		}
 	}
 	for i, agg := range ap.MultiAggs {
-		if ap.ctr.pms[ap.ctr.pmIdx].Bat.Aggs[i+len(ap.Aggs)] = group_concat.NewGroupConcat(&agg,
+		if ap.ctr.pms[ap.ctr.pmIdx].OutBat.Aggs[i+len(ap.Aggs)] = group_concat.NewGroupConcat(&agg,
 			ap.ctr.ToInputType(i)); err != nil {
 			return err
 		}
