@@ -45,6 +45,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 
 	for {
 		if ctr.childrenCount == 0 {
+			proc.SetInputBatch(nil)
 			return true, nil
 		}
 
@@ -61,11 +62,12 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			continue
 		}
 
-		anal.Input(bat, isFirst)
 		if ap.ctr.seen >= ap.Limit {
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
+
+		anal.Input(bat, isFirst)
 
 		newSeen := ap.ctr.seen + uint64(bat.Length())
 		if newSeen > ap.Limit {
@@ -87,6 +89,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			return true, nil
 		}
 		ap.ctr.seen = newSeen
+		proc.SetInputBatch(bat)
 		anal.Output(bat, isLast)
 		return false, nil
 	}
