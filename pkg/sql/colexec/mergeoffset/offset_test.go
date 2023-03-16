@@ -17,6 +17,7 @@ package mergeoffset
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -30,6 +31,7 @@ import (
 const (
 	Rows          = 10      // default rows
 	BenchmarkRows = 1000000 // default rows for benchmark
+	regNum        = 2       // test reg number
 )
 
 // add unit tests for cases
@@ -46,9 +48,10 @@ var (
 
 func init() {
 	tcs = []offsetTestCase{
-		newTestCase(8),
-		//		newTestCase(10),
-		//		newTestCase(12),
+		newTestCase(0),
+		newTestCase(18),
+		newTestCase(20),
+		newTestCase(22),
 	}
 }
 
@@ -68,33 +71,33 @@ func TestPrepare(t *testing.T) {
 
 func TestOffset(t *testing.T) {
 	for _, tc := range tcs {
+		inputBatch := newBatch(t, tc.types, tc.proc, Rows)
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
-		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(t, tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[1].Ch <- &batch.Batch{}
-		tc.proc.Reg.MergeReceivers[1].Ch <- nil
+		for i := 0; i < regNum; i++ {
+			tc.proc.Reg.MergeReceivers[0].Ch <- inputBatch
+			tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
+			tc.proc.Reg.MergeReceivers[0].Ch <- nil
+		}
+
+		outputRowCnt := 0
 		for {
-			if ok, err := Call(0, tc.proc, tc.arg, false, false); ok || err != nil {
-				if tc.proc.Reg.InputBatch != nil {
-					tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+			end, err := Call(0, tc.proc, tc.arg, false, false)
+			require.NoError(t, err)
+			if tc.proc.Reg.InputBatch != nil {
+				outputRowCnt += tc.proc.Reg.InputBatch.Length()
+			}
+			if end {
+				fmt.Printf("Rows*regNum = %d, offset = %d", Rows*regNum, tc.arg.Offset)
+				if Rows*regNum > tc.arg.Offset {
+					expectLen := Rows*regNum - int(tc.arg.Offset)
+					require.Equal(t, expectLen, outputRowCnt)
 				}
 				break
 			}
-			if tc.proc.Reg.InputBatch != nil {
-				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-			}
 		}
-		for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
-			for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
-				bat := <-tc.proc.Reg.MergeReceivers[i].Ch
-				if bat != nil {
-					bat.Clean(tc.proc.Mp())
-				}
-			}
-		}
+		tc.arg.Free(tc.proc, false)
+		inputBatch.Clean(tc.proc.GetMPool())
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
@@ -111,55 +114,41 @@ func BenchmarkOffset(b *testing.B) {
 		for _, tc := range tcs {
 			err := Prepare(tc.proc, tc.arg)
 			require.NoError(t, err)
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.types, tc.proc, BenchmarkRows)
-			tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(t, tc.types, tc.proc, BenchmarkRows)
-			tc.proc.Reg.MergeReceivers[1].Ch <- &batch.Batch{}
-			tc.proc.Reg.MergeReceivers[1].Ch <- nil
+			inputBatch := newBatch(t, tc.types, tc.proc, Rows)
+			for i := 0; i < regNum; i++ {
+				tc.proc.Reg.MergeReceivers[0].Ch <- inputBatch
+				tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
+				tc.proc.Reg.MergeReceivers[0].Ch <- nil
+			}
 			for {
 				if ok, err := Call(0, tc.proc, tc.arg, false, false); ok || err != nil {
-					if tc.proc.Reg.InputBatch != nil {
-						tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-					}
 					break
 				}
-				if tc.proc.Reg.InputBatch != nil {
-					tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-				}
 			}
-			for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
-				for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
-					bat := <-tc.proc.Reg.MergeReceivers[i].Ch
-					if bat != nil {
-						bat.Clean(tc.proc.Mp())
-					}
-				}
-			}
-
+			tc.arg.Free(tc.proc, false)
+			inputBatch.Clean(tc.proc.GetMPool())
+			require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 		}
 	}
 }
 
 func newTestCase(offset uint64) offsetTestCase {
+	testTypes := []types.Type{{Oid: types.T_int8}}
 	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
-	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
+	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
 		Ctx: ctx,
-		Ch:  make(chan *batch.Batch, 3),
+		Ch:  make(chan *batch.Batch, regNum*3+1),
 	}
-	proc.Reg.MergeReceivers[1] = &process.WaitRegister{
-		Ctx: ctx,
-		Ch:  make(chan *batch.Batch, 3),
-	}
+
 	return offsetTestCase{
-		proc: proc,
-		types: []types.Type{
-			{Oid: types.T_int8},
-		},
+		proc:  proc,
+		types: testTypes,
 		arg: &Argument{
-			Offset: offset,
+			Offset:         offset,
+			Types:          testTypes,
+			ChildrenNumber: regNum,
 		},
 		cancel: cancel,
 	}
