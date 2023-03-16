@@ -48,7 +48,7 @@ type container struct {
 	isEmpty       bool // Indicates if it is an empty table
 	pmIdx         int
 	childrenCount int
-	pms           []*colexec.PrivMem
+	pms           []*colexec.MemforNextOp
 }
 
 type Argument struct {
@@ -60,7 +60,7 @@ type Argument struct {
 
 func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	for i := range ap.ctr.pms {
-		ap.ctr.pms[i].Clean(proc)
+		ap.ctr.pms[i].CleanMemForNextOp(proc)
 	}
 	ap.ctr.cleanHashMap()
 }
