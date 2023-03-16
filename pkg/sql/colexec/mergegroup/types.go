@@ -15,11 +15,9 @@
 package mergegroup
 
 import (
-	"reflect"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -41,36 +39,30 @@ type container struct {
 	inserted  []uint8
 	zInserted []uint8
 
+	chunkInserted []uint8
+	chunkValues   []uint64
+
 	intHashMap *hashmap.IntHashMap
 	strHashMap *hashmap.StrHashMap
 
-	bat *batch.Batch
-
-	// aliveMergeReceiver is a count for no-close receiver
-	aliveMergeReceiver int
-	// receiverListener is a structure to listen all the merge receiver.
-	receiverListener []reflect.SelectCase
+	isEmpty       bool // Indicates if it is an empty table
+	pmIdx         int
+	childrenCount int
+	pms           []*colexec.PrivMem
 }
 
 type Argument struct {
-	NeedEval bool // need to projection the aggregate column
-	ctr      *container
+	NeedEval       bool // need to projection the aggregate column
+	ChildrenNumber int
+	Types          []types.Type
+	ctr            *container
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	ctr := arg.ctr
-	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
-		ctr.cleanHashMap()
+func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	for i := range ap.ctr.pms {
+		ap.ctr.pms[i].Clean(proc)
 	}
-}
-
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
-	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
-		ctr.bat = nil
-	}
+	ap.ctr.cleanHashMap()
 }
 
 func (ctr *container) cleanHashMap() {
