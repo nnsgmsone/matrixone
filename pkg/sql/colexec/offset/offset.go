@@ -19,7 +19,6 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -34,8 +33,7 @@ func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.seen = 0
-	ap.ctr.pm = new(colexec.PrivMem)
-	ap.ctr.pm.InitByTypes(ap.Types, proc)
+	ap.ctr.InitByTypes(ap.Types, proc)
 	return nil
 }
 
@@ -59,10 +57,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		return false, nil
 	}
 	if ap.ctr.seen+uint64(length) > ap.Offset {
-		ap.ctr.pm.Bat.Reset()
+		ap.ctr.OutBat.Reset()
 		start, count := int64(ap.Offset-ap.ctr.seen), int64(length)-int64(ap.Offset-ap.ctr.seen)
-		for i, vec := range ap.ctr.pm.Vecs {
-			uf := ap.ctr.pm.Ufs[i]
+		for i, vec := range ap.ctr.OutVecs {
+			uf := ap.ctr.Ufs[i]
 			srcVec := bat.GetVector(int32(i))
 			for j := int64(0); j < count; j++ {
 				if err := uf(vec, srcVec, j+start); err != nil {
@@ -71,10 +69,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			}
 		}
 		for i := int64(0); i < count; i++ {
-			ap.ctr.pm.Bat.Zs = append(ap.ctr.pm.Bat.Zs, i+start)
+			ap.ctr.OutBat.Zs = append(ap.ctr.OutBat.Zs, i+start)
 		}
-		proc.SetInputBatch(ap.ctr.pm.Bat)
-		return false, nil
+		proc.SetInputBatch(ap.ctr.OutBat)
+		return true, nil
 	}
 	ap.ctr.seen += uint64(length)
 	proc.SetInputBatch(emptyBatch)

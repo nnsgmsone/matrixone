@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -31,8 +30,7 @@ func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.seen = 0
-	ap.ctr.pm = new(colexec.PrivMem)
-	ap.ctr.pm.InitByTypes(ap.Types, proc)
+	ap.ctr.InitByTypes(ap.Types, proc)
 	return nil
 }
 
@@ -42,26 +40,29 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	if bat == nil {
 		return true, nil
 	}
-	if bat.Length() == 0 {
-		return false, nil
-	}
 	ap := arg.(*Argument)
-	anal := proc.GetAnalyze(idx)
-	anal.Start()
-	defer anal.Stop()
-	anal.Input(bat, isFirst)
 	if ap.ctr.seen >= ap.Limit {
 		proc.SetInputBatch(nil)
 		return true, nil
 	}
+
+	if bat.Length() == 0 {
+		return false, nil
+	}
+
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
+	defer anal.Stop()
+	anal.Input(bat, isFirst)
+
 	length := bat.Length()
 	newSeen := ap.ctr.seen + uint64(length)
 
 	if newSeen >= ap.Limit {
-		ap.ctr.pm.Bat.Reset()
+		ap.ctr.OutBat.Reset()
 		count := int64(ap.Limit - ap.ctr.seen)
-		for i, vec := range ap.ctr.pm.Vecs {
-			uf := ap.ctr.pm.Ufs[i]
+		for i, vec := range ap.ctr.OutVecs {
+			uf := ap.ctr.Ufs[i]
 			srcVec := bat.GetVector(int32(i))
 			for j := int64(0); j < count; j++ {
 				if err := uf(vec, srcVec, j); err != nil {
@@ -69,10 +70,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				}
 			}
 		}
-		ap.ctr.pm.Bat.Zs = append(ap.ctr.pm.Bat.Zs, bat.Zs[:count]...)
+		ap.ctr.OutBat.Zs = append(ap.ctr.OutBat.Zs, bat.Zs[:count]...)
 		ap.ctr.seen = newSeen
-		anal.Output(ap.ctr.pm.Bat, isLast)
-		proc.SetInputBatch(ap.ctr.pm.Bat)
+		anal.Output(ap.ctr.OutBat, isLast)
+		proc.SetInputBatch(ap.ctr.OutBat)
 		return true, nil
 	}
 	anal.Output(bat, isLast)

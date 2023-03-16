@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -29,9 +28,8 @@ func String(_ any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
-	ap.ctr.pm = new(colexec.PrivMem)
-	ap.ctr.pm.InitByTypes(ap.Types, proc)
 	ap.ctr.childrenCount = ap.ChildrenNumber
+	ap.ctr.InitByTypes(ap.Types, proc)
 	return nil
 }
 
@@ -59,9 +57,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			bat.SubCnt(1)
 			continue
 		}
-		ap.ctr.pm.Bat.Reset()
-		for i, vec := range ap.ctr.pm.Vecs {
-			uf := ap.ctr.pm.Ufs[i]
+		ap.ctr.OutBat.Reset()
+		for i, vec := range ap.ctr.OutVecs {
+			uf := ap.ctr.Ufs[i]
 			srcVec := bat.GetVector(int32(i))
 			for j := int64(0); j < int64(length); j++ {
 				if err := uf(vec, srcVec, j); err != nil {
@@ -70,11 +68,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				}
 			}
 		}
-		ap.ctr.pm.Bat.Zs = append(ap.ctr.pm.Bat.Zs, bat.Zs...)
+		ap.ctr.OutBat.Zs = append(ap.ctr.OutBat.Zs, bat.Zs...)
 		anal.Input(bat, isFirst)
 		bat.SubCnt(1)
-		anal.Output(ap.ctr.pm.Bat, isLast)
-		proc.SetInputBatch(ap.ctr.pm.Bat)
+		anal.Output(ap.ctr.OutBat, isLast)
+		proc.SetInputBatch(ap.ctr.OutBat)
 		return false, nil
 	}
 }

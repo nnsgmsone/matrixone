@@ -33,9 +33,10 @@ const (
 
 // add unit tests for cases
 type projectionTestCase struct {
-	arg   *Argument
-	types []types.Type
-	proc  *process.Process
+	arg         *Argument
+	inputTypes  []types.Type
+	resultTypes []types.Type
+	proc        *process.Process
 }
 
 var (
@@ -46,16 +47,21 @@ func init() {
 	tcs = []projectionTestCase{
 		{
 			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
-			types: []types.Type{
+			inputTypes: []types.Type{
 				{Oid: types.T_int8},
+				{Oid: types.T_int16},
+				{Oid: types.T_int32},
+			},
+			resultTypes: []types.Type{
+				{Oid: types.T_int32},
 			},
 			arg: &Argument{
 				Es: []*plan.Expr{
-					{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
+					{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 2}}}, // get col[2] from input batch
 				},
 				Types: []types.Type{
-					{Oid: types.T_int8},
-				},
+					{Oid: types.T_int32},
+				}, // should same with resultTypes
 			},
 		},
 	}
@@ -72,28 +78,35 @@ func TestProjection(t *testing.T) {
 	for _, tc := range tcs {
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
-		{
-			bat := newBatch(t, tc.types, tc.proc, Rows)
-			tc.proc.SetInputBatch(bat)
-			_, err = Call(0, tc.proc, tc.arg, false, false)
-			require.NoError(t, err)
-			bat.Clean(tc.proc.Mp())
-		}
-		{
-			bat := newBatch(t, tc.types, tc.proc, Rows)
-			tc.proc.SetInputBatch(bat)
-			_, err = Call(0, tc.proc, tc.arg, false, false)
-			require.NoError(t, err)
-			bat.Clean(tc.proc.Mp())
-		}
-		{
-			tc.proc.SetInputBatch(&batch.Batch{})
+		inputBatch := newBatch(t, tc.inputTypes, tc.proc, Rows)
+		expeactBatch := newBatch(t, tc.resultTypes, tc.proc, Rows)
+
+		for cnt := 0; cnt < 2; cnt++ {
+			tc.proc.Reg.InputBatch = inputBatch
 			_, _ = Call(0, tc.proc, tc.arg, false, false)
+			resultBat := tc.proc.Reg.InputBatch // compare output batch with resultBat
+			for i, v := range expeactBatch.Vecs {
+				// TODO: could add data check
+				require.Equal(t, v.GetType(), resultBat.Vecs[i].GetType())
+			}
+			require.Equal(t, resultBat.Zs, expeactBatch.Zs)
 		}
-		{
-			tc.proc.SetInputBatch(nil)
-			_, _ = Call(0, tc.proc, tc.arg, false, false)
-		}
+
+		// test empty batch
+		tc.proc.Reg.InputBatch = &batch.Batch{}
+		end, err := Call(0, tc.proc, tc.arg, false, false)
+		require.Equal(t, false, end)
+		require.NoError(t, err)
+
+		// test nil batch
+		tc.proc.Reg.InputBatch = nil
+		end, err = Call(0, tc.proc, tc.arg, false, false)
+		require.Equal(t, true, end)
+		require.NoError(t, err)
+
+		// test mem
+		inputBatch.Clean(tc.proc.Mp())
+		expeactBatch.Clean(tc.proc.Mp())
 		tc.arg.Free(tc.proc, false)
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}

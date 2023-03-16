@@ -33,8 +33,7 @@ func String(arg any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
-	ap.ctr.pm = new(colexec.PrivMem)
-	ap.ctr.pm.InitByTypes(ap.Types, proc)
+	ap.ctr.InitByTypes(ap.Types, proc)
 	return nil
 }
 
@@ -65,9 +64,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		return false, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
 	}
 	bs := vector.MustFixedCol[bool](vec)
-	ap.ctr.pm.Bat.Reset()
-	for i, vec := range ap.ctr.pm.Vecs {
-		uf := ap.ctr.pm.Ufs[i]
+	ap.ctr.OutBat.Reset()
+	for i, vec := range ap.ctr.OutVecs {
+		uf := ap.ctr.Ufs[i]
 		srcVec := bat.GetVector(int32(i))
 		for j := range bs {
 			if bs[j] {
@@ -77,8 +76,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			}
 		}
 	}
-	ap.ctr.pm.Bat.Zs = append(ap.ctr.pm.Bat.Zs, bat.Zs[:len(bs)]...)
-	anal.Output(ap.ctr.pm.Bat, isLast)
-	proc.SetInputBatch(ap.ctr.pm.Bat)
+	ap.ctr.OutBat.Zs = append(ap.ctr.OutBat.Zs, bat.Zs[:len(bs)]...)
+	anal.Output(ap.ctr.OutBat, isLast)
+	proc.SetInputBatch(ap.ctr.OutBat)
 	return false, nil
 }

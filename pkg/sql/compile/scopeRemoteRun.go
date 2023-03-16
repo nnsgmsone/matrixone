@@ -609,7 +609,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Types:     convertToPlanTypes(t.Typs),
 			LeftCond:  t.Conditions[0],
 			RightCond: t.Conditions[1],
-			Result:    t.Result,
 		}
 	case *dispatch.Argument:
 		in.Dispatch = &pipeline.Dispatch{FuncId: int32(t.FuncId)}
@@ -900,7 +899,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Conditions: [][]*plan.Expr{
 				t.LeftCond, t.RightCond,
 			},
-			Result: t.Result,
 		}
 	case vm.Dispatch:
 		t := opr.GetDispatch()

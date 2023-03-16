@@ -30,14 +30,16 @@ const (
 )
 
 type container struct {
+	colexec.MemforNextOp
+
 	n     int // result vector number
 	state int
 	sels  []int64
 	poses []int32 // sorted list of attributes
 	cmps  []compare.Compare
 
-	init bool // means that it has been initialized
-	pm   *colexec.PrivMem
+	bat  *batch.Batch // this bat should not be used
+	init bool         // means that it has been initialized
 }
 
 type Argument struct {
@@ -50,7 +52,7 @@ type Argument struct {
 }
 
 func (ap *Argument) Free(proc *process.Process, _ bool) {
-	ap.ctr.pm.Clean(proc)
+	ap.ctr.CleanMemForNextOp(proc)
 }
 
 func (ctr *container) freeBatch(bat *batch.Batch, proc *process.Process) {

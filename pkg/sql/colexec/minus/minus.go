@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -31,7 +30,7 @@ func Prepare(proc *process.Process, argument any) error {
 	var err error
 	arg := argument.(*Argument)
 	{
-		arg.ctr.pm.InitByTypes(arg.Types, proc)
+		arg.ctr.InitByTypes(arg.Types, proc)
 		arg.ctr.hashTable, err = hashmap.NewStrMap(true, arg.IBucket, arg.NBucket, proc.Mp())
 		if err != nil {
 			return err
@@ -148,18 +147,9 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 			continue
 		}
 		ana.Input(bat, isFirst)
-
-<<<<<<< HEAD
-		ctr.pm.Bat.Reset()
-		count := vector.Length(bat.Vecs[0])
-=======
-		ctr.bat = batch.NewWithSize(len(bat.Vecs))
-		for i := range bat.Vecs {
-			ctr.bat.Vecs[i] = vector.NewVec(*bat.Vecs[i].GetType())
-		}
-
+		ctr.OutBat.Reset()
 		count := bat.Vecs[0].Length()
->>>>>>> upstream/main
+
 		itr := ctr.hashTable.NewIterator()
 		for i := 0; i < count; i += hashmap.UnitLimit {
 			oldHashGroup := ctr.hashTable.GroupCount()
@@ -180,7 +170,7 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 					// ensure that the same value will only be inserted once.
 					rows++
 					inserted[j] = 1
-					ctr.pm.Bat.Zs = append(ctr.pm.Bat.Zs, 1)
+					ctr.OutBat.Zs = append(ctr.OutBat.Zs, 1)
 				}
 			}
 
@@ -188,10 +178,10 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 			insertCount := int(newHashGroup - oldHashGroup)
 			if insertCount > 0 {
 				for pos := range bat.Vecs {
-					uf := ctr.pm.Ufs[pos]
+					uf := ctr.Ufs[pos]
 					for j := 0; j < n; j++ {
 						if inserted[j] == 1 {
-							if err := uf(ctr.pm.Bat.Vecs[pos], bat.Vecs[pos], int64(j)); err != nil {
+							if err := uf(ctr.OutBat.Vecs[pos], bat.Vecs[pos], int64(j)); err != nil {
 								return false, err
 							}
 						}
@@ -199,8 +189,8 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 				}
 			}
 		}
-		ana.Output(ctr.pm.Bat, isLast)
-		proc.SetInputBatch(ctr.pm.Bat)
+		ana.Output(ctr.OutBat, isLast)
+		proc.SetInputBatch(ctr.OutBat)
 		return false, nil
 	}
 }

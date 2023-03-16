@@ -47,8 +47,7 @@ func Prepare(proc *process.Process, arg any) error {
 		ap.ctr.sels = make([]int64, 0, ap.Limit)
 	}
 	ap.ctr.poses = make([]int32, 0, len(ap.Fs))
-	ap.ctr.pm = new(colexec.PrivMem)
-	ap.ctr.pm.InitByTypes(ap.Types, proc)
+	ap.ctr.InitByTypes(ap.Types, proc)
 	return nil
 }
 
@@ -148,8 +147,8 @@ func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.
 		if start > length {
 			start = length
 		}
-		for i, vec := range ctr.pm.Vecs {
-			uf := ctr.pm.Ufs[i]
+		for i, vec := range ctr.OutVecs {
+			uf := ctr.Ufs[i]
 			srcVec := bat.GetVector(int32(i))
 			for j := int64(0); j < start; j++ {
 				if err := uf(vec, srcVec, j); err != nil {
@@ -159,7 +158,7 @@ func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.
 		}
 		for i := int64(0); i < start; i++ {
 			ctr.sels = append(ctr.sels, n)
-			ctr.pm.Bat.Zs = append(ctr.pm.Bat.Zs, bat.Zs[i])
+			ctr.OutBat.Zs = append(ctr.OutBat.Zs, bat.Zs[i])
 			n++
 		}
 		if n == limit {
@@ -180,7 +179,7 @@ func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.
 				if err := cmp.Copy(1, 0, i, ctr.sels[0], proc); err != nil {
 					return err
 				}
-				ctr.pm.Bat.Zs[0] = bat.Zs[i]
+				ctr.OutBat.Zs[0] = bat.Zs[i]
 			}
 			heap.Fix(ctr, 0)
 		}
@@ -193,27 +192,27 @@ func (ctr *container) eval(limit int64, proc *process.Process) error {
 		ctr.sort()
 	}
 	for i, cmp := range ctr.cmps {
-		ctr.pm.Bat.SetVector(int32(i), cmp.Vector())
+		ctr.OutBat.SetVector(int32(i), cmp.Vector())
 	}
 	sels := make([]int64, len(ctr.sels))
 	for i, j := 0, len(ctr.sels); i < j; i++ {
 		sels[len(sels)-1-i] = heap.Pop(ctr).(int64)
 	}
-	if err := ctr.pm.Bat.Shuffle(sels, proc.Mp()); err != nil {
+	if err := ctr.OutBat.Shuffle(sels, proc.Mp()); err != nil {
 		return err
 	}
-	for i := ctr.n; i < len(ctr.pm.Bat.Vecs); i++ {
-		ctr.pm.Bat.Vecs[i].Free(proc.Mp())
+	for i := ctr.n; i < len(ctr.OutBat.Vecs); i++ {
+		ctr.OutBat.Vecs[i].Free(proc.Mp())
 	}
-	ctr.pm.Bat.Vecs = ctr.pm.Bat.Vecs[:ctr.n]
-	proc.SetInputBatch(ctr.pm.Bat)
+	ctr.OutBat.Vecs = ctr.OutBat.Vecs[:ctr.n]
+	proc.SetInputBatch(ctr.OutBat)
 	return nil
 }
 
 // do sort work for heap, and result order will be set in container.sels
 func (ctr *container) sort() {
 	for i, cmp := range ctr.cmps {
-		cmp.Set(0, ctr.pm.Vecs[i])
+		cmp.Set(0, ctr.OutVecs[i])
 	}
 	heap.Init(ctr)
 }

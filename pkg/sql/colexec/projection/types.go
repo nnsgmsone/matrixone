@@ -22,7 +22,7 @@ import (
 )
 
 type container struct {
-	pm *colexec.PrivMem
+	colexec.MemforNextOp
 }
 
 type Argument struct {
@@ -32,5 +32,5 @@ type Argument struct {
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	arg.ctr.pm.Clean(proc)
+	arg.ctr.CleanMemForNextOp(proc)
 }

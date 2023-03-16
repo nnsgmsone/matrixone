@@ -28,7 +28,7 @@ const (
 )
 
 type Argument struct {
-	ctr container
+	ctr *container
 
 	// hash table bucket related information.
 	IBucket uint64
@@ -39,6 +39,8 @@ type Argument struct {
 }
 
 type container struct {
+	colexec.MemforNextOp
+
 	// operator state
 	state int
 
@@ -50,8 +52,6 @@ type container struct {
 
 	// process bucket mark
 	inBuckets []uint8
-
-	pm *colexec.PrivMem
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
@@ -60,5 +60,5 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		ctr.hashTable.Free()
 		ctr.hashTable = nil
 	}
-	ctr.pm.Clean(proc)
+	ctr.CleanMemForNextOp(proc)
 }

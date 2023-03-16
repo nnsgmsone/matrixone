@@ -28,7 +28,7 @@ func String(_ any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
-	ap.ctr.pm.InitByTypes(ap.Typs, proc)
+	ap.ctr.InitByTypes(ap.Typs, proc)
 	return nil
 }
 
@@ -83,48 +83,26 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
 	defer bat.Clean(proc.Mp())
 	anal.Input(bat, isFirst)
-<<<<<<< HEAD
-	ctr.pm.Bat.Reset()
-=======
-	rbat := batch.NewWithSize(len(ap.Result))
-	rbat.Zs = proc.Mp().GetSels()
-	for i, rp := range ap.Result {
-		if rp.Rel == 0 {
-			rbat.Vecs[i] = vector.NewVec(*bat.Vecs[rp.Pos].GetType())
-		} else {
-			rbat.Vecs[i] = vector.NewVec(*ctr.bat.Vecs[rp.Pos].GetType())
-		}
-	}
->>>>>>> upstream/main
+	ctr.OutBat.Reset()
 	count := bat.Length()
 	for i := 0; i < count; i++ {
 		for j := 0; j < len(ctr.bat.Zs); j++ {
 			for k, rp := range ap.Result {
-				uf := ctr.pm.Ufs[k]
+				uf := ctr.Ufs[k]
 				if rp.Rel == 0 {
-<<<<<<< HEAD
-					if err := uf(ctr.pm.Bat.Vecs[k], bat.Vecs[rp.Pos], int64(i)); err != nil {
+					if err := uf(ctr.OutBat.Vecs[k], bat.Vecs[rp.Pos], int64(i)); err != nil {
 						return err
 					}
 				} else {
-					if err := uf(ctr.pm.Bat.Vecs[k], ctr.bat.Vecs[rp.Pos], int64(j)); err != nil {
-=======
-					if err := rbat.Vecs[k].UnionOne(bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
-						rbat.Clean(proc.Mp())
-						return err
-					}
-				} else {
-					if err := rbat.Vecs[k].UnionOne(ctr.bat.Vecs[rp.Pos], int64(j), proc.Mp()); err != nil {
-						rbat.Clean(proc.Mp())
->>>>>>> upstream/main
+					if err := uf(ctr.OutBat.Vecs[k], ctr.bat.Vecs[rp.Pos], int64(j)); err != nil {
 						return err
 					}
 				}
 			}
-			ctr.pm.Bat.Zs = append(ctr.pm.Bat.Zs, ctr.bat.Zs[j])
+			ctr.OutBat.Zs = append(ctr.OutBat.Zs, ctr.bat.Zs[j])
 		}
 	}
-	anal.Output(ctr.pm.Bat, isLast)
-	proc.SetInputBatch(ctr.pm.Bat)
+	anal.Output(ctr.OutBat, isLast)
+	proc.SetInputBatch(ctr.OutBat)
 	return nil
 }
