@@ -17,6 +17,7 @@ package mergegroup
 import (
 	"bytes"
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -28,8 +29,7 @@ import (
 )
 
 const (
-	Rows          = 10     // default rows
-	BenchmarkRows = 100000 // default rows for benchmark
+	Rows = 10 // default rows
 )
 
 // add unit tests for cases
@@ -100,86 +100,48 @@ func TestGroup(t *testing.T) {
 	for _, tc := range tcs {
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+		var wg sync.WaitGroup
+
+		wg.Add(1)
+		go func() {
+			for {
+				if ok, err := Call(0, tc.proc, tc.arg, false, false); ok || err != nil {
+					wg.Done()
+					break
+				}
+			}
+		}()
+		bat0 := newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+		bat0.AddCnt(1)
+		tc.proc.Reg.MergeReceivers[0].Ch <- bat0
 		tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[1].Ch <- &batch.Batch{}
-		tc.proc.Reg.MergeReceivers[1].Ch <- nil
-		for {
-			if ok, err := Call(0, tc.proc, tc.arg, false, false); ok || err != nil {
-				if tc.proc.Reg.InputBatch != nil {
-					tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-				}
-				break
-			}
-		}
-		for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
-			for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
-				bat := <-tc.proc.Reg.MergeReceivers[i].Ch
-				if bat != nil {
-					bat.Clean(tc.proc.Mp())
-				}
-			}
-		}
+		bat1 := newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+		bat1.AddCnt(1)
+		tc.proc.Reg.MergeReceivers[0].Ch <- bat1
+		tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
+		tc.proc.Reg.MergeReceivers[0].Ch <- nil
+		wg.Wait()
+		bat0.Clean(tc.proc.Mp())
+		bat1.Clean(tc.proc.Mp())
+		tc.arg.Free(tc.proc, false)
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
-func BenchmarkGroup(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		tcs = []groupTestCase{
-			newTestCase([]bool{false}, true, []types.Type{{Oid: types.T_int8}}),
-			newTestCase([]bool{false}, true, []types.Type{{Oid: types.T_int8}}),
-		}
-		t := new(testing.T)
-		for _, tc := range tcs {
-			err := Prepare(tc.proc, tc.arg)
-			require.NoError(t, err)
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-			tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-			tc.proc.Reg.MergeReceivers[1].Ch <- &batch.Batch{}
-			tc.proc.Reg.MergeReceivers[1].Ch <- nil
-			for {
-				if ok, err := Call(0, tc.proc, tc.arg, false, false); ok || err != nil {
-					if tc.proc.Reg.InputBatch != nil {
-						tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-					}
-					break
-				}
-			}
-			for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
-				for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
-					bat := <-tc.proc.Reg.MergeReceivers[i].Ch
-					if bat != nil {
-						bat.Clean(tc.proc.Mp())
-					}
-				}
-			}
-		}
-	}
-}
-
 func newTestCase(flgs []bool, needEval bool, ts []types.Type) groupTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
-	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
-	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
-		Ctx: ctx,
-		Ch:  make(chan *batch.Batch, 3),
-	}
-	proc.Reg.MergeReceivers[1] = &process.WaitRegister{
-		Ctx: ctx,
-		Ch:  make(chan *batch.Batch, 3),
-	}
+	proc := process.NewFromProc(testutil.NewProcessWithMPool(mpool.MustNewZero()),
+		ctx, 2)
 	return groupTestCase{
 		types:  ts,
 		flgs:   flgs,
 		proc:   proc,
 		cancel: cancel,
-		arg:    &Argument{NeedEval: needEval},
+		arg: &Argument{
+			NeedEval:       needEval,
+			ChildrenNumber: 2,
+		},
 	}
 }
 

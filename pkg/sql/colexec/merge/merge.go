@@ -29,9 +29,9 @@ func String(_ any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
-	ap.ctr.childrenCount = ap.ChildrenNumber
 	ap.ctr.pm = new(colexec.PrivMem)
 	ap.ctr.pm.InitByTypes(ap.Types, proc)
+	ap.ctr.childrenCount = ap.ChildrenNumber
 	return nil
 }
 

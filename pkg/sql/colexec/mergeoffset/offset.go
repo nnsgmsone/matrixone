@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -32,6 +33,7 @@ func Prepare(proc *process.Process, arg interface{}) error {
 	ap.ctr = new(container)
 	ap.ctr.seen = 0
 	ap.ctr.childrenCount = ap.ChildrenNumber
+	ap.ctr.pm = new(colexec.PrivMem)
 	ap.ctr.pm.InitByTypes(ap.Types, proc)
 	return nil
 }

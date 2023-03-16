@@ -95,7 +95,7 @@ func newTestCase() mergeTestCase {
 	proc := process.NewFromProc(testutil.NewProcessWithMPool(mpool.MustNewZero()),
 		ctx, 2)
 	types := []types.Type{
-		types.New(types.T_int8, 0, 0, 0),
+		types.New(types.T_int8, 0, 0),
 	}
 	return mergeTestCase{
 		proc:  proc,
