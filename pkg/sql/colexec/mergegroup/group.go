@@ -38,8 +38,8 @@ func Prepare(proc *process.Process, arg interface{}) error {
 	ap.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.chunkInserted = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.chunkValues = make([]uint64, hashmap.UnitLimit)
-	ap.ctr.pms = make([]*colexec.PrivMem, 1)
-	ap.ctr.pms[0] = new(colexec.PrivMem)
+	ap.ctr.pms = make([]*colexec.MemforNextOp, 1)
+	ap.ctr.pms[0] = new(colexec.MemforNextOp)
 	ap.ctr.pms[0].InitByTypes(ap.Types, proc)
 	ap.ctr.childrenCount = ap.ChildrenNumber
 	return nil
@@ -61,22 +61,22 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 		case Eval:
 			pm := ctr.pms[ctr.pmIdx]
 			if ap.NeedEval {
-				for i, ag := range pm.Bat.Aggs {
+				for i, ag := range pm.OutBat.Aggs {
 					vec, err := ag.Eval(proc.Mp())
 					if err != nil {
 						ctr.state = End
 						return false, err
 					}
-					pm.Bat.Aggs[i] = nil
-					pm.Bat.Vecs = append(pm.Bat.Vecs, vec)
+					pm.OutBat.Aggs[i] = nil
+					pm.OutBat.Vecs = append(pm.OutBat.Vecs, vec)
 					anal.Alloc(int64(vec.Size()))
 				}
-				for i := range pm.Bat.Zs {
-					pm.Bat.Zs[i] = 1
+				for i := range pm.OutBat.Zs {
+					pm.OutBat.Zs[i] = 1
 				}
 			}
-			anal.Output(pm.Bat, isLast)
-			proc.SetInputBatch(pm.Bat)
+			anal.Output(pm.OutBat, isLast)
+			proc.SetInputBatch(pm.OutBat)
 			ctr.pmIdx--
 			if ctr.pmIdx == -1 {
 				ctr.state = End
@@ -153,13 +153,13 @@ func (ctr *container) process(ap *Argument, bat *batch.Batch, proc *process.Proc
 			}
 		}
 	}
-	if rows := ctr.pms[ctr.pmIdx].Bat.Length(); rows > defines.DefaultVectorRows {
-		pm := new(colexec.PrivMem)
+	if rows := ctr.pms[ctr.pmIdx].OutBat.Length(); rows > defines.DefaultVectorRows {
+		pm := new(colexec.MemforNextOp)
 		ctr.pmIdx++
 		pm.InitByTypes(ap.Types, proc)
 		ctr.pms = append(ctr.pms, pm)
-		pm.Bat.Aggs = make([]agg.Agg[any], len(ctr.pms[ctr.pmIdx-1].Bat.Aggs))
-		ap.initAggInfo(ctr.pms[ctr.pmIdx-1].Bat.Aggs)
+		pm.OutBat.Aggs = make([]agg.Agg[any], len(ctr.pms[ctr.pmIdx-1].OutBat.Aggs))
+		ap.initAggInfo(ctr.pms[ctr.pmIdx-1].OutBat.Aggs)
 	}
 	switch ctr.typ {
 	case H0:
@@ -177,9 +177,9 @@ func (ctr *container) process(ap *Argument, bat *batch.Batch, proc *process.Proc
 
 func (ctr *container) processH0(bat *batch.Batch, proc *process.Process) error {
 	for _, z := range bat.Zs {
-		ctr.pms[0].Bat.Zs[0] += z
+		ctr.pms[0].OutBat.Zs[0] += z
 	}
-	for i, agg := range ctr.pms[0].Bat.Aggs {
+	for i, agg := range ctr.pms[0].OutBat.Aggs {
 		if err := agg.Merge(bat.Aggs[i], 0, 0); err != nil {
 			return err
 		}
@@ -240,12 +240,12 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 			ctr.inserted[k] = 1
 			hashRows++
 			cnt++
-			pm.Bat.Zs = append(pm.Bat.Zs, 0)
+			pm.OutBat.Zs = append(pm.OutBat.Zs, 0)
 		}
 		valCnt++
 	}
 	if cnt > 0 {
-		for j, vec := range pm.Vecs {
+		for j, vec := range pm.OutVecs {
 			uf := pm.Ufs[j]
 			srcVec := bat.GetVector(int32(j))
 			for k, flg := range ctr.inserted[:n] {
@@ -256,7 +256,7 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 				}
 			}
 		}
-		for _, ag := range pm.Bat.Aggs {
+		for _, ag := range pm.OutBat.Aggs {
 			if err := ag.Grows(cnt, proc.Mp()); err != nil {
 				return err
 			}
@@ -270,19 +270,19 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 		ctr.chunkValues = ctr.chunkValues[:0]
 		ctr.chunkInserted = ctr.chunkInserted[:0]
 		oldRows := rows
-		rows += int64(pm.Bat.Length())
+		rows += int64(pm.OutBat.Length())
 		for k, v := range vals[:n] {
 			if v == 0 {
 				continue
 			}
 			ai := int64(v) - 1
 			if ai < rows && ai >= oldRows {
-				pm.Bat.Zs[ai-oldRows] += bat.Zs[i+k]
+				pm.OutBat.Zs[ai-oldRows] += bat.Zs[i+k]
 				ctr.chunkValues = append(ctr.chunkValues, v)
 				ctr.chunkInserted = append(ctr.chunkInserted, ctr.inserted[k])
 			}
 		}
-		for j, ag := range pm0.Bat.Aggs {
+		for j, ag := range pm0.OutBat.Aggs {
 			if err := ag.BatchMerge(bat.Aggs[j], int64(i), ctr.chunkInserted, ctr.chunkValues); err != nil {
 				return err
 			}
@@ -293,6 +293,6 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 
 func (ap *Argument) initAggInfo(aggs []agg.Agg[any]) {
 	for i, ag := range aggs {
-		ap.ctr.pms[ap.ctr.pmIdx].Bat.Aggs[i] = ag.Dup()
+		ap.ctr.pms[ap.ctr.pmIdx].OutBat.Aggs[i] = ag.Dup()
 	}
 }

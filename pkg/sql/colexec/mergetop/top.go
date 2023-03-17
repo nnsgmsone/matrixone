@@ -22,6 +22,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -131,6 +133,14 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 			for i, pos := range ctr.poses {
 				mp[int(pos)] = i
 			}
+			for i := ctr.n; i < bat.VectorCount(); i++ {
+				typ := *bat.GetVector(int32(i)).GetType()
+				ctr.Ufs = append(ctr.Ufs, vector.GetUnionOneFunction(typ, proc.Mp()))
+				vec := vector.NewVec(typ)
+				vec.PreExtend(defines.DefaultVectorRows, proc.Mp())
+				ctr.OutVecs = append(ctr.OutVecs, vec)
+				ctr.OutBat.Vecs = append(ctr.OutBat.Vecs, vec)
+			}
 			ctr.cmps = make([]compare.Compare, len(bat.Vecs))
 			for i := range ctr.cmps {
 				var desc, nullsLast bool
@@ -149,9 +159,11 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		}
 		if err := ctr.processBatch(ap.Limit, bat, proc); err != nil {
 			bat.SubCnt(1)
+			ctr.freeBatch(bat, proc)
 			return err
 		}
 		bat.SubCnt(1)
+		ctr.freeBatch(bat, proc)
 	}
 }
 
