@@ -41,12 +41,14 @@ type container struct {
 
 	inBuckets []uint8
 
-	bat *batch.Batch
-
 	evecs []evalVector
 	vecs  []*vector.Vector
 
 	mp *hashmap.JoinMap
+
+	bat *batch.Batch
+
+	colexec.MemforNextOp
 }
 
 type Argument struct {
@@ -54,26 +56,14 @@ type Argument struct {
 	Ibucket    uint64 // index in buckets
 	Nbucket    uint64 // buckets count
 	Result     []colexec.ResultPos
-	Typs       []types.Type
+	Types      []types.Type
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	ctr := arg.ctr
-	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
-		ctr.cleanEvalVectors(mp)
-		ctr.cleanHashMap()
-	}
-}
-
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
-	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
-		ctr.bat = nil
-	}
+func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	ap.ctr.CleanMemForNextOp(proc)
+	ap.ctr.cleanHashMap()
 }
 
 func (ctr *container) cleanHashMap() {

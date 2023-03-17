@@ -17,9 +17,9 @@ package hashbuild
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -41,14 +41,14 @@ type container struct {
 
 	sels [][]int32
 
-	bat *batch.Batch
-
 	evecs []evalVector
 	vecs  []*vector.Vector
 
 	mp *hashmap.StrHashMap
 
 	nullSels []int32
+
+	colexec.MemforNextOp
 }
 
 type Argument struct {
@@ -59,29 +59,15 @@ type Argument struct {
 	NeedSelectList bool
 	Ibucket        uint64
 	Nbucket        uint64
-	Typs           []types.Type
+	Types          []types.Type
 	Conditions     []*plan.Expr
 
 	IsRight bool
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	ctr := arg.ctr
-	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
-		ctr.cleanEvalVectors(mp)
-		if !arg.NeedHashMap {
-			ctr.cleanHashMap()
-		}
-	}
-}
-
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
-	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
-		ctr.bat = nil
-	}
+func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	ap.ctr.CleanMemForNextOp(proc)
+	ap.ctr.cleanHashMap()
 }
 
 func (ctr *container) cleanEvalVectors(mp *mpool.MPool) {
