@@ -42,30 +42,39 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 	anal.Start()
 	defer anal.Stop()
 	ctr := ap.ctr
-
 	for {
 		if ctr.childrenCount == 0 {
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
-
 		start := time.Now()
 		bat := <-proc.Reg.MergeReceivers[0].Ch
 		anal.WaitStop(start)
-
 		if bat == nil {
 			ctr.childrenCount--
 			continue
 		}
-
 		if bat.Length() == 0 {
+			bat.SubCnt(1)
 			continue
 		}
-
 		anal.Input(bat, isFirst)
 		if ap.ctr.seen >= ap.Offset {
-			proc.SetInputBatch(bat)
-			anal.Output(bat, isLast)
+			ap.ctr.OutBat.Reset()
+			for i, vec := range ap.ctr.OutVecs {
+				uf := ap.ctr.Ufs[i]
+				srcVec := bat.GetVector(int32(i))
+				for j := int64(0); j < int64(bat.Length()); j++ {
+					if err := uf(vec, srcVec, j); err != nil {
+						bat.SubCnt(1)
+						return false, err
+					}
+				}
+			}
+			bat.SubCnt(1)
+			ap.ctr.OutBat.Zs = append(ap.ctr.OutBat.Zs, bat.Zs...)
+			proc.SetInputBatch(ap.ctr.OutBat)
+			anal.Output(ap.ctr.OutBat, isLast)
 			return false, nil
 		}
 		length := len(bat.Zs)

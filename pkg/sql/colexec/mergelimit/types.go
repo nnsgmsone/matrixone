@@ -38,5 +38,8 @@ type Argument struct {
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	for len(proc.Reg.MergeReceivers[0].Ch) > 0 {
+		<-proc.Reg.MergeReceivers[0].Ch
+	}
 	arg.ctr.CleanMemForNextOp(proc)
 }
