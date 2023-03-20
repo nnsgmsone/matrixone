@@ -15,49 +15,46 @@
 package mergeorder
 
 import (
-	"reflect"
-
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compare"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const (
+	Build = iota
+	Eval
+	End
+)
+
 type container struct {
-	n     int               // result vector number
+	n     int // result vector number
+	state int
 	poses []int32           // sorted list of attributes
 	cmps  []compare.Compare // compare structures used to do sort work for attrs
-
-	bat *batch.Batch // bat store the result of merge-order
-
-	// aliveMergeReceiver is a count for no-close receiver
-	aliveMergeReceiver int
-	// receiverListener is a structure to listen all the merge receiver.
-	receiverListener []reflect.SelectCase
 
 	// some reused memory
 	unionFlag                    []uint8
 	compare0Index, compare1Index []int32
 	finalSelectList              []int64
+
+	init          bool // means that it has been initialized
+	childrenCount int
+	colexec.MemforNextOp
 }
 
 type Argument struct {
-	ctr *container          // ctr stores the attributes needn't do Serialization work
-	Fs  []*plan.OrderBySpec // Fields store the order information
+	ctr            *container // ctr stores the attributes needn't do Serialization work
+	ChildrenNumber int
+	Fs             []*plan.OrderBySpec // Fields store the order information
+	// output vector types
+	Types []types.Type
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	ctr := arg.ctr
-	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
+func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	for len(proc.Reg.MergeReceivers[0].Ch) > 0 {
+		<-proc.Reg.MergeReceivers[0].Ch
 	}
-}
-
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
-	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
-		ctr.bat = nil
-	}
+	ap.ctr.CleanMemForNextOp(proc)
 }

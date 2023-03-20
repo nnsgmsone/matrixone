@@ -17,6 +17,7 @@ package hashbuild
 import (
 	"bytes"
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -30,8 +31,7 @@ import (
 )
 
 const (
-	Rows          = 10     // default rows
-	BenchmarkRows = 100000 // default rows for benchmark
+	Rows = 10 // default rows
 )
 
 // add unit tests for cases
@@ -71,48 +71,28 @@ func TestBuild(t *testing.T) {
 	for _, tc := range tcs[:1] {
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+		var wg sync.WaitGroup
+
+		wg.Add(1)
+		go func() {
+			for {
+				if ok, err := Call(0, tc.proc, tc.arg, false, false); ok || err != nil {
+					wg.Done()
+					break
+				}
+			}
+			ht := tc.proc.InputBatch().Ht.(*hashmap.JoinMap)
+			ht.Free()
+		}()
+		bat0 := newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+		bat0.AddCnt(1)
+		tc.proc.Reg.MergeReceivers[0].Ch <- bat0
 		tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		for {
-			ok, err := Call(0, tc.proc, tc.arg, false, false)
-			require.NoError(t, err)
-			require.Equal(t, true, ok)
-			mp := tc.proc.Reg.InputBatch.Ht.(*hashmap.JoinMap)
-			mp.Free()
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-			break
-		}
+		wg.Wait()
+		bat0.Clean(tc.proc.Mp())
 		tc.arg.Free(tc.proc, false)
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
-	}
-}
-
-func BenchmarkBuild(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		tcs = []buildTestCase{
-			newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}},
-				[]*plan.Expr{
-					newExpr(0, types.Type{Oid: types.T_int8}),
-				}),
-		}
-		t := new(testing.T)
-		for _, tc := range tcs {
-			err := Prepare(tc.proc, tc.arg)
-			require.NoError(t, err)
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-			tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			for {
-				ok, err := Call(0, tc.proc, tc.arg, false, false)
-				require.NoError(t, err)
-				require.Equal(t, true, ok)
-				mp := tc.proc.Reg.InputBatch.Ht.(*hashmap.JoinMap)
-				mp.Free()
-				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-				break
-			}
-		}
 	}
 }
 
@@ -133,20 +113,16 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 }
 
 func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
-	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
 	ctx, cancel := context.WithCancel(context.Background())
-	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
-		Ctx: ctx,
-		Ch:  make(chan *batch.Batch, 10),
-	}
+	proc := process.NewFromProc(testutil.NewProcessWithMPool(mpool.MustNewZero()),
+		ctx, 1)
 	return buildTestCase{
 		types:  ts,
 		flgs:   flgs,
 		proc:   proc,
 		cancel: cancel,
 		arg: &Argument{
-			Typs:        ts,
+			Types:       ts,
 			Conditions:  cs,
 			NeedHashMap: true,
 		},

@@ -53,6 +53,7 @@ func (m *MemforNextOp) Dup(proc *process.Process) (*MemforNextOp, error) {
 
 func (m *MemforNextOp) CleanMemForNextOp(proc *process.Process) error {
 	if m.OutBat != nil {
+		m.OutBat.Reset()
 		m.OutBat.Clean(proc.Mp())
 		m.OutBat = nil
 	}

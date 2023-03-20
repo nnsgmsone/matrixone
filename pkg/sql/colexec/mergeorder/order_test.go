@@ -17,7 +17,7 @@ package mergeorder
 import (
 	"bytes"
 	"context"
-	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -31,8 +31,7 @@ import (
 )
 
 const (
-	Rows          = 10     // default rows
-	BenchmarkRows = 100000 // default rows for benchmark
+	Rows = 10 // default rows
 )
 
 // add unit tests for cases
@@ -43,165 +42,71 @@ type orderTestCase struct {
 	cancel context.CancelFunc
 }
 
-func TestString(t *testing.T) {
-	tcs := []orderTestCase{
+var (
+	tcs []orderTestCase
+)
+
+func init() {
+	tcs = []orderTestCase{
 		newTestCase([]types.Type{{Oid: types.T_int8}}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
 		newTestCase([]types.Type{{Oid: types.T_int8}}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
 		newTestCase([]types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []*plan.OrderBySpec{{Expr: newExpression(1), Flag: 0}}),
 		newTestCase([]types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
 		newTestCase([]types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}, {Expr: newExpression(1), Flag: 0}}),
 	}
+}
+
+func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
 	for _, tc := range tcs {
 		String(tc.arg, buf)
 	}
 }
 
-func TestPrepare(t *testing.T) {
-	tcs := []orderTestCase{
-		newTestCase([]types.Type{{Oid: types.T_int8}}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
-		newTestCase([]types.Type{{Oid: types.T_int8}}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
-		newTestCase([]types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []*plan.OrderBySpec{{Expr: newExpression(1), Flag: 0}}),
-		newTestCase([]types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
-		newTestCase([]types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}, {Expr: newExpression(1), Flag: 0}}),
-	}
+func TestOrder(t *testing.T) {
 	for _, tc := range tcs {
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
-	}
-}
+		var wg sync.WaitGroup
 
-func TestOrder(t *testing.T) {
-	tcs := []orderTestCase{
-		newTestCase([]types.Type{{Oid: types.T_int8}}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
-		newTestCase([]types.Type{{Oid: types.T_int8}}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
-		newTestCase([]types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []*plan.OrderBySpec{{Expr: newExpression(1), Flag: 0}}),
-		newTestCase([]types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
-		newTestCase([]types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}, {Expr: newExpression(1), Flag: 0}}),
-	}
-
-	for tci, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
-		require.NoError(t, err)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newIntBatch(tc.types, tc.proc, Rows, tc.arg.Fs)
+		wg.Add(1)
+		go func() {
+			for {
+				if ok, err := Call(0, tc.proc, tc.arg, false, false); ok || err != nil {
+					wg.Done()
+					break
+				}
+			}
+		}()
+		bat0 := newIntBatch(tc.types, tc.proc, Rows, tc.arg.Fs)
+		bat0.AddCnt(1)
+		tc.proc.Reg.MergeReceivers[0].Ch <- bat0
 		tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.proc.Reg.MergeReceivers[1].Ch <- newIntBatch(tc.types, tc.proc, Rows, tc.arg.Fs)
-		tc.proc.Reg.MergeReceivers[1].Ch <- &batch.Batch{}
-		tc.proc.Reg.MergeReceivers[1].Ch <- nil
-		for {
-			if ok, err := Call(0, tc.proc, tc.arg, false, false); ok || err != nil {
-				require.NoError(t, err)
-				// do the result check
-				if len(tc.arg.Fs) > 0 {
-					desc := tc.arg.Fs[0].Flag&plan.OrderBySpec_DESC != 0
-					index := tc.arg.Fs[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos
-					bat := tc.proc.Reg.InputBatch
-					vec := bat.Vecs[index]
-					if vec.GetType().Oid == types.T_int8 {
-						i8c := vector.MustFixedCol[int8](vec)
-						if desc {
-							for j := range i8c {
-								if j > 0 {
-									require.True(t, i8c[j] <= i8c[j-1], fmt.Sprintf("tc %d require desc, but get %v", tci, i8c))
-								}
-							}
-						} else {
-							for j := range i8c {
-								if j > 0 {
-									require.True(t, i8c[j] >= i8c[j-1])
-								}
-							}
-						}
-					} else if vec.GetType().Oid == types.T_int64 {
-						i64c := vector.MustFixedCol[int64](vec)
-						if desc {
-							for j := range i64c {
-								if j > 0 {
-									require.True(t, i64c[j] <= i64c[j-1])
-								}
-							}
-						} else {
-							for j := range i64c {
-								if j > 0 {
-									require.True(t, i64c[j] >= i64c[j-1])
-								}
-							}
-						}
-					}
-				}
-
-				if tc.proc.Reg.InputBatch != nil {
-					tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-				}
-				break
-			}
-		}
-		for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
-			for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
-				bat := <-tc.proc.Reg.MergeReceivers[i].Ch
-				if bat != nil {
-					bat.Clean(tc.proc.Mp())
-				}
-			}
-		}
+		bat1 := newIntBatch(tc.types, tc.proc, Rows, tc.arg.Fs)
+		bat1.AddCnt(1)
+		tc.proc.Reg.MergeReceivers[0].Ch <- bat1
+		tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
+		tc.proc.Reg.MergeReceivers[0].Ch <- nil
+		wg.Wait()
+		bat0.Clean(tc.proc.Mp())
+		bat1.Clean(tc.proc.Mp())
+		tc.arg.Free(tc.proc, false)
 		require.Equal(t, tc.proc.Mp().CurrNB(), int64(0))
 	}
 }
 
-func BenchmarkOrder(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		tcs := []orderTestCase{
-			newTestCase([]types.Type{{Oid: types.T_int8}}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
-			newTestCase([]types.Type{{Oid: types.T_int8}}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
-		}
-		t := new(testing.T)
-		for _, tc := range tcs {
-			err := Prepare(tc.proc, tc.arg)
-			require.NoError(t, err)
-			tc.proc.Reg.MergeReceivers[0].Ch <- newRandomBatch(tc.types, tc.proc, BenchmarkRows)
-			tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			tc.proc.Reg.MergeReceivers[1].Ch <- newRandomBatch(tc.types, tc.proc, BenchmarkRows)
-			tc.proc.Reg.MergeReceivers[1].Ch <- &batch.Batch{}
-			tc.proc.Reg.MergeReceivers[1].Ch <- nil
-			for {
-				if ok, err := Call(0, tc.proc, tc.arg, false, false); ok || err != nil {
-					if tc.proc.Reg.InputBatch != nil {
-						tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-					}
-					break
-				}
-			}
-			for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
-				for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
-					bat := <-tc.proc.Reg.MergeReceivers[i].Ch
-					if bat != nil {
-						bat.Clean(tc.proc.Mp())
-					}
-				}
-			}
-		}
-	}
-}
-
 func newTestCase(ts []types.Type, fs []*plan.OrderBySpec) orderTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
-	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
-	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
-		Ctx: ctx,
-		Ch:  make(chan *batch.Batch, 3),
-	}
-	proc.Reg.MergeReceivers[1] = &process.WaitRegister{
-		Ctx: ctx,
-		Ch:  make(chan *batch.Batch, 3),
-	}
+	proc := process.NewFromProc(testutil.NewProcessWithMPool(mpool.MustNewZero()),
+		ctx, 2)
 	return orderTestCase{
 		types: ts,
 		proc:  proc,
 		arg: &Argument{
-			Fs: fs,
+			Fs:             fs,
+			Types:          ts,
+			ChildrenNumber: 2,
 		},
 		cancel: cancel,
 	}

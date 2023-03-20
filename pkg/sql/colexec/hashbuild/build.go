@@ -43,12 +43,7 @@ func Prepare(proc *process.Process, arg any) error {
 		ap.ctr.evecs = make([]evalVector, len(ap.Conditions))
 		ap.ctr.nullSels = make([]int32, 0)
 	}
-	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
-	ap.ctr.bat.Zs = proc.Mp().GetSels()
-	for i, typ := range ap.Typs {
-		ap.ctr.bat.Vecs[i] = vector.NewVec(typ)
-	}
-
+	ap.ctr.InitByTypes(ap.Types, proc)
 	return nil
 }
 
@@ -62,27 +57,24 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 		switch ctr.state {
 		case Build:
 			if err := ctr.build(ap, proc, anal, isFirst); err != nil {
-				ap.Free(proc, true)
 				return false, err
 			}
-			if ap.ctr.mp != nil {
-				anal.Alloc(ap.ctr.mp.Size())
+			if ctr.mp != nil {
+				anal.Alloc(ctr.mp.Size())
 			}
 			ctr.state = End
-		default:
-			if ctr.bat != nil {
+		case End:
+			if ctr.OutBat.Length() != 0 {
 				if ap.NeedHashMap {
-					ctr.bat.Ht = hashmap.NewJoinMap(ctr.sels, ctr.nullSels, nil, ctr.mp, ctr.hasNull)
+					ctr.OutBat.Ht = hashmap.NewJoinMap(ctr.sels, ctr.nullSels, nil, ctr.mp, ctr.hasNull)
 				}
-				proc.SetInputBatch(ctr.bat)
+				proc.SetInputBatch(ctr.OutBat)
 				ctr.mp = nil
-				ctr.bat = nil
 				ctr.sels = nil
 				ctr.nullSels = nil
 			} else {
 				proc.SetInputBatch(nil)
 			}
-			ap.Free(proc, false)
 			return true, nil
 		}
 	}
@@ -95,36 +87,38 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		start := time.Now()
 		bat := <-proc.Reg.MergeReceivers[0].Ch
 		anal.WaitStop(start)
-
 		if bat == nil {
 			break
 		}
 		if bat.Length() == 0 {
+			bat.SubCnt(1)
 			continue
 		}
 		anal.Input(bat, isFirst)
 		anal.Alloc(int64(bat.Size()))
-		if ctr.bat, err = ctr.bat.Append(proc.Ctx, proc.Mp(), bat); err != nil {
-			return err
+		for i, vec := range ctr.OutVecs {
+			uf := ctr.Ufs[i]
+			srcVec := bat.GetVector(int32(i))
+			for j := int64(0); j < int64(bat.Length()); j++ {
+				if err := uf(vec, srcVec, j); err != nil {
+					bat.SubCnt(1)
+					return nil
+				}
+			}
 		}
-		bat.Clean(proc.Mp())
+		ctr.OutBat.Zs = append(ctr.OutBat.Zs, bat.Zs...)
+		bat.SubCnt(1)
 	}
-	if ctr.bat == nil || ctr.bat.Length() == 0 || !ap.NeedHashMap {
+	if ctr.OutBat.Length() == 0 || !ap.NeedHashMap {
 		return nil
 	}
-	ctr.cleanEvalVectors(proc.Mp())
-	if err = ctr.evalJoinCondition(ctr.bat, ap.Conditions, proc, anal); err != nil {
+	if err = ctr.evalJoinCondition(ctr.OutBat, ap.Conditions, proc, anal); err != nil {
 		return err
 	}
-
-	//if ctr.idx != nil {
-	//	return ctr.indexBuild()
-	//}
-
+	defer ctr.cleanEvalVectors(proc.Mp())
 	inBuckets := make([]uint8, hashmap.UnitLimit)
-
 	itr := ctr.mp.NewIterator()
-	count := ctr.bat.Length()
+	count := ctr.OutBat.Length()
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
@@ -161,33 +155,9 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 				}
 			}
 		}
-
-	}
-
-	return nil
-}
-
-/*
-func (ctr *container) indexBuild() error {
-	// e.g. original data = ["a", "b", "a", "c", "b", "c", "a", "a"]
-	//      => dictionary = ["a"->1, "b"->2, "c"->3]
-	//      => poses = [1, 2, 1, 3, 2, 3, 1, 1]
-	// sels = [[0, 2, 6, 7], [1, 4], [3, 5]]
-	ctr.sels = make([][]int32, index.MaxLowCardinality)
-	poses := vector.MustFixedCol[uint16](ctr.idx.GetPoses())
-	for k, v := range poses {
-		if v == 0 {
-			continue
-		}
-		bucket := int(v) - 1
-		if len(ctr.sels[bucket]) == 0 {
-			ctr.sels[bucket] = make([]int32, 0, 64)
-		}
-		ctr.sels[bucket] = append(ctr.sels[bucket], int32(k))
 	}
 	return nil
 }
-*/
 
 func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process, analyze process.Analyze) error {
 	for i, cond := range conds {

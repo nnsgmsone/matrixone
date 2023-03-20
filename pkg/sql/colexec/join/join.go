@@ -36,6 +36,7 @@ func Prepare(proc *process.Process, arg any) error {
 	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.evecs = make([]evalVector, len(ap.Conditions[0]))
 	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
+	ap.ctr.InitByTypes(ap.Types, proc)
 	return nil
 }
 
@@ -49,7 +50,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		switch ctr.state {
 		case Build:
 			if err := ctr.build(ap, proc, anal); err != nil {
-				ap.Free(proc, true)
 				return false, err
 			}
 			ctr.state = Probe
@@ -57,26 +57,27 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			start := time.Now()
 			bat := <-proc.Reg.MergeReceivers[0].Ch
 			anal.WaitStop(start)
-
 			if bat == nil {
+				ctr.bat.SubCnt(1)
+				ctr.bat = nil
 				ctr.state = End
 				continue
 			}
 			if bat.Length() == 0 {
+				bat.SubCnt(1)
 				continue
 			}
 			if ctr.bat == nil || ctr.bat.Length() == 0 {
-				bat.Clean(proc.Mp())
+				bat.SubCnt(1)
 				continue
 			}
 			if err := ctr.probe(bat, ap, proc, anal, isFirst, isLast); err != nil {
-				ap.Free(proc, true)
+				bat.SubCnt(1)
 				return false, err
 			}
+			bat.SubCnt(1)
 			return false, nil
-
 		default:
-			ap.Free(proc, false)
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
@@ -87,7 +88,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	start := time.Now()
 	bat := <-proc.Reg.MergeReceivers[1].Ch
 	anal.WaitStop(start)
-
 	if bat != nil {
 		ctr.bat = bat
 		ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
@@ -97,27 +97,13 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
-	defer bat.Clean(proc.Mp())
 	anal.Input(bat, isFirst)
-	rbat := batch.NewWithSize(len(ap.Result))
-	rbat.Zs = proc.Mp().GetSels()
-	for i, rp := range ap.Result {
-		if rp.Rel == 0 {
-			rbat.Vecs[i] = vector.NewVec(*bat.Vecs[rp.Pos].GetType())
-		} else {
-			rbat.Vecs[i] = vector.NewVec(*ctr.bat.Vecs[rp.Pos].GetType())
-		}
-	}
-
-	idxFlg := false
-	ctr.cleanEvalVectors(proc.Mp())
-	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc, &idxFlg, anal); err != nil {
-		rbat.Clean(proc.Mp())
+	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc, anal); err != nil {
 		return err
 	}
-
+	defer ctr.cleanEvalVectors(proc.Mp())
+	ctr.OutBat.Reset()
 	mSels := ctr.mp.Sels()
-
 	count := bat.Length()
 	itr := ctr.mp.Map().NewIterator()
 	for i := 0; i < count; i += hashmap.UnitLimit {
@@ -136,7 +122,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				for _, sel := range sels {
 					vec, err := colexec.JoinFilterEvalExprInBucket(bat, ctr.bat, i+k, int(sel), proc, ap.Cond)
 					if err != nil {
-						rbat.Clean(proc.Mp())
 						return err
 					}
 					bs := vector.MustFixedCol[bool](vec)
@@ -146,98 +131,55 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					}
 					vec.Free(proc.Mp())
 					for j, rp := range ap.Result {
+						uf := ctr.Ufs[j]
+						vec := ctr.OutBat.GetVector(int32(j))
 						if rp.Rel == 0 {
-							if err := rbat.Vecs[j].UnionOne(bat.Vecs[rp.Pos], int64(i+k), proc.Mp()); err != nil {
-								rbat.Clean(proc.Mp())
+							srcVec := bat.GetVector(rp.Pos)
+							if err := uf(vec, srcVec, int64(i+k)); err != nil {
 								return err
 							}
 						} else {
-							if err := rbat.Vecs[j].UnionOne(ctr.bat.Vecs[rp.Pos], int64(sel), proc.Mp()); err != nil {
-								rbat.Clean(proc.Mp())
+							srcVec := ctr.bat.GetVector(rp.Pos)
+							if err := uf(vec, srcVec, int64(sel)); err != nil {
 								return err
 							}
 						}
 					}
-					rbat.Zs = append(rbat.Zs, ctr.bat.Zs[sel])
+					ctr.OutBat.Zs = append(ctr.OutBat.Zs, ctr.bat.Zs[sel])
 				}
 			} else {
 				for j, rp := range ap.Result {
+					uf := ctr.Ufs[j]
+					vec := ctr.OutBat.GetVector(int32(j))
 					if rp.Rel == 0 {
-						if err := rbat.Vecs[j].UnionMulti(bat.Vecs[rp.Pos], int64(i+k), len(sels), proc.Mp()); err != nil {
-							rbat.Clean(proc.Mp())
-							return err
+						srcVec := bat.GetVector(rp.Pos)
+						for range sels {
+							if err := uf(vec, srcVec, int64(i+k)); err != nil {
+								return err
+							}
 						}
 					} else {
+						srcVec := ctr.bat.GetVector(rp.Pos)
 						for _, sel := range sels {
-							if err := rbat.Vecs[j].UnionOne(ctr.bat.Vecs[rp.Pos], int64(sel), proc.Mp()); err != nil {
-								rbat.Clean(proc.Mp())
+							if err := uf(vec, srcVec, int64(sel)); err != nil {
 								return err
 							}
 						}
 					}
 				}
 				for _, sel := range sels {
-					rbat.Zs = append(rbat.Zs, ctr.bat.Zs[sel])
+					ctr.OutBat.Zs = append(ctr.OutBat.Zs, ctr.bat.Zs[sel])
 				}
 			}
 		}
 	}
-	rbat.ExpandNulls()
-	anal.Output(rbat, isLast)
-	proc.SetInputBatch(rbat)
+	anal.Output(ctr.OutBat, isLast)
+	proc.SetInputBatch(ctr.OutBat)
 	return nil
 }
 
-/*
-func (ctr *container) indexProbe(ap *Argument, bat, rbat *batch.Batch, mSels [][]int64, proc *process.Process) error {
-	col := vector.MustFixedCol[uint16](ctr.vecs[0])
-	for i, v := range col {
-		if v == 0 {
-			continue
-		}
-		sels := mSels[v-1]
-		for _, sel := range sels {
-			if ap.Cond != nil {
-				vec, err := colexec.JoinFilterEvalExprInBucket(bat, ctr.bat, i, int(sel), proc, ap.Cond)
-				if err != nil {
-					return err
-				}
-				bs := vector.MustFixedCol[bool](vec)
-				if !bs[0] {
-					vec.Free(proc.Mp())
-					continue
-				}
-				vec.Free(proc.Mp())
-			}
-			for j, rp := range ap.Result {
-				if rp.Rel == 0 {
-					if err := rbat.Vecs[j].UnionOne(bat.Vecs[rp.Pos], int64(i), bat.Vecs[rp.Pos].Length() == 0, proc.Mp()); err != nil {
-						return err
-					}
-
-					//if err := populateIndex(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
-					//	return err
-					//}
-				} else {
-					if err := rbat.Vecs[j].UnionOne(ctr.bat.Vecs[rp.Pos], sel, bat.Vecs[rp.Pos].Length() == 0, proc.Mp()); err != nil {
-						return err
-					}
-
-					//if err := populateIndex(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], sel, proc.Mp()); err != nil {
-					//	return err
-					//}
-				}
-			}
-			rbat.Zs = append(rbat.Zs, ctr.bat.Zs[sel])
-		}
-	}
-	return nil
-}
-
-func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process, flg *bool) error {
-*/
-
-func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process, flg *bool, analyze process.Analyze) error {
+func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr,
+	proc *process.Process, analyze process.Analyze) error {
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
 		if err != nil {
@@ -253,81 +195,9 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 				break
 			}
 		}
-
 		if ctr.evecs[i].needFree && vec != nil {
 			analyze.Alloc(int64(vec.Size()))
 		}
-
-		//if *flg, err = ctr.dictEncoding(proc.Mp()); err != nil {
-		//	ctr.cleanEvalVectors(proc.Mp())
-		//	return err
-		//}
 	}
 	return nil
 }
-
-/*
-func (ctr *container) dictEncoding(m *mpool.MPool) (bool, error) {
-	// find out whether hashbuild is built by low cardinality index
-	idx := ctr.mp.Index()
-	if idx == nil {
-		return false, nil
-	}
-
-	vec := ctr.vecs[0]
-	encoded := vector.NewVector(types.Type{Oid: types.T_uint16})
-	// case 1
-	// 1. the join columns of both left table and right table are indexed
-	// 2. left condition is not an expression
-	if vec.IsLowCardinality() && !ctr.evecs[0].needFree {
-		leftIdx := ctr.vecs[0].Index().(*index.LowCardinalityIndex)
-		// e.g. idx.dict = ["a"->1, "b"->2, "c"->3]
-		//      leftIdx.dict = ["c"->1, "d"->2, "b"->3, "a"->4]
-		//      mapping => fixed map = [3, 0, 2, 1]
-		fixedMap := idx.GetDict().FindBatch(leftIdx.GetDict().GetUnique())
-		poses := vector.MustFixedCol[uint16](leftIdx.GetPoses())
-		col := make([]uint16, len(poses))
-		for i, pos := range poses {
-			if pos == 0 {
-				continue
-			}
-			col[i] = fixedMap[pos-1]
-		}
-		if err := vector.AppendList(encoded, col, nil, m); err != nil {
-			encoded.Free(m)
-			return false, err
-		}
-	} else {
-		// case 2
-		// 1. only the join column of right table is indexed
-		// 2. it does not matter if left is an expression or not
-		if err := idx.Encode(encoded, vec); err != nil {
-			encoded.Free(m)
-			vec.Free(m)
-			return false, err
-		}
-		if ctr.evecs[0].needFree {
-			vec.Free(m)
-		}
-	}
-	ctr.vecs[0] = encoded
-	ctr.evecs[0].vec = encoded
-	ctr.evecs[0].needFree = true
-	return true, nil
-}
-
-func populateIndex(result, selected *vector.Vector, row int64, m *mpool.MPool) error {
-	if !selected.IsLowCardinality() {
-		return nil
-	}
-
-	idx := selected.Index().(*index.LowCardinalityIndex)
-	if result.Index() == nil {
-		result.SetIndex(idx.DupEmpty())
-	}
-
-	resultIdx := result.Index().(*index.LowCardinalityIndex)
-	dst, src := resultIdx.GetPoses(), idx.GetPoses()
-	return dst.UnionOne(src, row, src.Length() == 0, m)
-}
-*/

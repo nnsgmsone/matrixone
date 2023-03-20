@@ -1226,6 +1226,8 @@ func appendOneFixed[T any](vec *Vector, val T, isNull bool, mp *mpool.MPool) err
 		col := vec.col.([]T)
 		col[length] = val
 	}
+	sz := vec.typ.TypeSize()
+	vec.data = vec.data[:sz*vec.length]
 	return nil
 }
 

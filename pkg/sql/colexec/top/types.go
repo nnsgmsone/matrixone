@@ -38,8 +38,7 @@ type container struct {
 	poses []int32 // sorted list of attributes
 	cmps  []compare.Compare
 
-	bat  *batch.Batch // this bat should not be used
-	init bool         // means that it has been initialized
+	init bool // means that it has been initialized
 }
 
 type Argument struct {
