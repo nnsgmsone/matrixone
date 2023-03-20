@@ -44,6 +44,11 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 	ctr := ap.ctr
 
 	for {
+		if ctr.childrenCount == 0 {
+			proc.SetInputBatch(nil)
+			return true, nil
+		}
+
 		start := time.Now()
 		bat := <-proc.Reg.MergeReceivers[0].Ch
 		anal.WaitStop(start)
@@ -58,13 +63,15 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 		}
 
 		anal.Input(bat, isFirst)
-		if ap.ctr.seen > ap.Offset {
+		if ap.ctr.seen >= ap.Offset {
 			proc.SetInputBatch(bat)
+			anal.Output(bat, isLast)
 			return false, nil
 		}
 		length := len(bat.Zs)
 		// bat = PartOne + PartTwo, and PartTwo is required.
-		if ap.ctr.seen+uint64(length) > ap.Offset {
+		newSeen := ap.ctr.seen + uint64(length)
+		if newSeen > ap.Offset {
 			ap.ctr.OutBat.Reset()
 			start, count := int64(ap.Offset-ap.ctr.seen), int64(length)-int64(ap.Offset-ap.ctr.seen)
 			for i, vec := range ap.ctr.OutVecs {
@@ -81,9 +88,9 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 			}
 			proc.SetInputBatch(ap.ctr.OutBat)
 			anal.Output(ap.ctr.OutBat, isLast)
-			ap.ctr.seen += uint64(length)
+			ap.ctr.seen = newSeen
 			return false, nil
 		}
-		ap.ctr.seen += uint64(length)
+		ap.ctr.seen = newSeen
 	}
 }

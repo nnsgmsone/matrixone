@@ -96,8 +96,11 @@ func (m *StrHashMap) Cardinality() uint64 {
 // InsertValue insert a value, return true if it is new, otherwise false
 // never handle null
 func (m *StrHashMap) InsertValue(val any) (bool, error) {
-	defer func() { m.keys[0] = m.keys[0][:0] }()
 	switch v := val.(type) {
+	case []byte:
+		return m.InsertBytes(v)
+	case string:
+		return m.InsertString(v)
 	case uint8:
 		m.keys[0] = append(m.keys[0], types.EncodeFixed(v)...)
 	case uint16:
@@ -118,10 +121,6 @@ func (m *StrHashMap) InsertValue(val any) (bool, error) {
 		m.keys[0] = append(m.keys[0], types.EncodeFixed(v)...)
 	case float64:
 		m.keys[0] = append(m.keys[0], types.EncodeFixed(v)...)
-	case []byte:
-		length := uint16(len(v))
-		m.keys[0] = append(m.keys[0], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
-		m.keys[0] = append(m.keys[0], v...)
 	case types.Date:
 		m.keys[0] = append(m.keys[0], types.EncodeFixed(v)...)
 	case types.Datetime:
@@ -134,9 +133,26 @@ func (m *StrHashMap) InsertValue(val any) (bool, error) {
 		m.keys[0] = append(m.keys[0], types.EncodeFixed(v)...)
 	case types.Uuid:
 		m.keys[0] = append(m.keys[0], types.EncodeFixed(v)...)
-	case string:
-		m.keys[0] = append(m.keys[0], []byte(v)...)
 	}
+	return m.InsertIntoHashmap()
+}
+
+func (m *StrHashMap) InsertBytes(val []byte) (bool, error) {
+	length := uint16(len(val))
+	m.keys[0] = append(m.keys[0], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
+	m.keys[0] = append(m.keys[0], val...)
+
+	return m.InsertIntoHashmap()
+}
+
+func (m *StrHashMap) InsertString(val string) (bool, error) {
+	m.keys[0] = append(m.keys[0], []byte(val)...)
+
+	return m.InsertIntoHashmap()
+}
+
+func (m *StrHashMap) InsertIntoHashmap() (bool, error) {
+	defer func() { m.keys[0] = m.keys[0][:0] }()
 	if l := len(m.keys[0]); l < 16 {
 		m.keys[0] = append(m.keys[0], hashtable.StrKeyPadding[l:]...)
 	}

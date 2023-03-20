@@ -30,6 +30,7 @@ import (
 const (
 	Rows          = 10      // default rows
 	BenchmarkRows = 1000000 // default rows for benchmark
+	regNum        = 2
 )
 
 // add unit tests for cases
@@ -73,14 +74,12 @@ func TestLimit(t *testing.T) {
 		inputBatch := newBatch(t, tc.types, tc.proc, Rows)
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
-		// put the batch input executor
-		tc.proc.Reg.MergeReceivers[0].Ch <- inputBatch
-		tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
-		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.proc.Reg.MergeReceivers[0].Ch <- inputBatch
-		tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
-		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-
+		// put the batch input executor to each excutor
+		for i := 0; i < regNum; i++ {
+			tc.proc.Reg.MergeReceivers[0].Ch <- inputBatch
+			tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
+			tc.proc.Reg.MergeReceivers[0].Ch <- nil
+		}
 		ok, err := Call(0, tc.proc, tc.arg, false, false)
 		require.NoError(t, err)
 		output := tc.proc.Reg.InputBatch
@@ -104,40 +103,29 @@ func BenchmarkLimit(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		testTypes := []types.Type{{Oid: types.T_int8}}
 		tcs = []limitTestCase{
+			newTestCase(0, testTypes),
 			newTestCase(18, testTypes),
 			newTestCase(20, testTypes),
 			newTestCase(22, testTypes),
 		}
-
 		t := new(testing.T)
 		for _, tc := range tcs {
 			err := Prepare(tc.proc, tc.arg)
 			require.NoError(t, err)
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.types, tc.proc, BenchmarkRows)
-			tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.types, tc.proc, BenchmarkRows)
-			tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
+			inputBatch := newBatch(t, tc.types, tc.proc, BenchmarkRows)
+			for i := 0; i < regNum; i++ {
+				tc.proc.Reg.MergeReceivers[0].Ch <- inputBatch
+				tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
+				tc.proc.Reg.MergeReceivers[0].Ch <- nil
+			}
+
 			for {
 				if ok, err := Call(0, tc.proc, tc.arg, false, false); ok || err != nil {
-					if tc.proc.Reg.InputBatch != nil {
-						tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-					}
 					break
 				}
-				if tc.proc.Reg.InputBatch != nil {
-					tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-				}
 			}
-			for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
-				for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
-					bat := <-tc.proc.Reg.MergeReceivers[i].Ch
-					if bat != nil {
-						bat.Clean(tc.proc.Mp())
-					}
-				}
-			}
+			tc.arg.Free(tc.proc, false)
+			inputBatch.Clean(tc.proc.GetMPool())
 		}
 	}
 }
@@ -148,14 +136,16 @@ func newTestCase(limit uint64, testTypes []types.Type) limitTestCase {
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
 		Ctx: ctx,
-		Ch:  make(chan *batch.Batch, 10),
+		Ch:  make(chan *batch.Batch, regNum*3+1),
 	}
+
 	return limitTestCase{
 		proc:  proc,
 		types: testTypes,
 		arg: &Argument{
-			Limit: limit,
-			Types: testTypes,
+			Limit:          limit,
+			Types:          testTypes,
+			ChildrenNumber: regNum,
 		},
 		cancel: cancel,
 	}

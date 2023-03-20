@@ -109,10 +109,10 @@ func TestLimit(t *testing.T) {
 		}
 
 		{ // test input empty batch
-			newEnd := false
+			expectEnd := Rows >= tc.arg.Limit
 			tc.proc.SetInputBatch(&batch.Batch{})
-			newEnd, err = Call(0, tc.proc, tc.arg, false, false)
-			require.Equal(t, end, newEnd)
+			end, err = Call(0, tc.proc, tc.arg, false, false)
+			require.Equal(t, expectEnd, end)
 			require.NoError(t, err)
 		}
 

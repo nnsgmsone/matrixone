@@ -22,6 +22,7 @@ import (
 	"encoding/gob"
 	"fmt"
 	"io"
+	"strings"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -297,6 +298,49 @@ func DecodeStringSlice(data []byte) []string {
 			tm = data[os[i]:os[i+1]]
 			vs[i] = *(*string)(unsafe.Pointer(&tm))
 		}
+	}
+	return vs
+}
+
+func EncodeStringsBuilderSlice(vs []strings.Builder) []byte {
+	var o int32
+	var buf bytes.Buffer
+
+	cnt := int32(len(vs))
+	buf.Write(EncodeInt32(&cnt))
+	if cnt == 0 {
+		return buf.Bytes()
+	}
+	os := make([]int32, cnt)
+	for i, v := range vs {
+		os[i] = o
+		o += int32(v.Len())
+	}
+	buf.Write(EncodeSlice(os))
+	for _, v := range vs {
+		buf.WriteString(v.String())
+	}
+	return buf.Bytes()
+}
+
+func DecodeStringsBuilderSlice(data []byte) []strings.Builder {
+	var tm []byte
+
+	cnt := DecodeInt32(data)
+	if cnt == 0 {
+		return nil
+	}
+	data = data[4:]
+	vs := make([]strings.Builder, cnt)
+	os := DecodeSlice[int32](data[:4*cnt])
+	data = data[4*cnt:]
+	for i := int32(0); i < cnt; i++ {
+		if i == cnt-1 {
+			tm = data[os[i]:]
+		} else {
+			tm = data[os[i]:os[i+1]]
+		}
+		vs[i].WriteString(*(*string)(unsafe.Pointer(&tm)))
 	}
 	return vs
 }

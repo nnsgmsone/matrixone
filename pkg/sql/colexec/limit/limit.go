@@ -58,7 +58,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	length := bat.Length()
 	newSeen := ap.ctr.seen + uint64(length)
 
-	if newSeen >= ap.Limit {
+	if newSeen > ap.Limit {
 		ap.ctr.OutBat.Reset()
 		count := int64(ap.Limit - ap.ctr.seen)
 		for i, vec := range ap.ctr.OutVecs {

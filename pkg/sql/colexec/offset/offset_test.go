@@ -42,41 +42,38 @@ var (
 )
 
 func init() {
+	testTypes := []types.Type{{Oid: types.T_int8}}
 	tcs = []offsetTestCase{
 		{
-			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
-			types: []types.Type{
-				{Oid: types.T_int8},
+			proc:  testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			types: testTypes,
+			arg: &Argument{
+				Offset: 0,
+				Types:  testTypes,
 			},
+		},
+		{
+			proc:  testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			types: testTypes,
 			arg: &Argument{
 				Offset: 8,
-				Types: []types.Type{
-					{Oid: types.T_int8},
-				},
+				Types:  testTypes,
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
-			types: []types.Type{
-				{Oid: types.T_int8},
-			},
+			proc:  testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			types: testTypes,
 			arg: &Argument{
 				Offset: 10,
-				Types: []types.Type{
-					{Oid: types.T_int8},
-				},
+				Types:  testTypes,
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
-			types: []types.Type{
-				{Oid: types.T_int8},
-			},
+			proc:  testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			types: testTypes,
 			arg: &Argument{
 				Offset: 12,
-				Types: []types.Type{
-					{Oid: types.T_int8},
-				},
+				Types:  testTypes,
 			},
 		},
 	}
@@ -93,29 +90,38 @@ func TestOffset(t *testing.T) {
 	for _, tc := range tcs {
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
-		{
-			bat := newBatch(t, tc.types, tc.proc, Rows)
-			tc.proc.SetInputBatch(bat)
+		inputBatch := newBatch(t, tc.types, tc.proc, Rows)
+		currentInputRow := 0
+		end := false
+		{ // test normal input batch
+			tc.proc.SetInputBatch(inputBatch)
+			currentInputRow += Rows
 			_, err = Call(0, tc.proc, tc.arg, false, false)
 			require.NoError(t, err)
-			bat.Clean(tc.proc.Mp())
+			if currentInputRow > int(tc.arg.Offset) {
+				outLen := tc.proc.Reg.InputBatch.Length()
+				expectLen := currentInputRow - int(tc.arg.Offset)
+				require.Equal(t, expectLen, outLen)
+			} else {
+				require.Equal(t, 0, tc.proc.Reg.InputBatch.Length())
+			}
 		}
-		{
-			bat := newBatch(t, tc.types, tc.proc, Rows)
-			tc.proc.SetInputBatch(bat)
-			_, err = Call(0, tc.proc, tc.arg, false, false)
-			require.NoError(t, err)
-			bat.Clean(tc.proc.Mp())
-		}
-		{
+
+		{ // test empty input batch
 			tc.proc.SetInputBatch(&batch.Batch{})
-			_, _ = Call(0, tc.proc, tc.arg, false, false)
+			end, err = Call(0, tc.proc, tc.arg, false, false)
+			require.NoError(t, err)
+			require.Equal(t, false, end)
 		}
-		{
+
+		{ // test nil input batch
 			tc.proc.SetInputBatch(nil)
-			_, _ = Call(0, tc.proc, tc.arg, false, false)
+			end, err = Call(0, tc.proc, tc.arg, false, false)
+			require.NoError(t, err)
+			require.Equal(t, true, end)
 		}
 		tc.arg.Free(tc.proc, false)
+		inputBatch.Clean(tc.proc.GetMPool())
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
