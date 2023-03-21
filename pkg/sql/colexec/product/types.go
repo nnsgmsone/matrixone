@@ -15,7 +15,6 @@
 package product
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -37,22 +36,14 @@ type container struct {
 
 type Argument struct {
 	ctr    *container
-	Typs   []types.Type // output vector types
+	Types  []types.Type // output vector types
 	Result []colexec.ResultPos
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	ctr := arg.ctr
-	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
-	}
-	ctr.CleanMemForNextOp(proc)
-}
-
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
-	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
-		ctr.bat = nil
+func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	ap.ctr.CleanMemForNextOp(proc)
+	if ap.ctr.bat != nil {
+		ap.ctr.bat.SubCnt(1)
+		ap.ctr.bat = nil
 	}
 }

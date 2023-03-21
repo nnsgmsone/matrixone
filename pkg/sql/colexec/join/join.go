@@ -50,6 +50,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		switch ctr.state {
 		case Build:
 			if err := ctr.build(ap, proc, anal); err != nil {
+				ctr.state = End
 				return false, err
 			}
 			ctr.state = Probe
@@ -73,6 +74,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			}
 			if err := ctr.probe(bat, ap, proc, anal, isFirst, isLast); err != nil {
 				bat.SubCnt(1)
+				ctr.state = End
 				return false, err
 			}
 			bat.SubCnt(1)

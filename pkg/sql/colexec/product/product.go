@@ -16,6 +16,7 @@ package product
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -28,7 +29,7 @@ func String(_ any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
-	ap.ctr.InitByTypes(ap.Typs, proc)
+	ap.ctr.InitByTypes(ap.Types, proc)
 	return nil
 }
 
@@ -42,30 +43,32 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		switch ctr.state {
 		case Build:
 			if err := ctr.build(ap, proc, anal); err != nil {
-				ap.Free(proc, true)
+				ctr.state = End
 				return false, err
 			}
 			ctr.state = Probe
-
 		case Probe:
+			start := time.Now()
 			bat := <-proc.Reg.MergeReceivers[0].Ch
+			anal.WaitStop(start)
 			if bat == nil {
+				ctr.bat.SubCnt(1)
+				ctr.bat = nil
 				ctr.state = End
 				continue
 			}
-			if len(bat.Zs) == 0 {
+			if bat.Length() == 0 {
+				bat.SubCnt(1)
 				continue
 			}
-
 			if err := ctr.probe(bat, ap, proc, anal, isFirst, isLast); err != nil {
-				bat.Clean(proc.Mp())
-				ap.Free(proc, true)
+				bat.SubCnt(1)
+				ctr.state = End
 				return false, err
 			}
+			bat.SubCnt(1)
 			return false, nil
-
 		default:
-			ap.Free(proc, false)
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
@@ -73,7 +76,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 }
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
+	start := time.Now()
 	bat := <-proc.Reg.MergeReceivers[1].Ch
+	anal.WaitStop(start)
 	if bat != nil {
 		ctr.bat = bat
 	}
@@ -81,7 +86,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
-	defer bat.Clean(proc.Mp())
 	anal.Input(bat, isFirst)
 	ctr.OutBat.Reset()
 	count := bat.Length()

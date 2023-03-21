@@ -26,7 +26,7 @@ import (
 )
 
 func String(_ any, buf *bytes.Buffer) {
-	buf.WriteString(" loop single join ")
+	buf.WriteString(" loop mark join ")
 }
 
 func Prepare(proc *process.Process, arg any) error {
@@ -46,6 +46,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		switch ctr.state {
 		case Build:
 			if err := ctr.build(ap, proc, anal); err != nil {
+				ctr.state = End
 				return false, err
 			}
 			ctr.state = Probe
@@ -66,11 +67,13 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			if ctr.bat == nil || ctr.bat.Length() == 0 {
 				if err := ctr.emptyProbe(bat, ap, proc, anal, isFirst, isLast); err != nil {
 					bat.SubCnt(1)
+					ctr.state = End
 					return false, err
 				}
 			} else {
 				if err := ctr.probe(bat, ap, proc, anal, isFirst, isLast); err != nil {
 					bat.SubCnt(1)
+					ctr.state = End
 					return false, err
 				}
 			}
