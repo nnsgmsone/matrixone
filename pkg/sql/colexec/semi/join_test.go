@@ -82,69 +82,83 @@ func TestString(t *testing.T) {
 
 func TestJoin(t *testing.T) {
 	for _, tc := range tcs {
-		bat := hashBuild(t, tc)
-		if jm, ok := bat.Ht.(*hashmap.JoinMap); ok {
+		hashBat := hashBuild(t, tc)
+		if jm, ok := hashBat.Ht.(*hashmap.JoinMap); ok {
 			jm.SetDupCount(int64(1))
 		}
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+
+		inputBatch := newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+		inputBatch.AddCnt(4)
+		tc.proc.Reg.MergeReceivers[0].Ch <- inputBatch
 		tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[0].Ch <- inputBatch
+		tc.proc.Reg.MergeReceivers[0].Ch <- inputBatch
+		tc.proc.Reg.MergeReceivers[0].Ch <- inputBatch
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.proc.Reg.MergeReceivers[1].Ch <- bat
+		tc.proc.Reg.MergeReceivers[1].Ch <- hashBat
 		for {
 			if ok, err := Call(0, tc.proc, tc.arg, false, false); ok || err != nil {
 				break
 			}
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
+		require.Equal(t, int64(1), inputBatch.Cnt)
+		inputBatch.Clean(tc.proc.Mp())
+		tc.arg.Free(tc.proc, false)
+		hashBat.Clean(tc.proc.Mp())
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
 func BenchmarkJoin(b *testing.B) {
+	testType := types.Type{Oid: types.T_int8}
 	for i := 0; i < b.N; i++ {
 		tcs = []joinTestCase{
-			newTestCase(mpool.MustNewZero(), []bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0},
+			newTestCase(mpool.MustNewZero(), []bool{false}, []types.Type{testType}, []int32{0},
 				[][]*plan.Expr{
 					{
-						newExpr(0, types.Type{Oid: types.T_int8}),
+						newExpr(0, testType),
 					},
 					{
-						newExpr(0, types.Type{Oid: types.T_int8}),
+						newExpr(0, testType),
 					},
 				}),
-			newTestCase(mpool.MustNewZero(), []bool{true}, []types.Type{{Oid: types.T_int8}}, []int32{0},
+			newTestCase(mpool.MustNewZero(), []bool{true}, []types.Type{testType}, []int32{0},
 				[][]*plan.Expr{
 					{
-						newExpr(0, types.Type{Oid: types.T_int8}),
+						newExpr(0, testType),
 					},
 					{
-						newExpr(0, types.Type{Oid: types.T_int8}),
+						newExpr(0, testType),
 					},
 				}),
 		}
 		t := new(testing.T)
 		for _, tc := range tcs {
-			bat := hashBuild(t, tc)
+			hashBatch := hashBuild(t, tc)
+			if jm, ok := hashBatch.Ht.(*hashmap.JoinMap); ok {
+				jm.SetDupCount(int64(1))
+			}
 			err := Prepare(tc.proc, tc.arg)
 			require.NoError(t, err)
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+			inputBatch := newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+			inputBatch.AddCnt(4)
+			tc.proc.Reg.MergeReceivers[0].Ch <- inputBatch
 			tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+			tc.proc.Reg.MergeReceivers[0].Ch <- inputBatch
+			tc.proc.Reg.MergeReceivers[0].Ch <- inputBatch
+			tc.proc.Reg.MergeReceivers[0].Ch <- inputBatch
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			tc.proc.Reg.MergeReceivers[1].Ch <- bat
+			tc.proc.Reg.MergeReceivers[1].Ch <- hashBatch
 			for {
 				if ok, err := Call(0, tc.proc, tc.arg, false, false); ok || err != nil {
 					break
 				}
-				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 			}
+			inputBatch.Clean(tc.proc.Mp())
+			hashBatch.Clean(tc.proc.Mp())
+			tc.arg.Free(tc.proc, false)
 		}
 	}
 }
@@ -221,13 +235,13 @@ func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs []
 		proc:   proc,
 		cancel: cancel,
 		arg: &Argument{
-			Typs:       ts,
+			Types:      ts,
 			Result:     rp,
 			Conditions: cs,
 			Cond:       cond,
 		},
 		barg: &hashbuild.Argument{
-			Typs:        ts,
+			Types:       ts,
 			NeedHashMap: true,
 			Conditions:  cs[1],
 		},
@@ -237,7 +251,9 @@ func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs []
 func hashBuild(t *testing.T, tc joinTestCase) *batch.Batch {
 	err := hashbuild.Prepare(tc.proc, tc.barg)
 	require.NoError(t, err)
-	tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+	inputBat := newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+	defer inputBat.Clean(tc.proc.GetMPool())
+	tc.proc.Reg.MergeReceivers[0].Ch <- inputBat
 	tc.proc.Reg.MergeReceivers[0].Ch <- nil
 	ok, err := hashbuild.Call(0, tc.proc, tc.barg, false, false)
 	require.NoError(t, err)

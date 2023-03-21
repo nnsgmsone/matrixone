@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -36,12 +37,18 @@ type evalVector struct {
 }
 
 type container struct {
+	colexec.MemforNextOp
+
 	state int
 
+	// probe related members
 	inBuckets []uint8
+	eligible  []int64
 
+	// hashmap batch
 	bat *batch.Batch
 
+	// EvalExpr related members
 	evecs []evalVector
 	vecs  []*vector.Vector
 
@@ -53,7 +60,7 @@ type Argument struct {
 	Ibucket    uint64 // index in buckets
 	Nbucket    uint64 // buckets count
 	Result     []int32
-	Typs       []types.Type
+	Types      []types.Type // output types
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
 }
@@ -61,16 +68,16 @@ type Argument struct {
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	ctr := arg.ctr
 	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
-		ctr.cleanEvalVectors(mp)
+		ctr.CleanMemForNextOp(proc)
+		ctr.cleanBatch()
 		ctr.cleanHashMap()
+		ctr.cleanEvalVectors(proc.Mp())
 	}
 }
 
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
+func (ctr *container) cleanBatch() {
 	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
+		ctr.bat.SubCnt(1)
 		ctr.bat = nil
 	}
 }
