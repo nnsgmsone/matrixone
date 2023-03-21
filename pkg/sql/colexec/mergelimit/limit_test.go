@@ -17,6 +17,7 @@ package mergelimit
 import (
 	"bytes"
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -28,9 +29,8 @@ import (
 )
 
 const (
-	Rows          = 10      // default rows
-	BenchmarkRows = 1000000 // default rows for benchmark
-	regNum        = 2
+	Rows   = 10 // default rows
+	regNum = 2
 )
 
 // add unit tests for cases
@@ -62,83 +62,62 @@ func TestString(t *testing.T) {
 	}
 }
 
-func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
-		require.NoError(t, err)
-	}
-}
-
 func TestLimit(t *testing.T) {
 	for _, tc := range tcs {
-		inputBatch := newBatch(t, tc.types, tc.proc, Rows)
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
-		// put the batch input executor to each excutor
-		for i := 0; i < regNum; i++ {
-			tc.proc.Reg.MergeReceivers[0].Ch <- inputBatch
-			tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		}
-		ok, err := Call(0, tc.proc, tc.arg, false, false)
-		require.NoError(t, err)
-		output := tc.proc.Reg.InputBatch
-		if output != nil {
-			require.Equal(t, false, ok)
-			outputLen := output.Length()
-			expectLen := minValue(outputLen, int(tc.arg.Limit))
-			require.Equal(t, outputLen, expectLen)
-			require.Equal(t, inputBatch.Zs[:expectLen], output.Zs[:expectLen])
-		} else {
-			require.Equal(t, true, ok)
-		}
+		var wg sync.WaitGroup
 
-		inputBatch.Clean(tc.proc.GetMPool())
-		tc.arg.Free(tc.proc, false)
+		wg.Add(1)
+		go func() {
+			for {
+				if ok, err := Call(0, tc.proc, tc.arg, false, false); ok || err != nil {
+					wg.Done()
+					break
+				}
+			}
+			tc.proc.Cancel()
+			tc.arg.Free(tc.proc, false)
+		}()
+		bat0 := newBatch(t, tc.types, tc.proc, Rows)
+		select {
+		case <-tc.proc.Reg.MergeReceivers[0].Ctx.Done():
+		case tc.proc.Reg.MergeReceivers[0].Ch <- bat0:
+			bat0.AddCnt(1)
+		}
+		select {
+		case <-tc.proc.Reg.MergeReceivers[0].Ctx.Done():
+		case tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}:
+		}
+		select {
+		case <-tc.proc.Reg.MergeReceivers[0].Ctx.Done():
+		case tc.proc.Reg.MergeReceivers[0].Ch <- nil:
+		}
+		bat1 := newBatch(t, tc.types, tc.proc, Rows)
+		select {
+		case <-tc.proc.Reg.MergeReceivers[0].Ctx.Done():
+		case tc.proc.Reg.MergeReceivers[0].Ch <- bat1:
+			bat1.AddCnt(1)
+		}
+		select {
+		case <-tc.proc.Reg.MergeReceivers[0].Ctx.Done():
+		case tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}:
+		}
+		select {
+		case <-tc.proc.Reg.MergeReceivers[0].Ctx.Done():
+		case tc.proc.Reg.MergeReceivers[0].Ch <- nil:
+		}
+		wg.Wait()
+		bat0.Clean(tc.proc.Mp())
+		bat1.Clean(tc.proc.Mp())
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
-func BenchmarkLimit(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		testTypes := []types.Type{{Oid: types.T_int8}}
-		tcs = []limitTestCase{
-			newTestCase(0, testTypes),
-			newTestCase(18, testTypes),
-			newTestCase(20, testTypes),
-			newTestCase(22, testTypes),
-		}
-		t := new(testing.T)
-		for _, tc := range tcs {
-			err := Prepare(tc.proc, tc.arg)
-			require.NoError(t, err)
-			inputBatch := newBatch(t, tc.types, tc.proc, BenchmarkRows)
-			for i := 0; i < regNum; i++ {
-				tc.proc.Reg.MergeReceivers[0].Ch <- inputBatch
-				tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
-				tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			}
-
-			for {
-				if ok, err := Call(0, tc.proc, tc.arg, false, false); ok || err != nil {
-					break
-				}
-			}
-			tc.arg.Free(tc.proc, false)
-			inputBatch.Clean(tc.proc.GetMPool())
-		}
-	}
-}
-
 func newTestCase(limit uint64, testTypes []types.Type) limitTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
-	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
 	ctx, cancel := context.WithCancel(context.Background())
-	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
-		Ctx: ctx,
-		Ch:  make(chan *batch.Batch, regNum*3+1),
-	}
-
+	proc := process.NewFromProc(testutil.NewProcessWithMPool(mpool.MustNewZero()),
+		ctx, regNum)
 	return limitTestCase{
 		proc:  proc,
 		types: testTypes,

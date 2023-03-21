@@ -64,6 +64,10 @@ type Argument struct {
 func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	ap.ctr.CleanMemForNextOp(proc)
 	ap.ctr.cleanHashMap()
+	if ap.ctr.bat != nil {
+		ap.ctr.bat.SubCnt(1)
+		ap.ctr.bat = nil
+	}
 }
 
 func (ctr *container) cleanHashMap() {

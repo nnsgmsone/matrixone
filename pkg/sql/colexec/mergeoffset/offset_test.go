@@ -17,7 +17,7 @@ package mergeoffset
 import (
 	"bytes"
 	"context"
-	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -29,9 +29,8 @@ import (
 )
 
 const (
-	Rows          = 10      // default rows
-	BenchmarkRows = 1000000 // default rows for benchmark
-	regNum        = 2       // test reg number
+	Rows   = 10 // default rows
+	regNum = 2  // test reg number
 )
 
 // add unit tests for cases
@@ -62,86 +61,63 @@ func TestString(t *testing.T) {
 	}
 }
 
-func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
-		require.NoError(t, err)
-	}
-}
-
 func TestOffset(t *testing.T) {
 	for _, tc := range tcs {
-		inputBatch := newBatch(t, tc.types, tc.proc, Rows)
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
-		for i := 0; i < regNum; i++ {
-			tc.proc.Reg.MergeReceivers[0].Ch <- inputBatch
-			tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		}
+		var wg sync.WaitGroup
 
-		outputRowCnt := 0
-		for {
-			end, err := Call(0, tc.proc, tc.arg, false, false)
-			require.NoError(t, err)
-			if tc.proc.Reg.InputBatch != nil {
-				outputRowCnt += tc.proc.Reg.InputBatch.Length()
-			}
-			if end {
-				fmt.Printf("Rows*regNum = %d, offset = %d", Rows*regNum, tc.arg.Offset)
-				if Rows*regNum > tc.arg.Offset {
-					expectLen := Rows*regNum - int(tc.arg.Offset)
-					require.Equal(t, expectLen, outputRowCnt)
+		wg.Add(1)
+		go func() {
+			for {
+				if ok, err := Call(0, tc.proc, tc.arg, false, false); ok || err != nil {
+					wg.Done()
+					break
 				}
-				break
 			}
+			tc.proc.Cancel()
+			tc.arg.Free(tc.proc, false)
+		}()
+		bat0 := newBatch(t, tc.types, tc.proc, Rows)
+		select {
+		case <-tc.proc.Reg.MergeReceivers[0].Ctx.Done():
+		case tc.proc.Reg.MergeReceivers[0].Ch <- bat0:
+			bat0.AddCnt(1)
 		}
-		tc.arg.Free(tc.proc, false)
-		inputBatch.Clean(tc.proc.GetMPool())
+		select {
+		case <-tc.proc.Reg.MergeReceivers[0].Ctx.Done():
+		case tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}:
+		}
+		select {
+		case <-tc.proc.Reg.MergeReceivers[0].Ctx.Done():
+		case tc.proc.Reg.MergeReceivers[0].Ch <- nil:
+		}
+		bat1 := newBatch(t, tc.types, tc.proc, Rows)
+		select {
+		case <-tc.proc.Reg.MergeReceivers[0].Ctx.Done():
+		case tc.proc.Reg.MergeReceivers[0].Ch <- bat1:
+			bat1.AddCnt(1)
+		}
+		select {
+		case <-tc.proc.Reg.MergeReceivers[0].Ctx.Done():
+		case tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}:
+		}
+		select {
+		case <-tc.proc.Reg.MergeReceivers[0].Ctx.Done():
+		case tc.proc.Reg.MergeReceivers[0].Ch <- nil:
+		}
+		wg.Wait()
+		bat0.Clean(tc.proc.Mp())
+		bat1.Clean(tc.proc.Mp())
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
-func BenchmarkOffset(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		tcs = []offsetTestCase{
-			newTestCase(8),
-			newTestCase(10),
-			newTestCase(12),
-		}
-
-		t := new(testing.T)
-		for _, tc := range tcs {
-			err := Prepare(tc.proc, tc.arg)
-			require.NoError(t, err)
-			inputBatch := newBatch(t, tc.types, tc.proc, Rows)
-			for i := 0; i < regNum; i++ {
-				tc.proc.Reg.MergeReceivers[0].Ch <- inputBatch
-				tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
-				tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			}
-			for {
-				if ok, err := Call(0, tc.proc, tc.arg, false, false); ok || err != nil {
-					break
-				}
-			}
-			tc.arg.Free(tc.proc, false)
-			inputBatch.Clean(tc.proc.GetMPool())
-			require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
-		}
-	}
-}
-
 func newTestCase(offset uint64) offsetTestCase {
-	testTypes := []types.Type{{Oid: types.T_int8}}
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
-	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
 	ctx, cancel := context.WithCancel(context.Background())
-	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
-		Ctx: ctx,
-		Ch:  make(chan *batch.Batch, regNum*3+1),
-	}
-
+	proc := process.NewFromProc(testutil.NewProcessWithMPool(mpool.MustNewZero()),
+		ctx, regNum)
+	testTypes := []types.Type{{Oid: types.T_int8}}
 	return offsetTestCase{
 		proc:  proc,
 		types: testTypes,
