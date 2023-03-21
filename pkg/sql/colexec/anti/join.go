@@ -113,7 +113,6 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 			for pos := range bat.Vecs {
 				uf := ctr.Ufs[pos]
 				if err := uf(ctr.OutBat.Vecs[pos], bat.Vecs[pos], int64(i+k)); err != nil {
-					ctr.CleanMemForNextOp(proc)
 					return err
 				}
 			}
@@ -207,7 +206,6 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
 		if err != nil {
-			ctr.CleanMemForNextOp(proc)
 			return err
 		}
 		ctr.vecs[i] = vec
