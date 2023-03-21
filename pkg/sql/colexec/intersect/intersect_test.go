@@ -16,8 +16,10 @@ package intersect
 
 import (
 	"context"
+	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -27,13 +29,17 @@ import (
 )
 
 type intersectTestCase struct {
-	proc   *process.Process
-	arg    *Argument
-	cancel context.CancelFunc
+	proc         *process.Process
+	arg          *Argument
+	cancel       context.CancelFunc
+	leftBatches  []*batch.Batch
+	rightBatches []*batch.Batch
 }
 
 func TestIntersect(t *testing.T) {
-	proc := testutil.NewProcess()
+	ctx, cancel := context.WithCancel(context.Background())
+	proc := process.NewFromProc(testutil.NewProcessWithMPool(mpool.MustNewZero()),
+		ctx, -1)
 	// [2 rows + 2 row, 3 columns] intersect [1 row + 1 rows, 3 columns]
 	/*
 		{1, 2, 3}	    {1, 2, 3}
@@ -41,8 +47,9 @@ func TestIntersect(t *testing.T) {
 		{3, 4, 5}
 		{3, 4, 5}
 	*/
-	c := newIntersectTestCase(
-		proc,
+	tc := newIntersectTestCase(
+		[]types.Type{types.T_int64.ToType(), types.T_int64.ToType(), types.T_int64.ToType()},
+		proc, cancel,
 		[]*batch.Batch{
 			testutil.NewBatchWithVectors(
 				[]*vector.Vector{
@@ -72,58 +79,52 @@ func TestIntersect(t *testing.T) {
 				}, nil),
 		},
 	)
+	var wg sync.WaitGroup
 
-	err := Prepare(c.proc, c.arg)
+	err := Prepare(tc.proc, tc.arg)
 	require.NoError(t, err)
-	cnt := 0
-	end := false
-	for {
-		end, err = Call(0, c.proc, c.arg, false, false)
-		if end {
-			break
+	wg.Add(1)
+	go func() {
+		for {
+			if ok, err := Call(0, tc.proc, tc.arg, false, false); ok || err != nil {
+				wg.Done()
+				break
+			}
 		}
-		require.NoError(t, err)
-		result := c.proc.InputBatch()
-		if result != nil && len(result.Zs) != 0 {
-			cnt += result.Length()
-			require.Equal(t, 3, len(result.Vecs)) // 3 column
-			c.proc.InputBatch().Clean(c.proc.Mp())
-		}
+		tc.arg.Free(tc.proc, false)
+	}()
+	for i := range tc.rightBatches {
+		bat := tc.rightBatches[i]
+		bat.AddCnt(1)
+		tc.proc.Reg.MergeReceivers[1].Ch <- bat
 	}
-	require.Equal(t, 1, cnt) // 1 row
-	c.arg.Free(c.proc, false)
-	require.Equal(t, int64(0), c.proc.Mp().CurrNB())
+	tc.proc.Reg.MergeReceivers[1].Ch <- nil
+	for i := range tc.leftBatches {
+		bat := tc.leftBatches[i]
+		bat.AddCnt(1)
+		tc.proc.Reg.MergeReceivers[0].Ch <- bat
+	}
+	tc.proc.Reg.MergeReceivers[0].Ch <- nil
+	wg.Wait()
+	for i := range tc.rightBatches {
+		tc.rightBatches[i].Clean(proc.Mp())
+	}
+	for i := range tc.leftBatches {
+		tc.leftBatches[i].Clean(proc.Mp())
+	}
+	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 }
 
-func newIntersectTestCase(proc *process.Process, leftBatches, rightBatches []*batch.Batch) intersectTestCase {
-	ctx, cancel := context.WithCancel(context.Background())
-	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
-	{
-		c := make(chan *batch.Batch, len(leftBatches)+10)
-		for i := range leftBatches {
-			c <- leftBatches[i]
-		}
-		c <- nil
-		proc.Reg.MergeReceivers[0] = &process.WaitRegister{
-			Ctx: ctx,
-			Ch:  c,
-		}
+func newIntersectTestCase(typs []types.Type, proc *process.Process, cancel context.CancelFunc,
+	leftBatches, rightBatches []*batch.Batch) intersectTestCase {
+	arg := &Argument{
+		Types: typs,
 	}
-	{
-		c := make(chan *batch.Batch, len(rightBatches)+10)
-		for i := range rightBatches {
-			c <- rightBatches[i]
-		}
-		c <- nil
-		proc.Reg.MergeReceivers[1] = &process.WaitRegister{
-			Ctx: ctx,
-			Ch:  c,
-		}
-	}
-	arg := new(Argument)
 	return intersectTestCase{
-		proc:   proc,
-		arg:    arg,
-		cancel: cancel,
+		proc:         proc,
+		arg:          arg,
+		cancel:       cancel,
+		leftBatches:  leftBatches,
+		rightBatches: rightBatches,
 	}
 }
