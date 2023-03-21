@@ -78,11 +78,15 @@ func TestOutput(t *testing.T) {
 	for _, tc := range tcs {
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
-		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
+		bat := newBatch(t, tc.types, tc.proc, Rows)
+		tc.proc.SetInputBatch(bat)
 		_, err = Call(0, tc.proc, tc.arg, false, false)
+		bat.Clean(tc.proc.Mp())
 		require.NoError(t, err)
-		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
+		bat = newBatch(t, tc.types, tc.proc, Rows)
+		tc.proc.SetInputBatch(bat)
 		_, err = Call(0, tc.proc, tc.arg, false, false)
+		bat.Clean(tc.proc.Mp())
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = &batch.Batch{}
 		_, err = Call(0, tc.proc, tc.arg, false, false)

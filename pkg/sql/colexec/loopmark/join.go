@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -33,11 +32,7 @@ func String(_ any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
-	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
-	ap.ctr.bat.Zs = proc.Mp().GetSels()
-	for i, typ := range ap.Typs {
-		ap.ctr.bat.Vecs[i] = vector.NewVec(typ)
-	}
+	ap.ctr.InitByTypes(ap.Types, proc)
 	return nil
 }
 
@@ -54,29 +49,34 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				return false, err
 			}
 			ctr.state = Probe
-
 		case Probe:
-			var err error
 			start := time.Now()
 			bat := <-proc.Reg.MergeReceivers[0].Ch
 			anal.WaitStop(start)
 			if bat == nil {
+				ctr.bat.SubCnt(1)
+				ctr.bat = nil
 				ctr.state = End
 				continue
 			}
 			if bat.Length() == 0 {
+				bat.SubCnt(1)
 				continue
 			}
-			if ctr.bat.Length() == 0 {
-				err = ctr.emptyProbe(bat, ap, proc, anal, isFirst, isLast)
+			if ctr.bat == nil || ctr.bat.Length() == 0 {
+				if err := ctr.emptyProbe(bat, ap, proc, anal, isFirst, isLast); err != nil {
+					bat.SubCnt(1)
+					return false, err
+				}
 			} else {
-				err = ctr.probe(bat, ap, proc, anal, isFirst, isLast)
+				if err := ctr.probe(bat, ap, proc, anal, isFirst, isLast); err != nil {
+					bat.SubCnt(1)
+					return false, err
+				}
 			}
-			bat.Clean(proc.Mp())
-			return false, err
-
+			bat.SubCnt(1)
+			return false, nil
 		default:
-			ap.Free(proc, false)
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
@@ -87,7 +87,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	start := time.Now()
 	bat := <-proc.Reg.MergeReceivers[1].Ch
 	anal.WaitStop(start)
-
 	if bat != nil {
 		ctr.bat = bat
 	}
@@ -96,31 +95,36 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 
 func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
 	anal.Input(bat, isFirst)
-	rbat := batch.NewWithSize(len(ap.Result))
-	count := bat.Length()
+	ctr.OutBat.Reset()
 	for i, rp := range ap.Result {
+		uf := ctr.Ufs[i]
+		vec := ctr.OutBat.GetVector(int32(i))
 		if rp >= 0 {
-			rbat.Vecs[i] = bat.Vecs[rp]
-			bat.Vecs[rp] = nil
+			srcVec := bat.GetVector(rp)
+			for j := 0; j < bat.Length(); j++ {
+				if err := uf(vec, srcVec, int64(j)); err != nil {
+					return err
+				}
+			}
 		} else {
-			rbat.Vecs[i] = vector.NewConstFixed(types.T_bool.ToType(), false, count, proc.Mp())
+			for j := 0; j < bat.Length(); j++ {
+				if err := vector.AppendFixed(vec, false, false, proc.Mp()); err != nil {
+					return err
+				}
+			}
 		}
 	}
-	rbat.Zs = bat.Zs
-	bat.Zs = nil
-	anal.Output(rbat, isLast)
-	proc.SetInputBatch(rbat)
+	ctr.OutBat.Zs = append(ctr.OutBat.Zs, bat.Zs...)
+	anal.Output(ctr.OutBat, isLast)
+	proc.SetInputBatch(ctr.OutBat)
 	return nil
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
 	anal.Input(bat, isFirst)
-	rbat := batch.NewWithSize(len(ap.Result))
 	markPos := -1
 	for i, pos := range ap.Result {
 		if pos == -1 {
-			rbat.Vecs[i] = vector.NewVec(types.T_bool.ToType())
-			rbat.Vecs[i].PreExtend(bat.Length(), proc.Mp())
 			markPos = i
 			break
 		}
@@ -132,8 +136,13 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	for i := 0; i < count; i++ {
 		vec, err := colexec.JoinFilterEvalExpr(bat, ctr.bat, i, proc, ap.Cond)
 		if err != nil {
-			rbat.Clean(proc.Mp())
 			return err
+		}
+		needFree := true
+		for j := range bat.Vecs {
+			if bat.Vecs[j] == vec {
+				needFree = false
+			}
 		}
 		exprVals := vector.MustFixedCol[bool](vec)
 		hasTrue := false
@@ -154,24 +163,30 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			}
 		}
 		if hasTrue {
-			vector.AppendFixed(rbat.Vecs[markPos], true, false, proc.Mp())
+			vector.AppendFixed(ctr.OutBat.Vecs[markPos], true, false, proc.Mp())
 		} else if hasNull {
-			vector.AppendFixed(rbat.Vecs[markPos], false, true, proc.Mp())
+			vector.AppendFixed(ctr.OutBat.Vecs[markPos], false, true, proc.Mp())
 		} else {
-			vector.AppendFixed(rbat.Vecs[markPos], false, false, proc.Mp())
+			vector.AppendFixed(ctr.OutBat.Vecs[markPos], false, false, proc.Mp())
 		}
-		vec.Free(proc.Mp())
+		if needFree {
+			vec.Free(proc.Mp())
+		}
 	}
 	for i, rp := range ap.Result {
+		uf := ctr.Ufs[i]
+		vec := ctr.OutBat.GetVector(int32(i))
 		if rp >= 0 {
-			rbat.Vecs[i] = bat.Vecs[rp]
-			bat.Vecs[rp] = nil
+			srcVec := bat.GetVector(rp)
+			for j := 0; j < bat.Length(); j++ {
+				if err := uf(vec, srcVec, int64(j)); err != nil {
+					return err
+				}
+			}
 		}
 	}
-	rbat.Zs = bat.Zs
-	bat.Zs = nil
-	rbat.ExpandNulls()
-	anal.Output(rbat, isLast)
-	proc.SetInputBatch(rbat)
+	ctr.OutBat.Zs = append(ctr.OutBat.Zs, bat.Zs...)
+	anal.Output(ctr.OutBat, isLast)
+	proc.SetInputBatch(ctr.OutBat)
 	return nil
 }
