@@ -72,22 +72,27 @@ func TestPrepare(t *testing.T) {
 
 func TestJoin(t *testing.T) {
 	for _, tc := range tcs {
-		bat := hashBuild(t, tc)
+		hashBatch := hashBuild(t, tc)
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+		inputBatch := newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+		inputBatch.AddCnt(4)
+		tc.proc.Reg.MergeReceivers[0].Ch <- inputBatch
 		tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[0].Ch <- inputBatch
+		tc.proc.Reg.MergeReceivers[0].Ch <- inputBatch
+		tc.proc.Reg.MergeReceivers[0].Ch <- inputBatch
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.proc.Reg.MergeReceivers[1].Ch <- bat
+		tc.proc.Reg.MergeReceivers[1].Ch <- hashBatch
 		for {
 			if ok, err := Call(0, tc.proc, tc.arg, false, false); ok || err != nil {
 				break
 			}
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
+		require.Equal(t, int64(1), inputBatch.Cnt)
+		inputBatch.Clean(tc.proc.Mp())
+		tc.arg.Free(tc.proc, false)
+		hashBatch.Clean(tc.proc.Mp())
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
@@ -100,22 +105,26 @@ func BenchmarkJoin(b *testing.B) {
 		}
 		t := new(testing.T)
 		for _, tc := range tcs {
-			bat := hashBuild(t, tc)
+			hashBatch := hashBuild(t, tc)
 			err := Prepare(tc.proc, tc.arg)
 			require.NoError(t, err)
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+			inputBatch := newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+			inputBatch.AddCnt(4)
+			tc.proc.Reg.MergeReceivers[0].Ch <- inputBatch
 			tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+			tc.proc.Reg.MergeReceivers[0].Ch <- inputBatch
+			tc.proc.Reg.MergeReceivers[0].Ch <- inputBatch
+			tc.proc.Reg.MergeReceivers[0].Ch <- inputBatch
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			tc.proc.Reg.MergeReceivers[1].Ch <- bat
+			tc.proc.Reg.MergeReceivers[1].Ch <- hashBatch
 			for {
 				if ok, err := Call(0, tc.proc, tc.arg, false, false); ok || err != nil {
 					break
 				}
-				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 			}
+			inputBatch.Clean(tc.proc.Mp())
+			tc.arg.Free(tc.proc, false)
+			hashBatch.Clean(tc.proc.Mp())
 		}
 	}
 }
@@ -176,12 +185,12 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32) joinTestCase {
 		proc:   proc,
 		cancel: cancel,
 		arg: &Argument{
-			Typs:   ts,
+			Types:  ts,
 			Cond:   cond,
 			Result: rp,
 		},
 		barg: &hashbuild.Argument{
-			Typs: ts,
+			Types: ts,
 		},
 	}
 }
@@ -189,11 +198,13 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32) joinTestCase {
 func hashBuild(t *testing.T, tc joinTestCase) *batch.Batch {
 	err := hashbuild.Prepare(tc.proc, tc.barg)
 	require.NoError(t, err)
-	tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+	inputBatch := newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+	tc.proc.Reg.MergeReceivers[0].Ch <- inputBatch
 	tc.proc.Reg.MergeReceivers[0].Ch <- nil
 	ok, err := hashbuild.Call(0, tc.proc, tc.barg, false, false)
 	require.NoError(t, err)
 	require.Equal(t, true, ok)
+	inputBatch.Clean(tc.proc.GetMPool())
 	return tc.proc.Reg.InputBatch
 }
 
