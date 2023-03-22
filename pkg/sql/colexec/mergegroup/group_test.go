@@ -47,44 +47,44 @@ var (
 
 func init() {
 	tcs = []groupTestCase{
-		newTestCase([]bool{false}, false, []types.Type{{Oid: types.T_int8}}),
-		newTestCase([]bool{false}, true, []types.Type{{Oid: types.T_int8}}),
+		newTestCase([]bool{false}, false, []types.Type{{Oid: types.T_int8, Size: 1}}),
+		newTestCase([]bool{false}, true, []types.Type{{Oid: types.T_int8, Size: 1}}),
 		newTestCase([]bool{false, true}, false, []types.Type{
-			{Oid: types.T_int8},
-			{Oid: types.T_int16},
+			{Oid: types.T_int8, Size: 1},
+			{Oid: types.T_int16, Size: 2},
 		}),
 		newTestCase([]bool{false, true}, true, []types.Type{
-			{Oid: types.T_int16},
-			{Oid: types.T_int64},
+			{Oid: types.T_int16, Size: 2},
+			{Oid: types.T_int64, Size: 8},
 		}),
 		newTestCase([]bool{false, true}, false, []types.Type{
-			{Oid: types.T_int64},
-			{Oid: types.T_decimal128},
+			{Oid: types.T_int64, Size: 8},
+			{Oid: types.T_decimal128, Size: 16},
 		}),
 		newTestCase([]bool{true, false, true}, false, []types.Type{
-			{Oid: types.T_int64},
-			{Oid: types.T_int64},
-			{Oid: types.T_decimal128},
+			{Oid: types.T_int64, Size: 8},
+			{Oid: types.T_int64, Size: 8},
+			{Oid: types.T_decimal128, Size: 16},
 		}),
 		newTestCase([]bool{true, false, true}, false, []types.Type{
-			{Oid: types.T_int64},
-			{Oid: types.T_varchar, Width: 2},
-			{Oid: types.T_decimal128},
+			{Oid: types.T_int64, Size: 8},
+			{Oid: types.T_varchar, Width: 2, Size: 24},
+			{Oid: types.T_decimal128, Size: 16},
 		}),
 		newTestCase([]bool{true, true, true}, false, []types.Type{
-			{Oid: types.T_int64},
-			{Oid: types.T_varchar, Width: 2},
-			{Oid: types.T_decimal128},
+			{Oid: types.T_int64, Size: 8},
+			{Oid: types.T_varchar, Width: 2, Size: 24},
+			{Oid: types.T_decimal128, Size: 16},
 		}),
 		newTestCase([]bool{true, true, true}, false, []types.Type{
-			{Oid: types.T_int64},
-			{Oid: types.T_varchar},
-			{Oid: types.T_decimal128},
+			{Oid: types.T_int64, Size: 8},
+			{Oid: types.T_varchar, Size: 24},
+			{Oid: types.T_decimal128, Size: 16},
 		}),
 		newTestCase([]bool{false, false, false}, false, []types.Type{
-			{Oid: types.T_int64},
-			{Oid: types.T_varchar},
-			{Oid: types.T_decimal128},
+			{Oid: types.T_int64, Size: 8},
+			{Oid: types.T_varchar, Size: 24},
+			{Oid: types.T_decimal128, Size: 16},
 		}),
 	}
 }

@@ -671,3 +671,73 @@ func (node *ShowAccounts) Format(ctx *FmtCtx) {
 
 func (node *ShowAccounts) GetStatementType() string { return "Show Accounts" }
 func (node *ShowAccounts) GetQueryType() string     { return QueryTypeOth }
+
+type ShowPublications struct {
+	showImpl
+	Like *ComparisonExpr
+}
+
+func (node *ShowPublications) Format(ctx *FmtCtx) {
+	ctx.WriteString("show publications")
+	if node.Like != nil {
+		ctx.WriteByte(' ')
+		node.Like.Format(ctx)
+	}
+}
+
+func (node *ShowPublications) GetStatementType() string { return "Show Publications" }
+func (node *ShowPublications) GetQueryType() string     { return QueryTypeOth }
+
+type ShowSubscriptions struct {
+	showImpl
+	Like *ComparisonExpr
+}
+
+func (node *ShowSubscriptions) Format(ctx *FmtCtx) {
+	ctx.WriteString("show subscriptions")
+	if node.Like != nil {
+		ctx.WriteByte(' ')
+		node.Like.Format(ctx)
+	}
+}
+func (node *ShowSubscriptions) GetStatementType() string { return "Show Subscriptions" }
+func (node *ShowSubscriptions) GetQueryType() string     { return QueryTypeOth }
+
+type ShowCreatePublications struct {
+	showImpl
+	Name string
+}
+
+func (node *ShowCreatePublications) Format(ctx *FmtCtx) {
+	ctx.WriteString("show create publication ")
+	ctx.WriteString(node.Name)
+}
+func (node *ShowCreatePublications) GetStatementType() string { return "Show Create Publication" }
+func (node *ShowCreatePublications) GetQueryType() string     { return QueryTypeOth }
+
+type ShowTableSize struct {
+	showImpl
+	Table  *UnresolvedObjectName
+	DbName string
+}
+
+func (node *ShowTableSize) Format(ctx *FmtCtx) {
+	ctx.WriteString("show table size")
+	if node.Table != nil {
+		ctx.WriteString(" from ")
+		node.Table.Format(ctx)
+	}
+	if node.DbName != "" {
+		ctx.WriteString(" from ")
+		ctx.WriteString(node.DbName)
+	}
+}
+func (node *ShowTableSize) GetStatementType() string { return "Show Table Size" }
+func (node *ShowTableSize) GetQueryType() string     { return QueryTypeDQL }
+
+func NewShowTableSize(table *UnresolvedObjectName, dbname string) *ShowTableSize {
+	return &ShowTableSize{
+		Table:  table,
+		DbName: dbname,
+	}
+}

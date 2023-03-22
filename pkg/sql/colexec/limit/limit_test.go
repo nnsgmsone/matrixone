@@ -42,7 +42,7 @@ var (
 )
 
 func init() {
-	testTypes := []types.Type{{Oid: types.T_int8}}
+	testTypes := []types.Type{{Oid: types.T_int8, Size: 1}}
 	tcs = []limitTestCase{
 		{
 			proc:  testutil.NewProcessWithMPool(mpool.MustNewZero()),

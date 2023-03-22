@@ -16,15 +16,17 @@ package disttae
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"math"
 	"sort"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -68,16 +70,13 @@ func fetchZonemapAndRowsFromBlockInfo(
 
 	for i := range idxs {
 		bytes := obs[0][i].GetBuf()
-		if err != nil {
-			return nil, 0, err
-		}
 		copy(zonemapList[i][:], bytes[:])
 	}
 
 	return zonemapList, rows, nil
 }
 
-func getZonemapDataFromMeta(ctx context.Context, columns []int, meta BlockMeta, tableDef *plan.TableDef) ([][2]any, []uint8, error) {
+func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableDef) ([][2]any, []uint8, error) {
 	dataLength := len(columns)
 	datas := make([][2]any, dataLength)
 	dataTypes := make([]uint8, dataLength)
@@ -551,6 +550,7 @@ func _computeAnd(left *pkRange, right *pkRange) (bool, *pkRange) {
 	}
 }
 
+/*
 func getHashValue(buf []byte) uint64 {
 	buf = append([]byte{0}, buf...)
 	var states [3]uint64
@@ -598,6 +598,7 @@ func getListByItems[T DNStore](list []T, items []int64) []int {
 	}
 	return dnList
 }
+*/
 
 // func getListByRange[T DNStore](list []T, pkRange [][2]int64) []int {
 // 	fullList := func() []int {
@@ -733,13 +734,13 @@ func findRowByPkValue(vec *vector.Vector, v any) int {
 		rows := vector.MustFixedCol[types.Decimal64](vec)
 		val := v.(types.Decimal64)
 		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx].Ge(val)
+			return rows[idx].Compare(val) >= 0
 		})
 	case types.T_decimal128:
 		rows := vector.MustFixedCol[types.Decimal128](vec)
 		val := v.(types.Decimal128)
 		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx].Ge(val)
+			return rows[idx].Compare(val) >= 0
 		})
 	case types.T_char, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_varchar, types.T_json, types.T_blob:
@@ -772,4 +773,11 @@ func mustVectorToProto(v *vector.Vector) *api.Vector {
 		panic(err)
 	}
 	return ret
+}
+
+func logDebugf(txnMeta txn.TxnMeta, msg string, infos ...interface{}) {
+	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+		infos = append(infos, txnMeta.DebugString())
+		logutil.Debugf(msg+" %s", infos...)
+	}
 }

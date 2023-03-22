@@ -47,7 +47,7 @@ func init() {
 		{
 			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
 			types: []types.Type{
-				{Oid: types.T_int8},
+				{Oid: types.T_int8, Size: 1},
 			},
 			arg: &Argument{
 				E: &plan.Expr{
@@ -60,14 +60,14 @@ func init() {
 					},
 				},
 				Types: []types.Type{
-					{Oid: types.T_int8},
+					{Oid: types.T_int8, Size: 1},
 				},
 			},
 		},
 		{
 			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
 			types: []types.Type{
-				{Oid: types.T_int8},
+				{Oid: types.T_int8, Size: 1},
 			},
 			arg: &Argument{
 				E: &plan.Expr{
@@ -80,7 +80,7 @@ func init() {
 					},
 				},
 				Types: []types.Type{
-					{Oid: types.T_int8},
+					{Oid: types.T_int8, Size: 1},
 				},
 			},
 		},

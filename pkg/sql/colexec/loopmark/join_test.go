@@ -51,8 +51,8 @@ var (
 
 func init() {
 	tcs = []joinTestCase{
-		newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0, -1}),
-		newTestCase([]bool{true}, []types.Type{{Oid: types.T_int8}}, []int32{0, -1}),
+		newTestCase([]bool{false}, []types.Type{types.New(types.T_int8, 0, 0)}, []int32{0, -1}),
+		newTestCase([]bool{true}, []types.Type{types.New(types.T_int8, 0, 0)}, []int32{0, -1}),
 	}
 }
 
@@ -113,8 +113,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32) joinTestCase {
 	args := make([]*plan.Expr, 0, 2)
 	args = append(args, &plan.Expr{
 		Typ: &plan.Type{
-			Size: ts[0].Size,
-			Id:   int32(ts[0].Oid),
+			Id: int32(ts[0].Oid),
 		},
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
@@ -125,8 +124,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32) joinTestCase {
 	})
 	args = append(args, &plan.Expr{
 		Typ: &plan.Type{
-			Size: ts[0].Size,
-			Id:   int32(ts[0].Oid),
+			Id: int32(ts[0].Oid),
 		},
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
@@ -137,8 +135,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32) joinTestCase {
 	})
 	cond := &plan.Expr{
 		Typ: &plan.Type{
-			Size: 1,
-			Id:   int32(types.T_bool),
+			Id: int32(types.T_bool),
 		},
 		Expr: &plan.Expr_F{
 			F: &plan.Function{

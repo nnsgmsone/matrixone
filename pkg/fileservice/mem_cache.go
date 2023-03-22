@@ -16,20 +16,19 @@ package fileservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/memcachepolicy"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/memcachepolicy/clockpolicy"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/memcachepolicy/lrupolicy"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice/objcache/clockobjcache"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/objcache/lruobjcache"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
 type MemCache struct {
-	policy memcachepolicy.Policy
-	stats  *CacheStats
-	ch     chan func()
+	objCache    ObjectCache
+	ch          chan func()
+	counterSets []*perfcounter.CounterSet
 }
 
-func NewMemCache(opts ...Options) *MemCache {
+func NewMemCache(opts ...MemCacheOptionFunc) *MemCache {
 	ch := make(chan func(), 65536)
 	go func() {
 		for fn := range ch {
@@ -37,38 +36,45 @@ func NewMemCache(opts ...Options) *MemCache {
 		}
 	}()
 
-	initOpts := defaultOptions()
+	initOpts := defaultMemCacheOptions()
 	for _, optFunc := range opts {
 		optFunc(&initOpts)
 	}
 
 	return &MemCache{
-		policy: initOpts.policy,
-		stats:  new(CacheStats),
-		ch:     ch,
+		objCache:    initOpts.objCache,
+		ch:          ch,
+		counterSets: initOpts.counterSets,
 	}
 }
 
-func WithLRU(capacity int64) Options {
-	return func(o *options) {
-		o.policy = lrupolicy.New(capacity)
+func WithLRU(capacity int64) MemCacheOptionFunc {
+	return func(o *memCacheOptions) {
+		o.objCache = lruobjcache.New(capacity)
 	}
 }
 
-func WithClock(capacity int64) Options {
-	return func(o *options) {
-		o.policy = clockpolicy.New(capacity)
+func WithClock(capacity int64) MemCacheOptionFunc {
+	return func(o *memCacheOptions) {
+		o.objCache = clockobjcache.New(capacity)
 	}
 }
 
-type Options func(*options)
-
-type options struct {
-	policy memcachepolicy.Policy
+func WithPerfCounterSets(counterSets []*perfcounter.CounterSet) MemCacheOptionFunc {
+	return func(o *memCacheOptions) {
+		o.counterSets = append(o.counterSets, counterSets...)
+	}
 }
 
-func defaultOptions() options {
-	return options{}
+type MemCacheOptionFunc func(*memCacheOptions)
+
+type memCacheOptions struct {
+	objCache    ObjectCache
+	counterSets []*perfcounter.CounterSet
+}
+
+func defaultMemCacheOptions() memCacheOptions {
+	return memCacheOptions{}
 }
 
 var _ Cache = new(MemCache)
@@ -79,15 +85,18 @@ func (m *MemCache) Read(
 ) (
 	err error,
 ) {
-	_, span := trace.Start(ctx, "MemCache.Read")
-	defer span.End()
+	if vector.NoCache {
+		return nil
+	}
 
-	numHit := 0
+	var numHit, numRead int64
 	defer func() {
-		if m.stats != nil {
-			atomic.AddInt64(&m.stats.NumRead, int64(len(vector.Entries)))
-			atomic.AddInt64(&m.stats.NumHit, int64(numHit))
-		}
+		perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
+			c.Cache.Read.Add(numRead)
+			c.Cache.Hit.Add(numHit)
+			c.Cache.MemRead.Add(numRead)
+			c.Cache.MemHit.Add(numHit)
+		}, m.counterSets...)
 	}()
 
 	for i, entry := range vector.Entries {
@@ -102,19 +111,14 @@ func (m *MemCache) Read(
 			Offset: entry.Offset,
 			Size:   entry.Size,
 		}
-		obj, size, ok := m.policy.Get(key)
-		updateCounters(ctx, func(c *Counter) {
-			atomic.AddInt64(&c.MemCacheRead, 1)
-		})
+		obj, size, ok := m.objCache.Get(key, vector.Preloading)
+		numRead++
 		if ok {
 			vector.Entries[i].Object = obj
 			vector.Entries[i].ObjectSize = size
 			vector.Entries[i].done = true
 			numHit++
 			m.cacheHit()
-			updateCounters(ctx, func(c *Counter) {
-				atomic.AddInt64(&c.MemCacheHit, 1)
-			})
 		}
 	}
 
@@ -130,6 +134,9 @@ func (m *MemCache) Update(
 	vector *IOVector,
 	async bool,
 ) error {
+	if vector.NoCache {
+		return nil
+	}
 	for _, entry := range vector.Entries {
 		if entry.Object == nil {
 			continue
@@ -143,19 +150,15 @@ func (m *MemCache) Update(
 			obj := entry.Object // copy from loop variable
 			objSize := entry.ObjectSize
 			m.ch <- func() {
-				m.policy.Set(key, obj, objSize)
+				m.objCache.Set(key, obj, objSize, vector.Preloading)
 			}
 		} else {
-			m.policy.Set(key, entry.Object, entry.ObjectSize)
+			m.objCache.Set(key, entry.Object, entry.ObjectSize, vector.Preloading)
 		}
 	}
 	return nil
 }
 
 func (m *MemCache) Flush() {
-	m.policy.Flush()
-}
-
-func (m *MemCache) CacheStats() *CacheStats {
-	return m.stats
+	m.objCache.Flush()
 }

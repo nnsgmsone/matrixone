@@ -104,13 +104,13 @@ func newTestCase(all bool) dispatchTestCase {
 	return dispatchTestCase{
 		proc: proc,
 		types: []types.Type{
-			{Oid: types.T_int8},
+			types.New(types.T_int8, 0, 0),
 		},
 		arg: &Argument{
 			FuncId:    SendToAllLocalFunc,
 			LocalRegs: []*process.WaitRegister{proc.Reg.MergeReceivers[0]},
 			Types: []types.Type{
-				{Oid: types.T_int8},
+				types.New(types.T_int8, 0, 0),
 			},
 		},
 		cancel: cancel,

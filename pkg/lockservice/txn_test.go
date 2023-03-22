@@ -19,17 +19,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestLockAdded(t *testing.T) {
 	id := []byte("t1")
 	fsp := newFixedSlicePool(2)
-	txn := newActiveTxn(id, string(id), fsp)
+	txn := newActiveTxn(id, string(id), fsp, "")
 
-	txn.lockAdded(1, [][]byte{[]byte("k1")})
-	txn.lockAdded(1, [][]byte{[]byte("k11")})
-	txn.lockAdded(2, [][]byte{[]byte("k2"), []byte("k22")})
+	txn.lockAdded("s1", 1, [][]byte{[]byte("k1")}, false)
+	txn.lockAdded("s1", 1, [][]byte{[]byte("k11")}, false)
+	txn.lockAdded("s1", 2, [][]byte{[]byte("k2"), []byte("k22")}, false)
 
 	assert.Equal(t, 2, len(txn.holdLocks))
 
@@ -47,20 +50,27 @@ func TestLockAdded(t *testing.T) {
 func TestClose(t *testing.T) {
 	id := []byte("t1")
 	fsp := newFixedSlicePool(2)
-	txn := newActiveTxn(id, string(id), fsp)
+	txn := newActiveTxn(id, string(id), fsp, "")
 	tables := map[uint64]lockTable{
-		1: newLocalLockTable(1, nil),
-		2: newLocalLockTable(2, nil),
+		1: newLocalLockTable(pb.LockTable{Table: 1}, nil, runtime.DefaultRuntime().Clock()),
+		2: newLocalLockTable(pb.LockTable{Table: 2}, nil, runtime.DefaultRuntime().Clock()),
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 	defer cancel()
-	assert.NoError(t, tables[1].lock(ctx, txn, [][]byte{[]byte("k1")}, LockOptions{}))
-	assert.NoError(t, tables[2].lock(ctx, txn, [][]byte{[]byte("k2")}, LockOptions{}))
 
-	lockTableFunc := func(table uint64) lockTable {
-		return tables[table]
-	}
-	txn.close(lockTableFunc)
+	_, err := tables[1].lock(ctx, txn, [][]byte{[]byte("k1")}, LockOptions{})
+	assert.NoError(t, err)
+
+	_, err = tables[2].lock(ctx, txn, [][]byte{[]byte("k2")}, LockOptions{})
+	assert.NoError(t, err)
+
+	txn.close(
+		"s1",
+		txn.txnID,
+		timestamp.Timestamp{},
+		func(table uint64) (lockTable, error) {
+			return tables[table], nil
+		})
 	assert.Empty(t, txn.txnID)
 	assert.Empty(t, txn.txnKey)
 	assert.Nil(t, txn.blockedWaiter)

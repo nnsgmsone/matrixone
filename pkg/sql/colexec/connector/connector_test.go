@@ -134,12 +134,12 @@ func newTestCase() connectorTestCase {
 	return connectorTestCase{
 		proc: proc,
 		types: []types.Type{
-			{Oid: types.T_int8},
+			types.New(types.T_int8, 0, 0),
 		},
 		arg: &Argument{
 			Reg: proc.Reg.MergeReceivers[0],
 			Types: []types.Type{
-				{Oid: types.T_int8},
+				types.New(types.T_int8, 0, 0),
 			},
 		},
 		cancel: cancel,
