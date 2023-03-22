@@ -46,7 +46,9 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	ctr := arg.ctr
 	if ctr != nil {
 		ctr.CleanMemForNextOp(proc)
-		ctr.bat.SubCnt(1)
-		ctr.bat = nil
+		if ctr.bat != nil {
+			ctr.bat.SubCnt(1)
+			ctr.bat = nil
+		}
 	}
 }

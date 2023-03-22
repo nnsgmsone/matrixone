@@ -82,9 +82,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	bat := <-proc.Reg.MergeReceivers[1].Ch
 	anal.WaitStop(start)
 
-	if bat != nil {
-		ctr.bat = bat
-	}
+	ctr.bat = bat
 	return nil
 }
 
