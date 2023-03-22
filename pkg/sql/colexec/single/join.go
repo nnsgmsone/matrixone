@@ -115,7 +115,9 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 				}
 			}
 		} else {
-			ctr.OutBat.Vecs[i] = vector.NewConstNull(ap.Types[i], bat.Length(), proc.Mp())
+			if err := vector.SetConstNull(ctr.OutBat.Vecs[i], len, proc.Mp()); err != nil {
+				return err
+			}
 		}
 	}
 	ctr.OutBat.Zs = append(ctr.OutBat.Zs, bat.Zs...)
