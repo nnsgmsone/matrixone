@@ -22,13 +22,13 @@ import (
 )
 
 const (
-	buildingHashMap = iota
-	probingHashMap
-	operatorEnd
+	Build = iota
+	Probe
+	End
 )
 
 type Argument struct {
-	ctr container
+	ctr *container
 
 	// hash table bucket related information.
 	IBucket, NBucket uint64
@@ -47,9 +47,9 @@ type container struct {
 	hashTable *hashmap.StrHashMap
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	arg.ctr.CleanMemForNextOp(proc)
-	arg.ctr.cleanHashMap()
+func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	ap.ctr.CleanMemForNextOp(proc)
+	ap.ctr.cleanHashMap()
 }
 
 func (ctr *container) cleanHashMap() {

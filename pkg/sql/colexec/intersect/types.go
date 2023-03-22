@@ -22,9 +22,9 @@ import (
 )
 
 const (
-	build = iota
-	probe
-	end
+	Build = iota
+	Probe
+	End
 )
 
 type Argument struct {
@@ -54,11 +54,14 @@ type container struct {
 	inBuckets []uint8
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	ctr := arg.ctr
+func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	ap.ctr.CleanMemForNextOp(proc)
+	ap.ctr.cleanHashMap()
+}
+
+func (ctr *container) cleanHashMap() {
 	if ctr.hashTable != nil {
 		ctr.hashTable.Free()
 		ctr.hashTable = nil
 	}
-	ctr.CleanMemForNextOp(proc)
 }
