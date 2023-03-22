@@ -1,4 +1,3 @@
-// Copyright 2021 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -51,9 +50,10 @@ var (
 )
 
 func init() {
+	testType := types.New(types.T_int8, 0, 0)
 	tcs = []joinTestCase{
-		newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int8}}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)}),
-		newTestCase([]bool{true}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int8}}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)}),
+		newTestCase([]bool{false}, []types.Type{testType, testType}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)}),
+		newTestCase([]bool{true}, []types.Type{testType, testType}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)}),
 	}
 }
 
@@ -122,10 +122,11 @@ func TestJoin(t *testing.T) {
 }
 
 func BenchmarkJoin(b *testing.B) {
+	testType := types.New(types.T_int8, 0, 0)
 	for i := 0; i < b.N; i++ {
 		tcs = []joinTestCase{
-			newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int8}}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)}),
-			newTestCase([]bool{true}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int8}}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)}),
+			newTestCase([]bool{false}, []types.Type{testType, testType}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)}),
+			newTestCase([]bool{true}, []types.Type{testType, testType}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)}),
 		}
 		t := new(testing.T)
 		for _, tc := range tcs {
@@ -148,7 +149,6 @@ func BenchmarkJoin(b *testing.B) {
 			}
 			inputBatch.Clean(tc.proc.Mp())
 			tc.arg.Free(tc.proc, false)
-			hashBatch.Clean(tc.proc.Mp())
 		}
 	}
 }
@@ -169,8 +169,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos) joinTestC
 	args := make([]*plan.Expr, 0, 2)
 	args = append(args, &plan.Expr{
 		Typ: &plan.Type{
-			Size: ts[0].Size,
-			Id:   int32(ts[0].Oid),
+			Id: int32(ts[0].Oid),
 		},
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
@@ -181,8 +180,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos) joinTestC
 	})
 	args = append(args, &plan.Expr{
 		Typ: &plan.Type{
-			Size: ts[0].Size,
-			Id:   int32(ts[0].Oid),
+			Id: int32(ts[0].Oid),
 		},
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
@@ -193,8 +191,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos) joinTestC
 	})
 	cond := &plan.Expr{
 		Typ: &plan.Type{
-			Size: 1,
-			Id:   int32(types.T_bool),
+			Id: int32(types.T_bool),
 		},
 		Expr: &plan.Expr_F{
 			F: &plan.Function{

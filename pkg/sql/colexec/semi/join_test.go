@@ -51,23 +51,24 @@ var (
 )
 
 func init() {
+	testType := types.New(types.T_int8, 0, 0)
 	tcs = []joinTestCase{
-		newTestCase(mpool.MustNewZero(), []bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0},
+		newTestCase(mpool.MustNewZero(), []bool{false}, []types.Type{testType}, []int32{0},
 			[][]*plan.Expr{
 				{
-					newExpr(0, types.Type{Oid: types.T_int8}),
+					newExpr(0, testType),
 				},
 				{
-					newExpr(0, types.Type{Oid: types.T_int8}),
+					newExpr(0, testType),
 				},
 			}),
-		newTestCase(mpool.MustNewZero(), []bool{true}, []types.Type{{Oid: types.T_int8}}, []int32{0},
+		newTestCase(mpool.MustNewZero(), []bool{true}, []types.Type{testType}, []int32{0},
 			[][]*plan.Expr{
 				{
-					newExpr(0, types.Type{Oid: types.T_int8}),
+					newExpr(0, testType),
 				},
 				{
-					newExpr(0, types.Type{Oid: types.T_int8}),
+					newExpr(0, testType),
 				},
 			}),
 	}
@@ -112,7 +113,7 @@ func TestJoin(t *testing.T) {
 }
 
 func BenchmarkJoin(b *testing.B) {
-	testType := types.Type{Oid: types.T_int8}
+	testType := types.New(types.T_int8, 0, 0)
 	for i := 0; i < b.N; i++ {
 		tcs = []joinTestCase{
 			newTestCase(mpool.MustNewZero(), []bool{false}, []types.Type{testType}, []int32{0},
@@ -166,7 +167,6 @@ func BenchmarkJoin(b *testing.B) {
 func newExpr(pos int32, typ types.Type) *plan.Expr {
 	return &plan.Expr{
 		Typ: &plan.Type{
-			Size:  typ.Size,
 			Scale: typ.Scale,
 			Width: typ.Width,
 			Id:    int32(typ.Oid),
@@ -195,8 +195,7 @@ func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs []
 	args := make([]*plan.Expr, 0, 2)
 	args = append(args, &plan.Expr{
 		Typ: &plan.Type{
-			Size: ts[0].Size,
-			Id:   int32(ts[0].Oid),
+			Id: int32(ts[0].Oid),
 		},
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
@@ -207,8 +206,7 @@ func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs []
 	})
 	args = append(args, &plan.Expr{
 		Typ: &plan.Type{
-			Size: ts[0].Size,
-			Id:   int32(ts[0].Oid),
+			Id: int32(ts[0].Oid),
 		},
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
@@ -219,8 +217,7 @@ func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs []
 	})
 	cond := &plan.Expr{
 		Typ: &plan.Type{
-			Size: 1,
-			Id:   int32(types.T_bool),
+			Id: int32(types.T_bool),
 		},
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
