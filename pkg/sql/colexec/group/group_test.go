@@ -47,41 +47,41 @@ var (
 
 func init() {
 	tcs = []groupTestCase{
-		newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}}, []*plan.Expr{},
+		newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8, Size: 1}}, []*plan.Expr{},
 			[]agg.Aggregate{{Op: 0, E: newExpression(0, int32(types.T_int64))}}),
-		newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}}, []*plan.Expr{newExpression(0, int32(types.T_int8))},
+		newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8, Size: 1}}, []*plan.Expr{newExpression(0, int32(types.T_int8))},
 			[]agg.Aggregate{{Op: 0, E: newExpression(0, int32(types.T_int64))}}),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
-			{Oid: types.T_int8},
-			{Oid: types.T_int16},
+			{Oid: types.T_int8, Size: 1},
+			{Oid: types.T_int16, Size: 2},
 		}, []*plan.Expr{newExpression(0, int32(types.T_int8)), newExpression(1, int32(types.T_int16))},
 			[]agg.Aggregate{{Op: 0, E: newExpression(0, int32(types.T_int64))}}),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
-			{Oid: types.T_int8},
-			{Oid: types.T_int16},
-			{Oid: types.T_int32},
-			{Oid: types.T_int64},
+			{Oid: types.T_int8, Size: 1},
+			{Oid: types.T_int16, Size: 2},
+			{Oid: types.T_int32, Size: 4},
+			{Oid: types.T_int64, Size: 8},
 		}, []*plan.Expr{newExpression(0, int32(types.T_int8)), newExpression(3, int32(types.T_int64))},
 			[]agg.Aggregate{{Op: 0, E: newExpression(0, int32(types.T_int64))}}),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
-			{Oid: types.T_int64},
-			{Oid: types.T_int64},
-			{Oid: types.T_int64},
-			{Oid: types.T_decimal128},
+			{Oid: types.T_int64, Size: 8},
+			{Oid: types.T_int64, Size: 8},
+			{Oid: types.T_int64, Size: 8},
+			{Oid: types.T_decimal128, Size: 16},
 		}, []*plan.Expr{newExpression(1, int32(types.T_int64)), newExpression(3, int32(types.T_decimal128))},
 			[]agg.Aggregate{{Op: 0, E: newExpression(0, int32(types.T_int64))}}),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
-			{Oid: types.T_int64},
-			{Oid: types.T_int64},
-			{Oid: types.T_int64},
-			{Oid: types.T_decimal128},
+			{Oid: types.T_int64, Size: 8},
+			{Oid: types.T_int64, Size: 8},
+			{Oid: types.T_int64, Size: 8},
+			{Oid: types.T_decimal128, Size: 16},
 		}, []*plan.Expr{newExpression(1, int32(types.T_int64)), newExpression(2, int32(types.T_int64)), newExpression(3, int32(types.T_decimal128))},
 			[]agg.Aggregate{{Op: 0, E: newExpression(0, int32(types.T_int64))}}),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
-			{Oid: types.T_int64},
-			{Oid: types.T_int64},
-			{Oid: types.T_varchar},
-			{Oid: types.T_decimal128},
+			{Oid: types.T_int64, Size: 8},
+			{Oid: types.T_int64, Size: 8},
+			{Oid: types.T_varchar, Size: 24},
+			{Oid: types.T_decimal128, Size: 16},
 		}, []*plan.Expr{newExpression(1, int32(types.T_int64)), newExpression(2, int32(types.T_varchar)), newExpression(3, int32(types.T_decimal128))},
 			[]agg.Aggregate{{Op: 0, E: newExpression(0, int32(types.T_int64))}}),
 	}
@@ -129,12 +129,7 @@ func newTestCase(flgs []bool, ts []types.Type, exprs []*plan.Expr, aggs []agg.Ag
 	typs := make([]types.Type, len(exprs))
 	for i, expr := range exprs {
 		t := expr.Typ
-		typs[i] = types.Type{
-			Oid:   types.T(t.Id),
-			Width: t.Width,
-			Size:  t.Size,
-			Scale: t.Scale,
-		}
+		typs[i] = types.New(types.T(t.Id), t.Width, t.Scale)
 	}
 	return groupTestCase{
 		types: ts,

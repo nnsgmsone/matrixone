@@ -55,7 +55,7 @@ type ViewDef = plan.ViewDef
 type PartitionByDef = plan.PartitionByDef
 type ClusterByDef = plan.ClusterByDef
 type OrderBySpec = plan.OrderBySpec
-type CreateTable_FkColName = plan.CreateTable_FkColName
+type FkColName = plan.FkColName
 type ForeignKeyDef = plan.ForeignKeyDef
 type ClusterTable = plan.ClusterTable
 type PrimaryKeyDef = plan.PrimaryKeyDef
@@ -97,6 +97,7 @@ type CompilerContext interface {
 	// is building the alter view or not
 	// return: yes or no, dbName, viewName
 	GetBuildingAlterView() (bool, string, string)
+	GetStatsCache() *StatsCache
 }
 
 type Optimizer interface {

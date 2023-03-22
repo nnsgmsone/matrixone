@@ -117,7 +117,7 @@ func newTestCase(offset uint64) offsetTestCase {
 	ctx, cancel := context.WithCancel(context.Background())
 	proc := process.NewFromProc(testutil.NewProcessWithMPool(mpool.MustNewZero()),
 		ctx, regNum)
-	testTypes := []types.Type{{Oid: types.T_int8}}
+	testTypes := []types.Type{{Oid: types.T_int8, Size: 1}}
 	return offsetTestCase{
 		proc:  proc,
 		types: testTypes,

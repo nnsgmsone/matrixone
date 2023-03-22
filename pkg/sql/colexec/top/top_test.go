@@ -44,9 +44,12 @@ var (
 
 func init() {
 	tcs = []topTestCase{
-		newTestCase(mpool.MustNewZero(), []types.Type{{Oid: types.T_int8}}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
-		newTestCase(mpool.MustNewZero(), []types.Type{{Oid: types.T_int8}}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
-		newTestCase(mpool.MustNewZero(), []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}, {Expr: newExpression(1), Flag: 0}}),
+		newTestCase(mpool.MustNewZero(), []types.Type{{Oid: types.T_int8, Size: 1}}, 3,
+			[]*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
+		newTestCase(mpool.MustNewZero(), []types.Type{{Oid: types.T_int8, Size: 1}}, 3,
+			[]*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
+		newTestCase(mpool.MustNewZero(), []types.Type{{Oid: types.T_int8, Size: 1}, {Oid: types.T_int64, Size: 8}},
+			3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}, {Expr: newExpression(1), Flag: 0}}),
 	}
 }
 

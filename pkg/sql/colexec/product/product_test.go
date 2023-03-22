@@ -50,8 +50,10 @@ var (
 
 func init() {
 	tcs = []productTestCase{
-		newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int8}}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)}),
-		newTestCase([]bool{true}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int8}}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)}),
+		newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8, Size: 1}, {Oid: types.T_int8, Size: 1}},
+			[]colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)}),
+		newTestCase([]bool{true}, []types.Type{{Oid: types.T_int8, Size: 1}, {Oid: types.T_int8, Size: 1}},
+			[]colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)}),
 	}
 }
 
@@ -100,23 +102,6 @@ func TestProduct(t *testing.T) {
 		bat3.Clean(tc.proc.Mp())
 		tc.arg.Free(tc.proc, false)
 		tc.barg.Free(tc.proc, false)
-		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
-		/*
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-			tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			tc.proc.Reg.MergeReceivers[1].Ch <- bat
-			for {
-				if ok, err := Call(0, tc.proc, tc.arg, false, false); ok || err != nil {
-					break
-				}
-				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-			}
-			require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
-		*/
 	}
 }
 

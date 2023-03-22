@@ -48,19 +48,19 @@ func init() {
 		{
 			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
 			inputTypes: []types.Type{
-				{Oid: types.T_int8},
-				{Oid: types.T_int16},
-				{Oid: types.T_int32},
+				{Oid: types.T_int8, Size: 1},
+				{Oid: types.T_int16, Size: 2},
+				{Oid: types.T_int32, Size: 4},
 			},
 			resultTypes: []types.Type{
-				{Oid: types.T_int32},
+				{Oid: types.T_int32, Size: 4},
 			},
 			arg: &Argument{
 				Es: []*plan.Expr{
 					{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 2}}}, // get col[2] from input batch
 				},
 				Types: []types.Type{
-					{Oid: types.T_int32},
+					{Oid: types.T_int32, Size: 4},
 				}, // should same with resultTypes
 			},
 		},

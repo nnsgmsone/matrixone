@@ -53,22 +53,22 @@ var (
 
 func init() {
 	tcs = []joinTestCase{
-		newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}}, []colexec.ResultPos{colexec.NewResultPos(0, 0)},
+		newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8, Size: 1}}, []colexec.ResultPos{colexec.NewResultPos(0, 0)},
 			[][]*plan.Expr{
 				{
-					newExpr(0, types.Type{Oid: types.T_int8}),
+					newExpr(0, types.Type{Oid: types.T_int8, Size: 1}),
 				},
 				{
-					newExpr(0, types.Type{Oid: types.T_int8}),
+					newExpr(0, types.Type{Oid: types.T_int8, Size: 1}),
 				},
 			}),
-		newTestCase([]bool{true}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int8}}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)},
+		newTestCase([]bool{true}, []types.Type{{Oid: types.T_int8, Size: 1}, {Oid: types.T_int8, Size: 1}}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)},
 			[][]*plan.Expr{
 				{
-					newExpr(0, types.Type{Oid: types.T_int8}),
+					newExpr(0, types.Type{Oid: types.T_int8, Size: 1}),
 				},
 				{
-					newExpr(0, types.Type{Oid: types.T_int8}),
+					newExpr(0, types.Type{Oid: types.T_int8, Size: 1}),
 				},
 			}),
 	}
@@ -129,7 +129,6 @@ func TestJoin(t *testing.T) {
 func newExpr(pos int32, typ types.Type) *plan.Expr {
 	return &plan.Expr{
 		Typ: &plan.Type{
-			Size:  typ.Size,
 			Scale: typ.Scale,
 			Width: typ.Width,
 			Id:    int32(typ.Oid),
@@ -150,8 +149,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*p
 	args := make([]*plan.Expr, 0, 2)
 	args = append(args, &plan.Expr{
 		Typ: &plan.Type{
-			Size: ts[0].Size,
-			Id:   int32(ts[0].Oid),
+			Id: int32(ts[0].Oid),
 		},
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
@@ -162,8 +160,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*p
 	})
 	args = append(args, &plan.Expr{
 		Typ: &plan.Type{
-			Size: ts[0].Size,
-			Id:   int32(ts[0].Oid),
+			Id: int32(ts[0].Oid),
 		},
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
@@ -174,8 +171,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*p
 	})
 	cond := &plan.Expr{
 		Typ: &plan.Type{
-			Size: 1,
-			Id:   int32(types.T_bool),
+			Id: int32(types.T_bool),
 		},
 		Expr: &plan.Expr_F{
 			F: &plan.Function{

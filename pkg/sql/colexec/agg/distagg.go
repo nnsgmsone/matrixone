@@ -182,7 +182,7 @@ func (a *UnaryDistAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, 
 			}
 			j := vps[i] - 1
 			str := vec.GetBytesAt(i + int(start))
-			if ok, err = a.maps[j].InsertBytes(str); err != nil {
+			if ok, err = a.maps[j].InsertValue(str); err != nil {
 				return err
 			}
 			if ok {
@@ -228,7 +228,7 @@ func (a *UnaryDistAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vect
 		len := vec.Length()
 		for j := 0; j < len; j++ {
 			str := vec.GetBytesAt(j)
-			if ok, err = a.maps[i].InsertBytes(str); err != nil {
+			if ok, err = a.maps[i].InsertValue(str); err != nil {
 				return err
 			}
 			if ok {

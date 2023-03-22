@@ -44,10 +44,14 @@ var (
 
 func init() {
 	tcs = []orderTestCase{
-		newTestCase([]types.Type{{Oid: types.T_int8}}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
-		newTestCase([]types.Type{{Oid: types.T_int8}}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
-		newTestCase([]types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}, {Expr: newExpression(1), Flag: 0}}),
-		newTestCase([]types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}, {Expr: newExpression(1), Flag: 2}}),
+		newTestCase([]types.Type{{Oid: types.T_int8, Size: 1}},
+			[]*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
+		newTestCase([]types.Type{{Oid: types.T_int8, Size: 1}},
+			[]*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
+		newTestCase([]types.Type{{Oid: types.T_int8, Size: 1}, {Oid: types.T_int64, Size: 8}},
+			[]*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}, {Expr: newExpression(1), Flag: 0}}),
+		newTestCase([]types.Type{{Oid: types.T_int8, Size: 1}, {Oid: types.T_int64, Size: 8}},
+			[]*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}, {Expr: newExpression(1), Flag: 2}}),
 	}
 }
 

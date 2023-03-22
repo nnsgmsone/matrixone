@@ -49,13 +49,13 @@ var (
 
 func init() {
 	tcs = []buildTestCase{
-		newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}},
+		newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8, Size: 1}},
 			[]*plan.Expr{
-				newExpr(0, types.Type{Oid: types.T_int8}),
+				newExpr(0, types.Type{Oid: types.T_int8, Size: 1}),
 			}),
-		newTestCase([]bool{true}, []types.Type{{Oid: types.T_int8}},
+		newTestCase([]bool{true}, []types.Type{{Oid: types.T_int8, Size: 1}},
 			[]*plan.Expr{
-				newExpr(0, types.Type{Oid: types.T_int8}),
+				newExpr(0, types.Type{Oid: types.T_int8, Size: 1}),
 			}),
 	}
 }
@@ -99,7 +99,6 @@ func TestBuild(t *testing.T) {
 func newExpr(pos int32, typ types.Type) *plan.Expr {
 	return &plan.Expr{
 		Typ: &plan.Type{
-			Size:  typ.Size,
 			Scale: typ.Scale,
 			Width: typ.Width,
 			Id:    int32(typ.Oid),
