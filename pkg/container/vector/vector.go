@@ -1040,7 +1040,10 @@ func (v *Vector) String() string {
 
 func SetConstNull(vec *Vector, len int, mp *mpool.MPool) error {
 	vec.Free(mp)
+
 	vec.class = CONSTANT
+	vec.nsp = &nulls.Nulls{}
+	vec.length = len
 	return nil
 }
 
