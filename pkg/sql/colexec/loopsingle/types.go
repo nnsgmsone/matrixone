@@ -15,7 +15,6 @@
 package loopsingle
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -32,25 +31,24 @@ const (
 type container struct {
 	state int
 	bat   *batch.Batch
+
+	colexec.MemforNextOp
 }
 
 type Argument struct {
 	ctr    *container
 	Cond   *plan.Expr
-	Typs   []types.Type
+	Types  []types.Type // output types
 	Result []colexec.ResultPos
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	ctr := arg.ctr
 	if ctr != nil {
-		ctr.cleanBatch(proc.Mp())
-	}
-}
-
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
-	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
-		ctr.bat = nil
+		ctr.CleanMemForNextOp(proc)
+		if ctr.bat != nil {
+			ctr.bat.SubCnt(1)
+			ctr.bat = nil
+		}
 	}
 }

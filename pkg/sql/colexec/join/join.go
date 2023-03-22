@@ -58,8 +58,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			bat := <-proc.Reg.MergeReceivers[0].Ch
 			anal.WaitStop(start)
 			if bat == nil {
-				ctr.bat.SubCnt(1)
-				ctr.bat = nil
 				ctr.state = End
 				continue
 			}
@@ -71,12 +69,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				bat.SubCnt(1)
 				continue
 			}
+			defer bat.SubCnt(1)
 			if err := ctr.probe(bat, ap, proc, anal, isFirst, isLast); err != nil {
-				bat.SubCnt(1)
 				ctr.state = End
 				return false, err
 			}
-			bat.SubCnt(1)
 			return false, nil
 		default:
 			proc.SetInputBatch(nil)

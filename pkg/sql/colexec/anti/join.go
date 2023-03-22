@@ -50,7 +50,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		switch ctr.state {
 		case Build:
 			if err := ctr.build(ap, proc, anal); err != nil {
-				ap.Free(proc, true)
 				return false, err
 			}
 			ctr.state = Probe
@@ -65,6 +64,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				continue
 			}
 			if bat.Length() == 0 {
+				bat.SubCnt(1)
 				continue
 			}
 			if ctr.bat == nil || ctr.bat.Length() == 0 {
@@ -72,13 +72,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			} else {
 				err = ctr.probe(bat, ap, proc, anal, isFirst, isLast)
 			}
-			if err != nil {
-				ap.Free(proc, true)
-			}
+			bat.SubCnt(1)
 			return false, err
 
 		default:
-			ap.Free(proc, false)
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
@@ -113,7 +110,6 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 			for pos := range bat.Vecs {
 				uf := ctr.Ufs[pos]
 				if err := uf(ctr.OutBat.Vecs[pos], bat.Vecs[pos], int64(i+k)); err != nil {
-					ctr.CleanMemForNextOp(proc)
 					return err
 				}
 			}
@@ -207,7 +203,6 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
 		if err != nil {
-			ctr.CleanMemForNextOp(proc)
 			return err
 		}
 		ctr.vecs[i] = vec
