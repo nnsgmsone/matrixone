@@ -15,7 +15,6 @@
 package loopleft
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -32,11 +31,14 @@ const (
 type container struct {
 	state int
 	bat   *batch.Batch
+
+	colexec.MemforNextOp
+	probeFunc func(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error
 }
 
 type Argument struct {
 	ctr    *container
-	Typs   []types.Type
+	Types  []types.Type
 	Cond   *plan.Expr
 	Result []colexec.ResultPos
 }
@@ -44,13 +46,14 @@ type Argument struct {
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	ctr := arg.ctr
 	if ctr != nil {
-		ctr.cleanBatch(proc.Mp())
+		ctr.CleanMemForNextOp(proc)
+		ctr.cleanBatch()
 	}
 }
 
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
+func (ctr *container) cleanBatch() {
 	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
+		ctr.bat.SubCnt(1)
 		ctr.bat = nil
 	}
 }

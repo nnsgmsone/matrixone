@@ -42,12 +42,13 @@ type container struct {
 	inBuckets []uint8
 
 	bat *batch.Batch
+	mp  *hashmap.JoinMap
 
 	evecs []evalVector
 	vecs  []*vector.Vector
 
-	mp *hashmap.JoinMap
 	colexec.MemforNextOp
+	probeFunc func(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error
 }
 
 type Argument struct {

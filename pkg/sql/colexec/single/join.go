@@ -69,17 +69,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				continue
 			}
 
-			defer bat.SubCnt(1)
-			if ctr.bat == nil || ctr.bat.Length() == 0 {
-				if err := ctr.emptyProbe(bat, ap, proc, anal, isFirst, isLast); err != nil {
-					return false, err
-				}
-			} else {
-				if err := ctr.probe(bat, ap, proc, anal, isFirst, isLast); err != nil {
-					return false, err
-				}
-			}
-			return false, nil
+			err := ctr.probeFunc(bat, ap, proc, anal, isFirst, isLast)
+			bat.SubCnt(1)
+			return false, err
 
 		default:
 			proc.SetInputBatch(nil)
@@ -97,6 +89,9 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		ctr.bat = bat
 		ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
 		anal.Alloc(ctr.mp.Map().Size())
+		ctr.probeFunc = ctr.probe
+	} else {
+		ctr.probeFunc = ctr.emptyProbe
 	}
 	return nil
 }

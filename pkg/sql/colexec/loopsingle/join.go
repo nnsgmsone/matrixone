@@ -51,7 +51,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			ctr.state = Probe
 
 		case Probe:
-			var err error
 			start := time.Now()
 			bat := <-proc.Reg.MergeReceivers[0].Ch
 			anal.WaitStop(start)
@@ -66,12 +65,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				continue
 			}
 
-			defer bat.SubCnt(1)
-			if ctr.bat == nil || ctr.bat.Length() == 0 {
-				err = ctr.emptyProbe(bat, ap, proc, anal, isFirst, isLast)
-			} else {
-				err = ctr.probe(bat, ap, proc, anal, isFirst, isLast)
-			}
+			err := ctr.probeFunc(bat, ap, proc, anal, isFirst, isLast)
+			bat.SubCnt(1)
 			return false, err
 
 		default:
@@ -86,7 +81,12 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	bat := <-proc.Reg.MergeReceivers[1].Ch
 	anal.WaitStop(start)
 
-	ctr.bat = bat
+	if bat != nil {
+		ctr.bat = bat
+		ctr.probeFunc = ctr.probe
+	} else {
+		ctr.probeFunc = ctr.emptyProbe
+	}
 	return nil
 }
 

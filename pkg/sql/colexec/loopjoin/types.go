@@ -15,7 +15,6 @@
 package loopjoin
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -32,25 +31,28 @@ const (
 type container struct {
 	state int
 	bat   *batch.Batch
+
+	colexec.MemforNextOp
 }
 
 type Argument struct {
 	ctr    *container
 	Cond   *plan.Expr
 	Result []colexec.ResultPos
-	Typs   []types.Type
+	Types  []types.Type
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	ctr := arg.ctr
 	if ctr != nil {
-		ctr.cleanBatch(proc.Mp())
+		ctr.CleanMemForNextOp(proc)
+		ctr.cleanBatch()
 	}
 }
 
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
+func (ctr *container) cleanBatch() {
 	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
+		ctr.bat.SubCnt(1)
 		ctr.bat = nil
 	}
 }

@@ -270,6 +270,7 @@ func hashBuild(t *testing.T, tc joinTestCase) *batch.Batch {
 	ok, err := hashbuild.Call(0, tc.proc, tc.barg, false, false)
 	require.NoError(t, err)
 	require.Equal(t, true, ok)
+	inputBatch.Clean(tc.proc.Mp())
 	return tc.proc.Reg.InputBatch
 }
 

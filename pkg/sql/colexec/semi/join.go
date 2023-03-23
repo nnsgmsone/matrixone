@@ -73,12 +73,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				bat.SubCnt(1)
 				continue
 			}
-			if err := ctr.probe(bat, ap, proc, anal, isFirst, isLast); err != nil {
-				bat.SubCnt(1)
-				return false, err
-			}
+
+			err := ctr.probe(bat, ap, proc, anal, isFirst, isLast)
 			bat.SubCnt(1)
-			return false, nil
+			return false, err
 
 		default:
 			proc.SetInputBatch(nil)

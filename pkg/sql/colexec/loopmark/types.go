@@ -32,6 +32,7 @@ type container struct {
 	state int
 	bat   *batch.Batch
 	colexec.MemforNextOp
+	probeFunc func(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error
 }
 
 type Argument struct {

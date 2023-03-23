@@ -34,6 +34,7 @@ func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
+	ap.ctr.evecs = make([]evalVector, len(ap.Conditions[0]))
 	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
 	ap.ctr.InitByTypes(ap.Typs, proc)
 	return nil
@@ -67,11 +68,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				bat.SubCnt(1)
 				continue
 			}
-			if ctr.bat == nil || ctr.bat.Length() == 0 {
-				err = ctr.emptyProbe(bat, ap, proc, anal, isFirst, isLast)
-			} else {
-				err = ctr.probe(bat, ap, proc, anal, isFirst, isLast)
-			}
+
+			err = ctr.probeFunc(bat, ap, proc, anal, isFirst, isLast)
 			bat.SubCnt(1)
 			return false, err
 
@@ -91,6 +89,9 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
 		ctr.hasNull = ctr.mp.HasNull()
 		anal.Alloc(ctr.mp.Map().Size())
+		ctr.probeFunc = ctr.probe
+	} else {
+		ctr.probeFunc = ctr.emptyProbe
 	}
 	return nil
 }
@@ -133,7 +134,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		return nil
 	}
 
-	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc); err != nil {
+	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc, anal); err != nil {
 		return err
 	}
 
@@ -199,13 +200,25 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	return nil
 }
 
-func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process) error {
+func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process, analyze process.Analyze) error {
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
 		if err != nil {
+			ctr.cleanEvalVectors(proc.Mp())
 			return err
 		}
 		ctr.vecs[i] = vec
+		ctr.evecs[i].vec = vec
+		ctr.evecs[i].needFree = true
+		for j := range bat.Vecs {
+			if bat.Vecs[j] == vec {
+				ctr.evecs[i].needFree = false
+				break
+			}
+		}
+		if ctr.evecs[i].needFree && vec != nil {
+			analyze.Alloc(int64(vec.Size()))
+		}
 	}
 	return nil
 }
