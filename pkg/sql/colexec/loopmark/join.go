@@ -170,10 +170,11 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	for i, rp := range ap.Result {
 		uf := ctr.Ufs[i]
 		vec := ctr.OutBat.GetVector(int32(i))
+		len := int64(bat.Length())
 		if rp >= 0 {
 			srcVec := bat.GetVector(rp)
-			for j := 0; j < bat.Length(); j++ {
-				if err := uf(vec, srcVec, int64(j)); err != nil {
+			for j := int64(0); j < len; j++ {
+				if err := uf(vec, srcVec, j); err != nil {
 					return err
 				}
 			}

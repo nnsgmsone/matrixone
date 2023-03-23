@@ -103,8 +103,7 @@ func TestJoin(t *testing.T) {
 		bat3.Clean(tc.proc.Mp())
 		tc.arg.Free(tc.proc, false)
 		tc.barg.Free(tc.proc, false)
-		expeccc := int64(0)
-		require.Equal(t, expeccc, tc.proc.Mp().CurrNB())
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
