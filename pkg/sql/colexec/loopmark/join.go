@@ -54,9 +54,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			start := time.Now()
 			bat := <-proc.Reg.MergeReceivers[0].Ch
 			anal.WaitStop(start)
+
 			if bat == nil {
-				ctr.bat.SubCnt(1)
-				ctr.bat = nil
 				ctr.state = End
 				continue
 			}
@@ -64,21 +63,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				bat.SubCnt(1)
 				continue
 			}
-			if ctr.bat == nil || ctr.bat.Length() == 0 {
-				if err := ctr.emptyProbe(bat, ap, proc, anal, isFirst, isLast); err != nil {
-					bat.SubCnt(1)
-					ctr.state = End
-					return false, err
-				}
-			} else {
-				if err := ctr.probe(bat, ap, proc, anal, isFirst, isLast); err != nil {
-					bat.SubCnt(1)
-					ctr.state = End
-					return false, err
-				}
-			}
+
+			err := ctr.probeFunc(bat, ap, proc, anal, isFirst, isLast)
 			bat.SubCnt(1)
-			return false, nil
+			return false, err
 		default:
 			proc.SetInputBatch(nil)
 			return true, nil
@@ -92,6 +80,9 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	anal.WaitStop(start)
 	if bat != nil {
 		ctr.bat = bat
+		ctr.probeFunc = ctr.probe
+	} else {
+		ctr.probeFunc = ctr.emptyProbe
 	}
 	return nil
 }

@@ -66,6 +66,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				bat.SubCnt(1)
 				continue
 			}
+
 			err := ctr.probe(bat, ap, proc, anal, isFirst, isLast)
 			bat.SubCnt(1)
 			return false, err
