@@ -50,9 +50,11 @@ var (
 )
 
 func init() {
+	int8Type := types.New(types.T_int8, 0, 0)
+	boolType := types.New(types.T_bool, 0, 0)
 	tcs = []joinTestCase{
-		newTestCase([]bool{false}, []types.Type{types.New(types.T_int8, 0, 0)}, []int32{0, -1}),
-		newTestCase([]bool{true}, []types.Type{types.New(types.T_int8, 0, 0)}, []int32{0, -1}),
+		newTestCase([]bool{false}, []types.Type{int8Type, int8Type}, []types.Type{int8Type, boolType}, []int32{0, -1}),
+		newTestCase([]bool{true}, []types.Type{int8Type, int8Type}, []types.Type{int8Type, boolType}, []int32{0, -1}),
 	}
 }
 
@@ -101,11 +103,12 @@ func TestJoin(t *testing.T) {
 		bat3.Clean(tc.proc.Mp())
 		tc.arg.Free(tc.proc, false)
 		tc.barg.Free(tc.proc, false)
-		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+		expeccc := int64(0)
+		require.Equal(t, expeccc, tc.proc.Mp().CurrNB())
 	}
 }
 
-func newTestCase(flgs []bool, ts []types.Type, rp []int32) joinTestCase {
+func newTestCase(flgs []bool, ts []types.Type, retTyp []types.Type, rp []int32) joinTestCase {
 	ctx, cancel := context.WithCancel(context.Background())
 	proc := process.NewFromProc(testutil.NewProcessWithMPool(mpool.MustNewZero()),
 		ctx, -1)
@@ -150,9 +153,9 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32) joinTestCase {
 		proc:   proc,
 		cancel: cancel,
 		arg: &Argument{
+			Types:  retTyp,
 			Cond:   cond,
 			Result: rp,
-			Types:  append(ts, types.New(types.T_bool, 0, 0)),
 		},
 		barg: &hashbuild.Argument{
 			Types: ts,

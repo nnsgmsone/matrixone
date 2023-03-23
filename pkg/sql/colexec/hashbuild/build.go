@@ -99,7 +99,8 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		for i, vec := range ctr.OutVecs {
 			uf := ctr.Ufs[i]
 			srcVec := bat.GetVector(int32(i))
-			for j := int64(0); j < int64(bat.Length()); j++ {
+			len := int64(bat.Length())
+			for j := int64(0); j < len; j++ {
 				if err := uf(vec, srcVec, j); err != nil {
 					bat.SubCnt(1)
 					return nil
