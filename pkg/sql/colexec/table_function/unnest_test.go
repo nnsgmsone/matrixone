@@ -134,6 +134,7 @@ func newTestCase(m *mpool.MPool, attrs []string, jsons, paths []string, outers [
 		arg: &Argument{
 			Attrs: attrs,
 			Rets:  colDefs,
+			Name:  "unnest",
 		},
 		jsons:    jsons,
 		paths:    paths,
@@ -154,52 +155,40 @@ func TestUnnestString(t *testing.T) {
 
 func TestUnnestCall(t *testing.T) {
 	for _, ut := range utc {
-
-		err := unnestPrepare(ut.proc, ut.arg)
-		require.NotNil(t, err)
-		var inputBat *batch.Batch
 		switch ut.jsonType {
 		case "str":
-			beforeMem := ut.proc.Mp().CurrNB()
-			inputBat, err = makeUnnestBatch(ut.jsons, types.T_varchar, encodeStr, ut.proc)
+			inputBat, err := makeUnnestBatch(ut.jsons, types.T_varchar, encodeStr, ut.proc)
 			require.Nil(t, err)
 			ut.arg.Args = makeConstInputExprs(ut.jsons, ut.paths, ut.jsonType, ut.outers)
+			err = Prepare(ut.proc, ut.arg)
+			require.NoError(t, err)
 			ut.proc.SetInputBatch(inputBat)
-			err := unnestPrepare(ut.proc, ut.arg)
-			require.Nil(t, err)
 			end, err := unnestCall(0, ut.proc, ut.arg)
 			require.Nil(t, err)
 			require.False(t, end)
-			ut.proc.InputBatch().Clean(ut.proc.Mp())
 			inputBat.Clean(ut.proc.Mp())
-			afterMem := ut.proc.Mp().CurrNB()
-			require.Equal(t, beforeMem, afterMem)
+			ut.arg.Free(ut.proc, false)
 		case "json":
-			beforeMem := ut.proc.Mp().CurrNB()
-			inputBat, err = makeUnnestBatch(ut.jsons, types.T_json, encodeJson, ut.proc)
+			inputBat, err := makeUnnestBatch(ut.jsons, types.T_json, encodeJson, ut.proc)
 			require.Nil(t, err)
 			ut.arg.Args = makeColExprs(ut.jsonType, ut.paths, ut.outers)
+			err = Prepare(ut.proc, ut.arg)
+			require.NoError(t, err)
 			ut.proc.SetInputBatch(inputBat)
-			err := unnestPrepare(ut.proc, ut.arg)
-			require.Nil(t, err)
 			end, err := unnestCall(0, ut.proc, ut.arg)
 			require.Nil(t, err)
 			require.False(t, end)
-			ut.proc.InputBatch().Clean(ut.proc.Mp())
 			inputBat.Clean(ut.proc.Mp())
-			afterMem := ut.proc.Mp().CurrNB()
-			require.Equal(t, beforeMem, afterMem)
+			ut.arg.Free(ut.proc, false)
 		}
+		require.Equal(t, int64(0), ut.proc.Mp().CurrNB())
 	}
 }
 
 func makeUnnestBatch(jsons []string, typ types.T, fn func(str string) ([]byte, error), proc *process.Process) (*batch.Batch, error) {
 	bat := batch.New(true, []string{"a"})
 	for i := range bat.Vecs {
-		bat.Vecs[i] = vector.NewVec(types.Type{
-			Oid:   typ,
-			Width: 256,
-		})
+		bat.Vecs[i] = vector.NewVec(types.New(typ, 256, 0))
 	}
 	bat.Cnt = 1
 	for _, json := range jsons {

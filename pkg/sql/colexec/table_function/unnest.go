@@ -21,7 +21,6 @@ import (
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -86,52 +85,73 @@ func unnestPrepare(proc *process.Process, arg *Argument) error {
 	return nil
 }
 
-func unnestCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
+func unnestCall(_ int, proc *process.Process, ap *Argument) (bool, error) {
 	var (
 		err      error
-		rbat     *batch.Batch
 		jsonVec  *vector.Vector
 		pathVec  *vector.Vector
 		outerVec *vector.Vector
 		path     bytejson.Path
 		outer    bool
 	)
-	defer func() {
-		if err != nil && rbat != nil {
-			rbat.Clean(proc.Mp())
-		}
-		if jsonVec != nil {
-			jsonVec.Free(proc.Mp())
-		}
-		if pathVec != nil {
-			pathVec.Free(proc.Mp())
-		}
-		if outerVec != nil {
-			outerVec.Free(proc.Mp())
-		}
-	}()
 	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil
 	}
-	jsonVec, err = colexec.EvalExpr(bat, proc, arg.Args[0])
+	if bat.Length() == 0 {
+		return false, nil
+	}
+	jsonVec, err = colexec.EvalExpr(bat, proc, ap.Args[0])
 	if err != nil {
 		return false, err
 	}
+	jsonNeedFree := true
+	for i := range bat.Vecs {
+		if bat.Vecs[i] == jsonVec {
+			jsonNeedFree = false
+		}
+	}
+	defer func() {
+		if jsonNeedFree {
+			jsonVec.Free(proc.Mp())
+		}
+	}()
 	if jsonVec.GetType().Oid != types.T_json && jsonVec.GetType().Oid != types.T_varchar {
 		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("unnest: first argument must be json or string, but got %s", jsonVec.GetType().String()))
 	}
-	pathVec, err = colexec.EvalExpr(bat, proc, arg.Args[1])
+	pathVec, err = colexec.EvalExpr(bat, proc, ap.Args[1])
 	if err != nil {
 		return false, err
 	}
+	pathNeedFree := true
+	for i := range bat.Vecs {
+		if bat.Vecs[i] == pathVec {
+			pathNeedFree = false
+		}
+	}
+	defer func() {
+		if pathNeedFree {
+			pathVec.Free(proc.Mp())
+		}
+	}()
 	if pathVec.GetType().Oid != types.T_varchar {
 		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("unnest: second argument must be string, but got %s", pathVec.GetType().String()))
 	}
-	outerVec, err = colexec.EvalExpr(bat, proc, arg.Args[2])
+	outerVec, err = colexec.EvalExpr(bat, proc, ap.Args[2])
 	if err != nil {
 		return false, err
 	}
+	outerNeedFree := true
+	for i := range bat.Vecs {
+		if bat.Vecs[i] == outerVec {
+			outerNeedFree = false
+		}
+	}
+	defer func() {
+		if outerNeedFree {
+			outerVec.Free(proc.Mp())
+		}
+	}()
 	if outerVec.GetType().Oid != types.T_bool {
 		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("unnest: third argument must be bool, but got %s", outerVec.GetType().String()))
 	}
@@ -144,85 +164,88 @@ func unnestCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	}
 	outer = vector.MustFixedCol[bool](outerVec)[0]
 	param := unnestParam{}
-	if err = json.Unmarshal(arg.Params, &param); err != nil {
+	if err = json.Unmarshal(ap.Params, &param); err != nil {
 		return false, err
+	}
+	if len(ap.Types) == 0 {
+		for i := range ap.Rets {
+			ap.Types = append(ap.Types, dupType(ap.Rets[i].Typ))
+		}
+		ap.ctr.InitByTypes(ap.Types, proc)
 	}
 	switch jsonVec.GetType().Oid {
 	case types.T_json:
-		rbat, err = handle(jsonVec, &path, outer, &param, arg, proc, parseJson)
+		err = handle(jsonVec, &path, outer, &param, ap, proc, parseJson)
 	case types.T_varchar:
-		rbat, err = handle(jsonVec, &path, outer, &param, arg, proc, parseStr)
+		err = handle(jsonVec, &path, outer, &param, ap, proc, parseStr)
 	}
 	if err != nil {
 		return false, err
 	}
-	proc.SetInputBatch(rbat)
+	proc.SetInputBatch(ap.ctr.OutBat)
 	return false, nil
 }
 
-func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *unnestParam, arg *Argument, proc *process.Process, fn func(dt []byte) (bytejson.ByteJson, error)) (*batch.Batch, error) {
+func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool,
+	param *unnestParam, ap *Argument, proc *process.Process,
+	fn func(dt []byte) (bytejson.ByteJson, error)) error {
 	var (
 		err  error
-		rbat *batch.Batch
 		json bytejson.ByteJson
 		ures []bytejson.UnnestResult
 	)
 
-	rbat = batch.New(false, arg.Attrs)
-	rbat.Cnt = 1
-	for i := range arg.Rets {
-		rbat.Vecs[i] = vector.NewVec(dupType(arg.Rets[i].Typ))
-	}
-
+	ap.ctr.OutBat.SetAttributes(ap.Attrs)
+	ap.ctr.OutBat.Reset()
 	if jsonVec.IsConst() {
 		json, err = fn(jsonVec.GetBytesAt(0))
 		if err != nil {
-			return nil, err
+			return err
 		}
 		ures, err = json.Unnest(path, outer, unnestRecursive, unnestMode, param.FilterMap)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		rbat, err = makeBatch(rbat, ures, param, arg, proc)
-		if err != nil {
-			return nil, err
+		if err = makeBatch(ures, param, ap, proc); err != nil {
+			return err
 		}
-		rbat.InitZsOne(len(ures))
-		return rbat, nil
+		return nil
 	}
 	jsonSlice := vector.ExpandBytesCol(jsonVec)
 	rows := 0
 	for i := range jsonSlice {
 		json, err = fn(jsonSlice[i])
 		if err != nil {
-			return nil, err
+			return err
 		}
 		ures, err = json.Unnest(path, outer, unnestRecursive, unnestMode, param.FilterMap)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		rbat, err = makeBatch(rbat, ures, param, arg, proc)
-		if err != nil {
-			return nil, err
+		if err = makeBatch(ures, param, ap, proc); err != nil {
+			return err
 		}
 		rows += len(ures)
 	}
-	rbat.InitZsOne(rows)
-	return rbat, nil
+	for i := 0; i < rows; i++ {
+		ap.ctr.OutBat.Zs = append(ap.ctr.OutBat.Zs, int64(i))
+	}
+	return nil
 }
 
-func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *unnestParam, arg *Argument, proc *process.Process) (*batch.Batch, error) {
+func makeBatch(ures []bytejson.UnnestResult, param *unnestParam,
+	ap *Argument, proc *process.Process) error {
 	for i := 0; i < len(ures); i++ {
-		for j := 0; j < len(arg.Attrs); j++ {
-			vec := bat.GetVector(int32(j))
+		for j := 0; j < len(ap.Attrs); j++ {
+			vec := ap.ctr.OutBat.GetVector(int32(j))
 			var err error
-			switch arg.Attrs[j] {
+			switch ap.Attrs[j] {
 			case "col":
 				err = vector.AppendBytes(vec, []byte(param.ColName), false, proc.Mp())
 			case "seq":
 				err = vector.AppendFixed(vec, int32(i), false, proc.Mp())
 			case "index":
-				val, ok := ures[i][arg.Attrs[j]]
+				val, ok := ures[i][ap.Attrs[j]]
 				if !ok || val == nil {
 					err = vector.AppendFixed(vec, int32(0), true, proc.Mp())
 				} else {
@@ -230,17 +253,17 @@ func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *unnestPara
 					err = vector.AppendFixed(vec, int32(intVal), false, proc.Mp())
 				}
 			case "key", "path", "value", "this":
-				val, ok := ures[i][arg.Attrs[j]]
+				val, ok := ures[i][ap.Attrs[j]]
 				err = vector.AppendBytes(vec, val, !ok || val == nil, proc.Mp())
 			default:
-				err = moerr.NewInvalidArg(proc.Ctx, "unnest: invalid column name:%s", arg.Attrs[j])
+				err = moerr.NewInvalidArg(proc.Ctx, "unnest: invalid column name:%s", ap.Attrs[j])
 			}
 			if err != nil {
-				return nil, err
+				return err
 			}
 		}
 	}
-	return bat, nil
+	return nil
 }
 
 func parseJson(dt []byte) (bytejson.ByteJson, error) {

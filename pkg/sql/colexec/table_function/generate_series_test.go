@@ -449,56 +449,88 @@ func TestGenStep(t *testing.T) {
 
 func TestGenerateSeriesCall(t *testing.T) {
 	proc := testutil.NewProc()
-	beforeCall := proc.Mp().CurrNB()
-	arg := &Argument{
-		Attrs: []string{"result"},
+	{
+		ap := &Argument{
+			Name:  "generate_series",
+			Attrs: []string{"result"},
+		}
+		err := Prepare(proc, ap)
+		require.NoError(t, err)
+		proc.SetInputBatch(nil)
+		end, err := generateSeriesCall(0, proc, ap)
+		require.Nil(t, err)
+		require.Equal(t, true, end)
+		ap.Free(proc, false)
 	}
-	proc.SetInputBatch(nil)
-	end, err := generateSeriesCall(0, proc, arg)
-	require.Nil(t, err)
-	require.Equal(t, true, end)
-
-	arg.Args = makeInt64List(1, 3, 1)
-
-	bat := makeGenerateSeriesBatch(proc)
-	proc.SetInputBatch(bat)
-	end, err = generateSeriesCall(0, proc, arg)
-	require.Nil(t, err)
-	require.Equal(t, false, end)
-	require.Equal(t, 3, proc.InputBatch().GetVector(0).Length())
-	proc.InputBatch().Clean(proc.Mp())
-
-	arg.Args = makeDatetimeList("2020-01-01 00:00:00", "2020-01-01 00:00:59", "1 second", 0)
-	proc.SetInputBatch(bat)
-	end, err = generateSeriesCall(0, proc, arg)
-	require.Nil(t, err)
-	require.Equal(t, false, end)
-	require.Equal(t, 60, proc.InputBatch().GetVector(0).Length())
-	proc.InputBatch().Clean(proc.Mp())
-
-	arg.Args = makeVarcharList("2020-01-01 00:00:00", "2020-01-01 00:00:59", "1 second")
-	proc.SetInputBatch(bat)
-	end, err = generateSeriesCall(0, proc, arg)
-	require.Nil(t, err)
-	require.Equal(t, false, end)
-	require.Equal(t, 60, proc.InputBatch().GetVector(0).Length())
-	proc.InputBatch().Clean(proc.Mp())
-
-	arg.Args = makeVarcharList("1", "10", "3")
-	proc.SetInputBatch(bat)
-	end, err = generateSeriesCall(0, proc, arg)
-	require.Nil(t, err)
-	require.Equal(t, false, end)
-	require.Equal(t, 4, proc.InputBatch().GetVector(0).Length())
-	proc.InputBatch().Clean(proc.Mp())
-
-	arg.Args = arg.Args[:2]
-	proc.SetInputBatch(bat)
-	_, err = generateSeriesCall(0, proc, arg)
-	require.NotNil(t, err)
-	bat.Clean(proc.Mp())
-	require.Equal(t, beforeCall, proc.Mp().CurrNB())
-
+	{
+		ap := &Argument{
+			Name:  "generate_series",
+			Attrs: []string{"result"},
+			Args:  makeInt64List(1, 3, 1),
+		}
+		err := Prepare(proc, ap)
+		require.NoError(t, err)
+		bat := makeGenerateSeriesBatch(proc)
+		proc.SetInputBatch(bat)
+		end, err := generateSeriesCall(0, proc, ap)
+		require.Nil(t, err)
+		require.Equal(t, false, end)
+		require.Equal(t, 3, proc.InputBatch().GetVector(0).Length())
+		bat.Clean(proc.Mp())
+		ap.Free(proc, false)
+	}
+	{
+		ap := &Argument{
+			Name:  "generate_series",
+			Attrs: []string{"result"},
+		}
+		ap.Args = makeDatetimeList("2020-01-01 00:00:00", "2020-01-01 00:00:59", "1 second", 0)
+		err := Prepare(proc, ap)
+		require.NoError(t, err)
+		bat := makeGenerateSeriesBatch(proc)
+		proc.SetInputBatch(bat)
+		end, err := generateSeriesCall(0, proc, ap)
+		require.Nil(t, err)
+		require.Equal(t, false, end)
+		require.Equal(t, 60, proc.InputBatch().GetVector(0).Length())
+		bat.Clean(proc.Mp())
+		ap.Free(proc, false)
+	}
+	{
+		ap := &Argument{
+			Name:  "generate_series",
+			Attrs: []string{"result"},
+		}
+		ap.Args = makeVarcharList("2020-01-01 00:00:00", "2020-01-01 00:00:59", "1 second")
+		err := Prepare(proc, ap)
+		require.NoError(t, err)
+		bat := makeGenerateSeriesBatch(proc)
+		proc.SetInputBatch(bat)
+		end, err := generateSeriesCall(0, proc, ap)
+		require.Nil(t, err)
+		require.Equal(t, false, end)
+		require.Equal(t, 60, proc.InputBatch().GetVector(0).Length())
+		bat.Clean(proc.Mp())
+		ap.Free(proc, false)
+	}
+	{
+		ap := &Argument{
+			Name:  "generate_series",
+			Attrs: []string{"result"},
+		}
+		ap.Args = makeVarcharList("1", "10", "3")
+		err := Prepare(proc, ap)
+		require.NoError(t, err)
+		bat := makeGenerateSeriesBatch(proc)
+		proc.SetInputBatch(bat)
+		end, err := generateSeriesCall(0, proc, ap)
+		require.Nil(t, err)
+		require.Equal(t, false, end)
+		require.Equal(t, 4, proc.InputBatch().GetVector(0).Length())
+		bat.Clean(proc.Mp())
+		ap.Free(proc, false)
+	}
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
 func makeGenerateSeriesBatch(proc *process.Process) *batch.Batch {

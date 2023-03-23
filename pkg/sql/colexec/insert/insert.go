@@ -27,25 +27,30 @@ func String(_ any, buf *bytes.Buffer) {
 	buf.WriteString("insert")
 }
 
-func Prepare(_ *process.Process, arg any) error {
+func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	if ap.IsRemote {
 		ap.Container = colexec.NewWriteS3Container(ap.InsertCtx.TableDef)
 	}
-	return nil
+	ap.ctr = new(container)
+	return ap.ctr.InitByTypes(ap.Types, proc)
 }
 
-func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error) {
-	defer analyze(proc, idx)()
-
-	insertArg := arg.(*Argument)
-	container := insertArg.Container
-	bat := proc.Reg.InputBatch
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+	t := time.Now()
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
+	defer func() {
+		anal.Stop()
+		anal.AddInsertTime(t)
+	}()
+	ap := arg.(*Argument)
+	bat := proc.InputBatch()
 	if bat == nil {
-		if insertArg.IsRemote {
+		if ap.IsRemote {
 			// handle the last Batch that batchSize less than DefaultBlockMaxRows
 			// for more info, refer to the comments about reSizeBatch
-			if err := container.WriteS3CacheBatch(proc); err != nil {
+			if err := ap.Container.WriteS3CacheBatch(proc); err != nil {
 				return false, err
 			}
 		}
@@ -54,30 +59,22 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 	if bat.Length() == 0 {
 		return false, nil
 	}
-
-	defer func() {
-		bat.Clean(proc.Mp())
-	}()
-
-	insertCtx := insertArg.InsertCtx
-	affectedRows, err := colexec.InsertBatch(container, proc, bat, insertCtx.Source,
-		insertCtx.TableDef, insertCtx.UniqueSource)
-	if err != nil {
+	anal.Input(bat, isFirst)
+	affectedRows := bat.Length()
+	if err := ap.InsertCtx.Source.Write(proc.Ctx, bat); err != nil {
 		return false, err
 	}
-	if insertArg.IsRemote {
-		container.WriteEnd(proc)
+	//insertCtx := ap.InsertCtx
+	/*
+		affectedRows, err := colexec.InsertBatch(ap.Container, proc, bat, insertCtx.Source,
+			insertCtx.TableDef, insertCtx.UniqueSource)
+		if err != nil {
+			return false, err
+		}
+	*/
+	if ap.IsRemote {
+		ap.Container.WriteEnd(proc)
 	}
-	atomic.AddUint64(&insertArg.Affected, affectedRows)
+	atomic.AddUint64(&ap.Affected, affectedRows)
 	return false, nil
-}
-
-func analyze(proc *process.Process, idx int) func() {
-	t := time.Now()
-	anal := proc.GetAnalyze(idx)
-	anal.Start()
-	return func() {
-		anal.Stop()
-		anal.AddInsertTime(t)
-	}
 }

@@ -15,25 +15,25 @@
 package insert
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const (
-	INSERT = iota
-	DELETE
-)
+type container struct {
+	colexec.MemforNextOp
+}
 
 type Argument struct {
-	// Ts is not used
-	Ts        uint64
+	ctr       *container
 	Affected  uint64
 	Engine    engine.Engine
 	IsRemote  bool // mark if this insert is cn2s3 directly
 	Container *colexec.WriteS3Container
 	InsertCtx *InsertCtx
+	Types     []types.Type
 }
 
 type InsertCtx struct {
@@ -50,6 +50,6 @@ type InsertCtx struct {
 
 // The Argument for insert data directly to s3 can not be free when this function called as some datastructure still needed.
 // therefore, those argument in remote CN will be free in connector operator, and local argument will be free in mergeBlock operator
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-
+func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	ap.ctr.CleanMemForNextOp(proc)
 }

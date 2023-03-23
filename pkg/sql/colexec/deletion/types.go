@@ -15,12 +15,19 @@
 package deletion
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+type container struct {
+	colexec.MemforNextOp
+}
+
 type Argument struct {
+	ctr          *container
 	Ts           uint64
 	DeleteCtx    *DeleteCtx
 	AffectedRows uint64
@@ -34,6 +41,8 @@ type Argument struct {
 	IsRemote bool
 	IBucket  uint64
 	NBucket  uint64
+
+	Types []types.Type
 }
 
 type DeleteCtx struct {
@@ -58,5 +67,6 @@ type DeleteCtx struct {
 	OnSetUpdateCol    []map[string]int32
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	ap.ctr.CleanMemForNextOp(proc)
 }

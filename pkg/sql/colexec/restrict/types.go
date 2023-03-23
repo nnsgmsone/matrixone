@@ -33,6 +33,6 @@ type Argument struct {
 	Types []types.Type
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	arg.ctr.CleanMemForNextOp(proc)
+func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	ap.ctr.CleanMemForNextOp(proc)
 }
