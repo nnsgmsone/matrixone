@@ -47,6 +47,10 @@ type container struct {
 	vecs  []*vector.Vector
 
 	mp *hashmap.JoinMap
+
+	colexec.MemforNextOp
+
+	probeFunc func(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error
 }
 
 type Argument struct {
@@ -54,7 +58,7 @@ type Argument struct {
 	Ibucket    uint64
 	Nbucket    uint64
 	Result     []colexec.ResultPos
-	Typs       []types.Type
+	Types      []types.Type
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
 }
@@ -62,16 +66,16 @@ type Argument struct {
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	ctr := arg.ctr
 	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
-		ctr.cleanEvalVectors(mp)
+		ctr.CleanMemForNextOp(proc)
+		ctr.cleanBatch()
+		ctr.cleanEvalVectors(proc.Mp())
 		ctr.cleanHashMap()
 	}
 }
 
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
+func (ctr *container) cleanBatch() {
 	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
+		ctr.bat.SubCnt(1)
 		ctr.bat = nil
 	}
 }
