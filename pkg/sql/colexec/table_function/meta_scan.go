@@ -26,35 +26,42 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func metaScanPrepare(_ *process.Process, arg *Argument) error {
+func metaScanPrepare(_ *process.Process, ap *Argument) error {
 	return nil
 }
 
-func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
-	var (
-		err  error
-		rbat *batch.Batch
-	)
-	defer func() {
-		if err != nil && rbat != nil {
-			rbat.Clean(proc.Mp())
-		}
-	}()
+func metaScanCall(_ int, proc *process.Process, ap *Argument) (bool, error) {
+	var err error
+
 	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil
 	}
-	v, err := colexec.EvalExpr(bat, proc, arg.Args[0])
+	if bat.Length() == 0 {
+		return false, nil
+	}
+	v, err := colexec.EvalExpr(bat, proc, ap.Args[0])
 	if err != nil {
 		return false, err
 	}
+	needFree := true
+	for i := range bat.Vecs {
+		if bat.Vecs[i] == v {
+			needFree = false
+		}
+	}
+	defer func() {
+		if needFree {
+			v.Free(proc.Mp())
+		}
+	}()
 	uuid := vector.MustFixedCol[types.Uuid](v)[0]
 	// get file size
 	path := catalog.BuildQueryResultMetaPath(proc.SessionInfo.Account, uuid.ToString())
 	e, err := proc.FileService.StatFile(proc.Ctx, path)
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-			return false, moerr.NewQueryIdNotFound(proc.Ctx, uuid.ToString())
+			return false, moerr.NewResultFileNotFound(proc.Ctx, path)
 		}
 		return false, err
 	}
@@ -65,7 +72,7 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	}
 	var idxs []uint16
 	for i, name := range catalog.MetaColNames {
-		for _, attr := range arg.Attrs {
+		for _, attr := range ap.Attrs {
 			if name == attr {
 				idxs = append(idxs, uint16(i))
 			}
@@ -76,10 +83,28 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	rbat = bats[0]
-	rbat.SetAttributes(catalog.MetaColNames)
-	rbat.Cnt = 1
-	rbat.InitZsOne(1)
-	proc.SetInputBatch(rbat)
+	if len(bats) == 0 {
+		proc.SetInputBatch(&batch.Batch{})
+	}
+	if len(ap.Types) == 0 {
+		for i := 0; i < bats[0].VectorCount(); i++ {
+			ap.Types = append(ap.Types, *bats[0].GetVector(int32(i)).GetType())
+		}
+		ap.ctr.InitByTypes(ap.Types, proc)
+	}
+	ap.ctr.OutBat.SetAttributes(catalog.MetaColNames)
+	ap.ctr.OutBat.Reset()
+	for i, vec := range ap.ctr.OutVecs {
+		uf := ap.ctr.Ufs[i]
+		srcVec := bats[0].GetVector(int32(i))
+		for j := 0; j < bats[0].Length(); j++ {
+			if err := uf(vec, srcVec, int64(j)); err != nil {
+				return false, err
+			}
+		}
+	}
+	ap.ctr.OutBat.Zs = append(ap.ctr.OutBat.Zs, 1)
+	ap.ctr.OutBat.InitZsOne(1)
+	proc.SetInputBatch(ap.ctr.OutBat)
 	return false, nil
 }

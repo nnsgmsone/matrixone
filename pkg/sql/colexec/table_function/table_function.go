@@ -24,39 +24,41 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
-	tblArg := arg.(*Argument)
-	switch tblArg.Name {
-	case "unnest":
-		return unnestCall(idx, proc, tblArg)
-	case "generate_series":
-		return generateSeriesCall(idx, proc, tblArg)
-	case "meta_scan":
-		return metaScanCall(idx, proc, tblArg)
-	case "current_account":
-		return currentAccountCall(idx, proc, tblArg)
-	default:
-		return true, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.Name))
-	}
-}
-
 func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString(arg.(*Argument).Name)
 }
 
 func Prepare(proc *process.Process, arg any) error {
-	tblArg := arg.(*Argument)
-	switch tblArg.Name {
+	ap := arg.(*Argument)
+	ap.ctr = new(container)
+	switch ap.Name {
 	case "unnest":
-		return unnestPrepare(proc, tblArg)
+		return unnestPrepare(proc, ap)
 	case "generate_series":
-		return generateSeriesPrepare(proc, tblArg)
+		return generateSeriesPrepare(proc, ap)
 	case "meta_scan":
-		return metaScanPrepare(proc, tblArg)
+		return metaScanPrepare(proc, ap)
 	case "current_account":
-		return currentAccountPrepare(proc, tblArg)
+		return currentAccountPrepare(proc, ap)
 	default:
-		return moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.Name))
+		return moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", ap.Name))
+	}
+}
+
+func Call(idx int, proc *process.Process, arg any,
+	isFirst bool, isLast bool) (bool, error) {
+	ap := arg.(*Argument)
+	switch ap.Name {
+	case "unnest":
+		return unnestCall(idx, proc, ap)
+	case "generate_series":
+		return generateSeriesCall(idx, proc, ap)
+	case "meta_scan":
+		return metaScanCall(idx, proc, ap)
+	case "current_account":
+		return currentAccountCall(idx, proc, ap)
+	default:
+		return true, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", ap.Name))
 	}
 }
 

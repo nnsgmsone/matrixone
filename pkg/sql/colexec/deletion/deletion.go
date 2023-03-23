@@ -27,13 +27,15 @@ func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString("delete rows")
 }
 
-func Prepare(_ *process.Process, _ any) error {
-	return nil
+func Prepare(proc *process.Process, arg any) error {
+	ap := arg.(*Argument)
+	ap.ctr = new(container)
+	return ap.ctr.InitByTypes(ap.Types, proc)
 }
 
 // the bool return value means whether it completed its work or not
 func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
-	p := arg.(*Argument)
+	ap := arg.(*Argument)
 	bat := proc.Reg.InputBatch
 
 	// last batch of block

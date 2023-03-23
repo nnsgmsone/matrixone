@@ -17,19 +17,27 @@ package table_function
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+type container struct {
+	colexec.MemforNextOp
+}
+
 type Argument struct {
+	ctr    *container
 	Rets   []*plan.ColDef
 	Args   []*plan.Expr
 	Attrs  []string
 	Params []byte
 	Name   string
+
+	Types []types.Type
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-
+func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	ap.ctr.CleanMemForNextOp(proc)
 }
 
 type unnestParam struct {

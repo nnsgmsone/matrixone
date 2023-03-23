@@ -16,14 +16,13 @@ package table_function
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func currentAccountPrepare(proc *process.Process, arg *Argument) error {
-	if len(arg.Args) > 0 {
+func currentAccountPrepare(proc *process.Process, ap *Argument) error {
+	if len(ap.Args) > 0 {
 		return moerr.NewInvalidInput(proc.Ctx, "current_account: no argument is required")
 	}
 	return nil
@@ -53,27 +52,56 @@ func getUserId(proc *process.Process) *vector.Vector {
 	return vector.NewConstFixed(types.T_uint32.ToType(), proc.SessionInfo.UserId, 1, proc.Mp())
 }
 
-func currentAccountCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
-	rbat := batch.New(false, arg.Attrs)
-	for i, attr := range arg.Attrs {
-		switch attr {
-		case "account_name":
-			rbat.Vecs[i] = getAccountName(proc)
-		case "account_id":
-			rbat.Vecs[i] = getAccountId(proc)
-		case "user_name":
-			rbat.Vecs[i] = getUserName(proc)
-		case "user_id":
-			rbat.Vecs[i] = getUserId(proc)
-		case "role_name":
-			rbat.Vecs[i] = getRoleName(proc)
-		case "role_id":
-			rbat.Vecs[i] = getRoleId(proc)
-		default:
-			return false, moerr.NewInvalidInput(proc.Ctx, "%v is not supported by current_account()", attr)
+func currentAccountCall(_ int, proc *process.Process, ap *Argument) (bool, error) {
+	var srcVec *vector.Vector
+
+	if len(ap.Types) == 0 {
+		for _, attr := range ap.Attrs {
+			switch attr {
+			case "account_name":
+				ap.Types = append(ap.Types, types.T_varchar.ToType())
+			case "account_id":
+				ap.Types = append(ap.Types, types.T_uint32.ToType())
+			case "user_name":
+				ap.Types = append(ap.Types, types.T_varchar.ToType())
+			case "user_id":
+				ap.Types = append(ap.Types, types.T_uint32.ToType())
+			case "role_name":
+				ap.Types = append(ap.Types, types.T_varchar.ToType())
+			case "role_id":
+				ap.Types = append(ap.Types, types.T_uint32.ToType())
+			default:
+				return false, moerr.NewInvalidInput(proc.Ctx, "%v is not supported by current_account()", attr)
+			}
 		}
+		ap.ctr.InitByTypes(ap.Types, proc)
 	}
-	rbat.InitZsOne(1)
-	proc.SetInputBatch(rbat)
+	ap.ctr.OutBat.SetAttributes(ap.Attrs)
+	ap.ctr.OutBat.Reset()
+	for i, vec := range ap.ctr.OutVecs {
+		uf := ap.ctr.Ufs[i]
+		switch ap.Attrs[i] {
+		case "account_name":
+			srcVec = getAccountName(proc)
+		case "account_id":
+			srcVec = getAccountId(proc)
+		case "user_name":
+			srcVec = getUserName(proc)
+		case "user_id":
+			srcVec = getUserId(proc)
+		case "role_name":
+			srcVec = getRoleName(proc)
+		case "role_id":
+			srcVec = getRoleId(proc)
+		default:
+			return false, moerr.NewInvalidInput(proc.Ctx, "%v is not supported by current_account()", ap.Attrs[i])
+		}
+		if err := uf(vec, srcVec, 0); err != nil {
+			srcVec.Free(proc.Mp())
+			return false, err
+		}
+		srcVec.Free(proc.Mp())
+	}
+	proc.SetInputBatch(ap.ctr.OutBat)
 	return true, nil
 }

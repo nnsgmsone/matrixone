@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -38,54 +37,73 @@ func generateSeriesPrepare(_ *process.Process, arg *Argument) error {
 	return nil
 }
 
-func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
+func generateSeriesCall(_ int, proc *process.Process, ap *Argument) (bool, error) {
 	var (
 		err                                               error
 		startVec, endVec, stepVec, startVecTmp, endVecTmp *vector.Vector
-		rbat                                              *batch.Batch
 	)
-	defer func() {
-		if err != nil && rbat != nil {
-			rbat.Clean(proc.Mp())
-		}
-		if startVec != nil {
-			startVec.Free(proc.Mp())
-		}
-		if endVec != nil {
-			endVec.Free(proc.Mp())
-		}
-		if stepVec != nil {
-			stepVec.Free(proc.Mp())
-		}
-		if startVecTmp != nil {
-			startVecTmp.Free(proc.Mp())
-		}
-		if endVecTmp != nil {
-			endVecTmp.Free(proc.Mp())
-		}
-	}()
+
 	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil
 	}
-	startVec, err = colexec.EvalExpr(bat, proc, arg.Args[0])
+	if bat.Length() == 0 {
+		return false, nil
+	}
+	startVec, err = colexec.EvalExpr(bat, proc, ap.Args[0])
 	if err != nil {
 		return false, err
 	}
-	endVec, err = colexec.EvalExpr(bat, proc, arg.Args[1])
+	startNeedFree := true
+	for i := range bat.Vecs {
+		if bat.Vecs[i] == startVec {
+			startNeedFree = false
+		}
+	}
+	defer func() {
+		if startNeedFree {
+			startVec.Free(proc.Mp())
+		}
+	}()
+	endVec, err = colexec.EvalExpr(bat, proc, ap.Args[1])
 	if err != nil {
 		return false, err
 	}
-	rbat = batch.New(false, arg.Attrs)
-	rbat.Cnt = 1
-	for i := range arg.Attrs {
-		rbat.Vecs[i] = vector.NewVec(dupType(plan.MakePlan2Type(startVec.GetType())))
+	endNeedFree := true
+	for i := range bat.Vecs {
+		if bat.Vecs[i] == startVec {
+			endNeedFree = false
+		}
 	}
-	if len(arg.Args) == 3 {
-		stepVec, err = colexec.EvalExpr(bat, proc, arg.Args[2])
+	defer func() {
+		if endNeedFree {
+			endVec.Free(proc.Mp())
+		}
+	}()
+	if len(ap.Types) == 0 { // i don't know how to get the type of the output batch
+		for range ap.Attrs {
+			ap.Types = append(ap.Types, *startVec.GetType())
+		}
+		ap.ctr.InitByTypes(ap.Types, proc)
+	}
+	ap.ctr.OutBat.SetAttributes(ap.Attrs)
+	ap.ctr.OutBat.Reset()
+	if len(ap.Args) == 3 {
+		stepVec, err = colexec.EvalExpr(bat, proc, ap.Args[2])
 		if err != nil {
 			return false, err
 		}
+		stepNeedFree := true
+		for i := range bat.Vecs {
+			if bat.Vecs[i] == stepVec {
+				stepNeedFree = false
+			}
+		}
+		defer func() {
+			if stepNeedFree {
+				stepVec.Free(proc.Mp())
+			}
+		}()
 	}
 	if !startVec.IsConst() || !endVec.IsConst() || (stepVec != nil && !stepVec.IsConst()) {
 		return false, moerr.NewInvalidInput(proc.Ctx, "generate_series only support scalar")
@@ -95,7 +113,7 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 		if endVec.GetType().Oid != types.T_int32 || (stepVec != nil && stepVec.GetType().Oid != types.T_int32) {
 			return false, moerr.NewInvalidInput(proc.Ctx, "generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.GetType().Oid.String(), endVec.GetType().Oid.String())
 		}
-		err = handleInt(startVec, endVec, stepVec, generateInt32, false, proc, rbat)
+		err = handleInt(startVec, endVec, stepVec, generateInt32, false, proc, ap.ctr.OutBat)
 		if err != nil {
 			return false, err
 		}
@@ -103,7 +121,7 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 		if endVec.GetType().Oid != types.T_int64 || (stepVec != nil && stepVec.GetType().Oid != types.T_int64) {
 			return false, moerr.NewInvalidInput(proc.Ctx, "generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.GetType().Oid.String(), endVec.GetType().Oid.String())
 		}
-		err = handleInt(startVec, endVec, stepVec, generateInt64, false, proc, rbat)
+		err = handleInt(startVec, endVec, stepVec, generateInt64, false, proc, ap.ctr.OutBat)
 		if err != nil {
 			return false, err
 		}
@@ -111,7 +129,7 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 		if endVec.GetType().Oid != types.T_datetime || (stepVec != nil && stepVec.GetType().Oid != types.T_varchar) {
 			return false, moerr.NewInvalidInput(proc.Ctx, "generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.GetType().Oid.String(), endVec.GetType().Oid.String())
 		}
-		err = handleDatetime(startVec, endVec, stepVec, false, proc, rbat)
+		err = handleDatetime(startVec, endVec, stepVec, false, proc, ap.ctr.OutBat)
 	case types.T_varchar:
 		if stepVec == nil {
 			return false, moerr.NewInvalidInput(proc.Ctx, "generate_series must specify step")
@@ -123,10 +141,10 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 		endStr := endSlice[0]
 		stepStr := stepSlice[0]
 		scale := int32(findScale(startStr, endStr))
-		rbat.Vecs[0].GetType().Scale = scale
+		ap.ctr.OutBat.Vecs[0].GetType().Scale = scale
 		start, err := types.ParseDatetime(startStr, scale)
 		if err != nil {
-			err = tryInt(startStr, endStr, stepStr, proc, rbat)
+			err = tryInt(startStr, endStr, stepStr, proc, ap.ctr.OutBat)
 			if err != nil {
 				return false, err
 			}
@@ -139,17 +157,17 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 		}
 		startVecTmp = vector.NewConstFixed(types.T_datetime.ToType(), start, 1, proc.Mp())
 		endVecTmp = vector.NewConstFixed(types.T_datetime.ToType(), end, 1, proc.Mp())
-
-		err = handleDatetime(startVecTmp, endVecTmp, stepVec, true, proc, rbat)
+		defer startVecTmp.Free(proc.Mp())
+		defer endVecTmp.Free(proc.Mp())
+		err = handleDatetime(startVecTmp, endVecTmp, stepVec, true, proc, ap.ctr.OutBat)
 		if err != nil {
 			return false, err
 		}
-
 	default:
 		return false, moerr.NewNotSupported(proc.Ctx, "generate_series not support type %s", startVec.GetType().Oid.String())
 
 	}
-	proc.SetInputBatch(rbat)
+	proc.SetInputBatch(ap.ctr.OutBat)
 	return false, nil
 }
 
@@ -278,7 +296,8 @@ func generateDatetime(ctx context.Context, start, end types.Datetime, stepStr st
 	return res, nil
 }
 
-func handleInt[T int32 | int64](startVec, endVec, stepVec *vector.Vector, genFn func(context.Context, T, T, T) ([]T, error), toString bool, proc *process.Process, rbat *batch.Batch) error {
+func handleInt[T int32 | int64](startVec, endVec, stepVec *vector.Vector,
+	genFn func(context.Context, T, T, T) ([]T, error), toString bool, proc *process.Process, rbat *batch.Batch) error {
 	var (
 		start, end, step T
 	)
@@ -310,7 +329,9 @@ func handleInt[T int32 | int64](startVec, endVec, stepVec *vector.Vector, genFn 
 			return err
 		}
 	}
-	rbat.InitZsOne(len(res))
+	for i := 0; i < len(res); i++ {
+		rbat.Zs = append(rbat.Zs, 1)
+	}
 	return nil
 }
 
@@ -319,6 +340,7 @@ func handleDatetime(startVec, endVec, stepVec *vector.Vector, toString bool, pro
 		start, end types.Datetime
 		step       string
 	)
+
 	startSlice := vector.MustFixedCol[types.Datetime](startVec)
 	endSlice := vector.MustFixedCol[types.Datetime](endVec)
 	start = startSlice[0]
@@ -342,7 +364,9 @@ func handleDatetime(startVec, endVec, stepVec *vector.Vector, toString bool, pro
 			return err
 		}
 	}
-	rbat.InitZsOne(len(res))
+	for i := 0; i < len(res); i++ {
+		rbat.Zs = append(rbat.Zs, 1)
+	}
 	return nil
 }
 
