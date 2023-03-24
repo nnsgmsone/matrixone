@@ -65,6 +65,10 @@ type Argument struct {
 	IsRight bool
 }
 
+func (ap *Argument) ReturnTypes() []types.Type {
+	return ap.Types
+}
+
 func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	ap.ctr.CleanMemForNextOp(proc)
 	ap.ctr.cleanHashMap()

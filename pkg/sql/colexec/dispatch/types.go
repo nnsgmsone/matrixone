@@ -63,6 +63,10 @@ type Argument struct {
 	RemoteRegs []colexec.ReceiveInfo
 }
 
+func (ap *Argument) ReturnTypes() []types.Type {
+	return ap.Types
+}
+
 func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	if ap.ctr.remoteReceivers != nil {
 		for _, r := range ap.ctr.remoteReceivers {

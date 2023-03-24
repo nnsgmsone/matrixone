@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -726,4 +727,8 @@ func receiveMsgAndForward(ctx context.Context, receiveCh chan morpc.Message, for
 			dataBuffer = nil
 		}
 	}
+}
+
+func (s *Scope) returnTypes() []types.Type {
+	return s.Instructions[len(s.Instructions)-1].Arg.(vm.InstructionArgument).ReturnTypes()
 }

@@ -16,6 +16,7 @@ package vm
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
@@ -27,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/join"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/left"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
@@ -37,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopmark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
@@ -81,7 +80,6 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 	Connector:  connector.String,
 	Projection: projection.String,
 	Anti:       anti.String,
-	Mark:       mark.String,
 	MergeBlock: mergeblock.String,
 	LoopJoin:   loopjoin.String,
 	LoopLeft:   loopleft.String,
@@ -103,9 +101,8 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 	Update:         update.String,
 	External:       external.String,
 
-	Minus:        minus.String,
-	Intersect:    intersect.String,
-	IntersectAll: intersectall.String,
+	Minus:     minus.String,
+	Intersect: intersect.String,
 
 	HashBuild: hashbuild.String,
 
@@ -131,7 +128,6 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	Connector:  connector.Prepare,
 	Projection: projection.Prepare,
 	Anti:       anti.Prepare,
-	Mark:       mark.Prepare,
 	MergeBlock: mergeblock.Prepare,
 	LoopJoin:   loopjoin.Prepare,
 	LoopLeft:   loopleft.Prepare,
@@ -153,9 +149,8 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	Update:         update.Prepare,
 	External:       external.Prepare,
 
-	Minus:        minus.Prepare,
-	Intersect:    intersect.Prepare,
-	IntersectAll: intersectall.Prepare,
+	Minus:     minus.Prepare,
+	Intersect: intersect.Prepare,
 
 	HashBuild: hashbuild.Prepare,
 
@@ -181,7 +176,6 @@ var execFunc = [...]func(int, *process.Process, any, bool, bool) (bool, error){
 	Connector:  connector.Call,
 	Projection: projection.Call,
 	Anti:       anti.Call,
-	Mark:       mark.Call,
 	MergeBlock: mergeblock.Call,
 	LoopJoin:   loopjoin.Call,
 	LoopLeft:   loopleft.Call,
@@ -204,9 +198,8 @@ var execFunc = [...]func(int, *process.Process, any, bool, bool) (bool, error){
 	OnDuplicateKey: onduplicatekey.Call,
 	PreInsert:      preinsert.Call,
 
-	Minus:        minus.Call,
-	Intersect:    intersect.Call,
-	IntersectAll: intersectall.Call,
+	Minus:     minus.Call,
+	Intersect: intersect.Call,
 
 	HashBuild: hashbuild.Call,
 

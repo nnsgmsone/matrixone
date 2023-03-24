@@ -52,6 +52,10 @@ type Argument struct {
 	Types []types.Type
 }
 
+func (ap *Argument) ReturnTypes() []types.Type {
+	return ap.Types
+}
+
 func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	for len(proc.Reg.MergeReceivers[0].Ch) > 0 {
 		<-proc.Reg.MergeReceivers[0].Ch

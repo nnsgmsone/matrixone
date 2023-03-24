@@ -21,6 +21,7 @@ import (
 	"io"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -93,6 +94,10 @@ type FilterParam struct {
 
 type Argument struct {
 	Es *ExternalParam
+}
+
+func (ap *Argument) ReturnTypes() []types.Type {
+	return nil
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

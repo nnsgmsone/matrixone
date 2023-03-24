@@ -37,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/join"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/left"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
@@ -47,7 +46,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopmark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergelimit"
@@ -94,6 +92,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Nbucket:    t.Nbucket,
 			Cond:       t.Cond,
 			Typs:       t.Typs,
+			RightTypes: t.RightTypes,
 			Conditions: t.Conditions,
 		}
 	case vm.Group:
@@ -113,7 +112,8 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Nbucket:    t.Nbucket,
 			Result:     t.Result,
 			Cond:       t.Cond,
-			Typs:       t.Typs,
+			Types:      t.Types,
+			RightTypes: t.RightTypes,
 			Conditions: t.Conditions,
 		}
 	case vm.Left:
@@ -123,7 +123,8 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Nbucket:    t.Nbucket,
 			Cond:       t.Cond,
 			Result:     t.Result,
-			Typs:       t.Typs,
+			Types:      t.Types,
+			RightTypes: t.RightTypes,
 			Conditions: t.Conditions,
 		}
 	case vm.Right:
@@ -141,74 +142,86 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		t := sourceIns.Arg.(*limit.Argument)
 		res.Arg = &limit.Argument{
 			Limit: t.Limit,
+			Types: t.Types,
 		}
 	case vm.LoopAnti:
 		t := sourceIns.Arg.(*loopanti.Argument)
 		res.Arg = &loopanti.Argument{
-			Result: t.Result,
-			Cond:   t.Cond,
-			Typs:   t.Typs,
+			Result:     t.Result,
+			Cond:       t.Cond,
+			Types:      t.Types,
+			RightTypes: t.RightTypes,
 		}
 	case vm.LoopJoin:
 		t := sourceIns.Arg.(*loopanti.Argument)
 		res.Arg = &loopanti.Argument{
-			Result: t.Result,
-			Cond:   t.Cond,
-			Typs:   t.Typs,
+			Result:     t.Result,
+			Cond:       t.Cond,
+			Types:      t.Types,
+			RightTypes: t.RightTypes,
 		}
 	case vm.LoopLeft:
 		t := sourceIns.Arg.(*loopleft.Argument)
 		res.Arg = &loopleft.Argument{
-			Cond:   t.Cond,
-			Typs:   t.Typs,
-			Result: t.Result,
+			Cond:       t.Cond,
+			Types:      t.Types,
+			Result:     t.Result,
+			RightTypes: t.RightTypes,
 		}
 	case vm.LoopSemi:
 		t := sourceIns.Arg.(*loopsemi.Argument)
 		res.Arg = &loopsemi.Argument{
-			Result: t.Result,
-			Cond:   t.Cond,
-			Typs:   t.Typs,
+			Result:     t.Result,
+			Cond:       t.Cond,
+			Types:      t.Types,
+			RightTypes: t.RightTypes,
 		}
 	case vm.LoopSingle:
 		t := sourceIns.Arg.(*loopsingle.Argument)
 		res.Arg = &loopsingle.Argument{
-			Result: t.Result,
-			Cond:   t.Cond,
-			Typs:   t.Typs,
+			Result:     t.Result,
+			Cond:       t.Cond,
+			Types:      t.Types,
+			RightTypes: t.RightTypes,
 		}
 	case vm.LoopMark:
 		t := sourceIns.Arg.(*loopmark.Argument)
 		res.Arg = &loopmark.Argument{
-			Result: t.Result,
-			Cond:   t.Cond,
-			Typs:   t.Typs,
+			Result:     t.Result,
+			Cond:       t.Cond,
+			Types:      t.Types,
+			RightTypes: t.RightTypes,
 		}
 	case vm.Offset:
 		t := sourceIns.Arg.(*offset.Argument)
 		res.Arg = &offset.Argument{
 			Offset: t.Offset,
+			Types:  t.Types,
 		}
 	case vm.Order:
 		t := sourceIns.Arg.(*order.Argument)
 		res.Arg = &order.Argument{
-			Fs: t.Fs,
+			Fs:    t.Fs,
+			Types: t.Types,
 		}
 	case vm.Product:
 		t := sourceIns.Arg.(*product.Argument)
 		res.Arg = &product.Argument{
-			Result: t.Result,
-			Typs:   t.Typs,
+			Result:     t.Result,
+			Types:      t.Types,
+			RightTypes: t.RightTypes,
 		}
 	case vm.Projection:
 		t := sourceIns.Arg.(*projection.Argument)
 		res.Arg = &projection.Argument{
-			Es: t.Es,
+			Es:    t.Es,
+			Types: t.Types,
 		}
 	case vm.Restrict:
 		t := sourceIns.Arg.(*restrict.Argument)
 		res.Arg = &restrict.Argument{
-			E: t.E,
+			E:     t.E,
+			Types: t.Types,
 		}
 	case vm.Semi:
 		t := sourceIns.Arg.(*semi.Argument)
@@ -217,7 +230,8 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Nbucket:    t.Nbucket,
 			Result:     t.Result,
 			Cond:       t.Cond,
-			Typs:       t.Typs,
+			Types:      t.Types,
+			RightTypes: t.RightTypes,
 			Conditions: t.Conditions,
 		}
 	case vm.Single:
@@ -227,7 +241,8 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Nbucket:    t.Nbucket,
 			Result:     t.Result,
 			Cond:       t.Cond,
-			Typs:       t.Typs,
+			Types:      t.Types,
+			RightTypes: t.RightTypes,
 			Conditions: t.Conditions,
 		}
 	case vm.Top:
@@ -235,63 +250,58 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		res.Arg = &top.Argument{
 			Limit: t.Limit,
 			Fs:    t.Fs,
+			Types: t.Types,
 		}
 	case vm.Intersect:
 		t := sourceIns.Arg.(*intersect.Argument)
 		res.Arg = &intersect.Argument{
 			IBucket: t.IBucket,
 			NBucket: t.NBucket,
+			Types:   t.Types,
 		}
 	case vm.Minus: // 2
 		t := sourceIns.Arg.(*minus.Argument)
 		res.Arg = &minus.Argument{
 			IBucket: t.IBucket,
 			NBucket: t.NBucket,
-		}
-	case vm.IntersectAll:
-		t := sourceIns.Arg.(*intersectall.Argument)
-		res.Arg = &intersectall.Argument{
-			IBucket: t.IBucket,
-			NBucket: t.NBucket,
+			Types:   t.Types,
 		}
 	case vm.Merge:
-		res.Arg = &merge.Argument{}
+		t := sourceIns.Arg.(*merge.Argument)
+		res.Arg = &merge.Argument{
+			Types:          t.Types,
+			ChildrenNumber: t.ChildrenNumber,
+		}
 	case vm.MergeGroup:
 		t := sourceIns.Arg.(*mergegroup.Argument)
 		res.Arg = &mergegroup.Argument{
 			NeedEval: t.NeedEval,
+			Types:    t.Types,
 		}
 	case vm.MergeLimit:
 		t := sourceIns.Arg.(*mergelimit.Argument)
 		res.Arg = &mergelimit.Argument{
 			Limit: t.Limit,
+			Types: t.Types,
 		}
 	case vm.MergeOffset:
 		t := sourceIns.Arg.(*mergeoffset.Argument)
 		res.Arg = &mergeoffset.Argument{
 			Offset: t.Offset,
+			Types:  t.Types,
 		}
 	case vm.MergeTop:
 		t := sourceIns.Arg.(*mergetop.Argument)
 		res.Arg = &mergetop.Argument{
 			Limit: t.Limit,
 			Fs:    t.Fs,
+			Types: t.Types,
 		}
 	case vm.MergeOrder:
 		t := sourceIns.Arg.(*mergeorder.Argument)
 		res.Arg = &mergeorder.Argument{
-			Fs: t.Fs,
-		}
-	case vm.Mark:
-		t := sourceIns.Arg.(*mark.Argument)
-		res.Arg = &mark.Argument{
-			Ibucket:    t.Ibucket,
-			Nbucket:    t.Nbucket,
-			Result:     t.Result,
-			Conditions: t.Conditions,
-			Typs:       t.Typs,
-			Cond:       t.Cond,
-			OnList:     t.OnList,
+			Fs:    t.Fs,
+			Types: t.Types,
 		}
 	case vm.TableFunction:
 		t := sourceIns.Arg.(*table_function.Argument)
@@ -311,7 +321,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			NeedSelectList: t.NeedSelectList,
 			Ibucket:        t.Ibucket,
 			Nbucket:        t.Nbucket,
-			Typs:           t.Typs,
+			Types:          t.Types,
 			Conditions:     t.Conditions,
 		}
 	case vm.External:
@@ -391,9 +401,10 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	return res
 }
 
-func constructRestrict(n *plan.Node) *restrict.Argument {
+func constructRestrict(n *plan.Node, typs []types.Type) *restrict.Argument {
 	return &restrict.Argument{
-		E: colexec.RewriteFilterExprList(n.FilterList),
+		Types: append([]types.Type{}, typs...),
+		E:     colexec.RewriteFilterExprList(n.FilterList),
 	}
 }
 
@@ -651,9 +662,10 @@ func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*up
 	}, nil
 }
 
-func constructProjection(n *plan.Node) *projection.Argument {
+func constructProjection(n *plan.Node, typs []types.Type) *projection.Argument {
 	return &projection.Argument{
-		Es: n.ProjectList,
+		Es:    n.ProjectList,
+		Types: append([]types.Type{}, typs...),
 	}
 }
 
@@ -700,28 +712,30 @@ func constructTableFunction(n *plan.Node, ctx context.Context, name string) *tab
 	}
 }
 
-func constructTop(n *plan.Node, topN int64) *top.Argument {
+func constructTop(n *plan.Node, topN int64, typs []types.Type) *top.Argument {
 	return &top.Argument{
-		Fs:    n.OrderBy,
 		Limit: topN,
+		Fs:    n.OrderBy,
+		Types: append([]types.Type{}, typs...),
 	}
 }
 
-func constructJoin(n *plan.Node, typs []types.Type, proc *process.Process) *join.Argument {
+func constructJoin(n *plan.Node, proc *process.Process, typs, rtyps []types.Type) *join.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &join.Argument{
-		Typs:       typs,
 		Result:     result,
 		Cond:       cond,
+		RightTypes: rtyps,
+		Types:      append([]types.Type{}, typs...),
 		Conditions: constructJoinConditions(conds, proc),
 	}
 }
 
-func constructSemi(n *plan.Node, typs []types.Type, proc *process.Process) *semi.Argument {
+func constructSemi(n *plan.Node, proc *process.Process, typs, rtyps []types.Type) *semi.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr, proc)
@@ -732,23 +746,26 @@ func constructSemi(n *plan.Node, typs []types.Type, proc *process.Process) *semi
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &semi.Argument{
-		Typs:       typs,
 		Result:     result,
 		Cond:       cond,
+		RightTypes: rtyps,
+		Types:      append([]types.Type{}, typs...),
 		Conditions: constructJoinConditions(conds, proc),
 	}
 }
 
-func constructLeft(n *plan.Node, typs []types.Type, proc *process.Process) *left.Argument {
+func constructLeft(n *plan.Node, proc *process.Process,
+	typs, rtyps []types.Type) *left.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &left.Argument{
-		Typs:       typs,
 		Result:     result,
 		Cond:       cond,
+		RightTypes: rtyps,
+		Types:      append([]types.Type{}, typs...),
 		Conditions: constructJoinConditions(conds, proc),
 	}
 }
@@ -770,29 +787,35 @@ func constructRight(n *plan.Node, left_typs, right_typs []types.Type, Ibucket, N
 	}
 }
 
-func constructSingle(n *plan.Node, typs []types.Type, proc *process.Process) *single.Argument {
+func constructSingle(n *plan.Node, proc *process.Process, typs, rtyps []types.Type) *single.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &single.Argument{
-		Typs:       typs,
 		Result:     result,
 		Cond:       cond,
+		RightTypes: rtyps,
+		Types:      append([]types.Type{}, typs...),
 		Conditions: constructJoinConditions(conds, proc),
 	}
 }
 
-func constructProduct(n *plan.Node, typs []types.Type, proc *process.Process) *product.Argument {
+func constructProduct(n *plan.Node, proc *process.Process, typs, rtyps []types.Type) *product.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
-	return &product.Argument{Typs: typs, Result: result}
+	return &product.Argument{
+		Result:     result,
+		RightTypes: rtyps,
+		Types:      append([]types.Type{}, typs...),
+	}
 }
 
-func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti.Argument {
+func constructAnti(n *plan.Node, proc *process.Process,
+	typs, rtyps []types.Type) *anti.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr, proc)
@@ -803,66 +826,34 @@ func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &anti.Argument{
-		Typs:       typs,
 		Cond:       cond,
+		RightTypes: rtyps,
+		Typs:       append([]types.Type{}, typs...),
 		Conditions: constructJoinConditions(conds, proc),
 	}
 }
 
-/*
-func constructMark(n *plan.Node, typs []types.Type, proc *process.Process) *mark.Argument {
-	result := make([]int32, len(n.ProjectList))
-	for i, expr := range n.ProjectList {
-		rel, pos := constructJoinResult(expr, proc)
-		if rel == 0 {
-			result[i] = pos
-		} else if rel == -1 {
-			result[i] = -1
-		} else {
-			panic(moerr.NewNYI(proc.Ctx, "loop mark result '%s'", expr))
-		}
-	}
-	cond, conds := extraJoinConditions(n.OnList)
-	return &mark.Argument{
-		Typs:       typs,
-		Result:     result,
-		Cond:       cond,
-		Conditions: constructJoinConditions(conds, proc),
-		OnList:     n.OnList,
-	}
-}
-*/
-
-func constructOrder(n *plan.Node, proc *process.Process) *order.Argument {
+func constructOrder(n *plan.Node, proc *process.Process, typs []types.Type) *order.Argument {
 	return &order.Argument{
-		Fs: n.OrderBy,
+		Fs:    n.OrderBy,
+		Types: append([]types.Type{}, typs...),
 	}
 }
 
-/*
-func constructOffset(n *plan.Node, proc *process.Process) *offset.Argument {
-	vec, err := colexec.EvalExpr(constBat, proc, n.Offset)
-	if err != nil {
-		panic(err)
-	}
-	return &offset.Argument{
-		Offset: uint64(vec.Col.([]int64)[0]),
-	}
-}
-*/
-
-func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
+func constructLimit(n *plan.Node, proc *process.Process, typs []types.Type) *limit.Argument {
 	vec, err := colexec.EvalExpr(constBat, proc, n.Limit)
 	if err != nil {
 		panic(err)
 	}
 	defer vec.Free(proc.Mp())
 	return &limit.Argument{
+		Types: append([]types.Type{}, typs...),
 		Limit: uint64(vector.MustFixedCol[int64](vec)[0]),
 	}
 }
 
-func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int, needEval bool, proc *process.Process) *group.Argument {
+func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
+	needEval bool, proc *process.Process, typs []types.Type) *group.Argument {
 	var lenAggs, lenMultiAggs int
 	aggs := make([]agg.Aggregate, len(n.AggList))
 	// multiaggs: is not like the normal agg funcs which have only one arg exclude 'distinct'
@@ -898,42 +889,32 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 	}
 	aggs = aggs[:lenAggs]
 	multiaggs = multiaggs[:lenMultiAggs]
-	typs := make([]types.Type, len(cn.ProjectList))
-	for i, e := range cn.ProjectList {
-		typs[i] = types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale)
-	}
 	return &group.Argument{
 		Aggs:      aggs,
 		MultiAggs: multiaggs,
-		Types:     typs,
 		NeedEval:  needEval,
 		Exprs:     n.GroupBy,
 		Ibucket:   uint64(ibucket),
 		Nbucket:   uint64(nbucket),
+		Types:     append([]types.Type{}, typs...),
 	}
 }
 
-// ibucket: bucket number
-// nbucket:
-// construct operator argument
-func constructIntersectAll(_ *plan.Node, proc *process.Process, ibucket, nbucket int) *intersectall.Argument {
-	return &intersectall.Argument{
-		IBucket: uint64(ibucket),
-		NBucket: uint64(nbucket),
-	}
-}
-
-func constructMinus(n *plan.Node, proc *process.Process, ibucket, nbucket int) *minus.Argument {
+func constructMinus(n *plan.Node, proc *process.Process,
+	ibucket, nbucket int, typs []types.Type) *minus.Argument {
 	return &minus.Argument{
 		IBucket: uint64(ibucket),
 		NBucket: uint64(nbucket),
+		Types:   append([]types.Type{}, typs...),
 	}
 }
 
-func constructIntersect(n *plan.Node, proc *process.Process, ibucket, nbucket int) *intersect.Argument {
+func constructIntersect(n *plan.Node, proc *process.Process,
+	ibucket, nbucket int, typs []types.Type) *intersect.Argument {
 	return &intersect.Argument{
 		IBucket: uint64(ibucket),
 		NBucket: uint64(nbucket),
+		Types:   append([]types.Type{}, typs...),
 	}
 }
 
@@ -1003,60 +984,68 @@ func constructBroadcastJoinDispatch(idx int, ss []*Scope, currentCNAddr string, 
 	return arg
 }
 
-func constructMergeGroup(_ *plan.Node, needEval bool) *mergegroup.Argument {
+func constructMergeGroup(_ *plan.Node, needEval bool, typs []types.Type) *mergegroup.Argument {
 	return &mergegroup.Argument{
 		NeedEval: needEval,
+		Types:    append([]types.Type{}, typs...),
 	}
 }
 
-func constructMergeTop(n *plan.Node, topN int64) *mergetop.Argument {
+func constructMergeTop(n *plan.Node, topN int64, typs []types.Type) *mergetop.Argument {
 	return &mergetop.Argument{
-		Fs:    n.OrderBy,
 		Limit: topN,
+		Fs:    n.OrderBy,
+		Types: append([]types.Type{}, typs...),
 	}
 }
 
-func constructMergeOffset(n *plan.Node, proc *process.Process) *mergeoffset.Argument {
+func constructMergeOffset(n *plan.Node, proc *process.Process, typs []types.Type) *mergeoffset.Argument {
 	vec, err := colexec.EvalExpr(constBat, proc, n.Offset)
 	if err != nil {
 		panic(err)
 	}
 	defer vec.Free(proc.Mp())
 	return &mergeoffset.Argument{
+		Types:  append([]types.Type{}, typs...),
 		Offset: uint64(vector.MustFixedCol[int64](vec)[0]),
 	}
 }
 
-func constructMergeLimit(n *plan.Node, proc *process.Process) *mergelimit.Argument {
+func constructMergeLimit(n *plan.Node, proc *process.Process, typs []types.Type) *mergelimit.Argument {
 	vec, err := colexec.EvalExpr(constBat, proc, n.Limit)
 	if err != nil {
 		panic(err)
 	}
 	defer vec.Free(proc.Mp())
 	return &mergelimit.Argument{
+		Types: append([]types.Type{}, typs...),
 		Limit: uint64(vector.MustFixedCol[int64](vec)[0]),
 	}
 }
 
-func constructMergeOrder(n *plan.Node, proc *process.Process) *mergeorder.Argument {
+func constructMergeOrder(n *plan.Node, proc *process.Process, typs []types.Type) *mergeorder.Argument {
 	return &mergeorder.Argument{
-		Fs: n.OrderBy,
+		Fs:    n.OrderBy,
+		Types: append([]types.Type{}, typs...),
 	}
 }
 
-func constructLoopJoin(n *plan.Node, typs []types.Type, proc *process.Process) *loopjoin.Argument {
+func constructLoopJoin(n *plan.Node, proc *process.Process,
+	typs, rtyps []types.Type) *loopjoin.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	return &loopjoin.Argument{
-		Typs:   typs,
-		Result: result,
-		Cond:   colexec.RewriteFilterExprList(n.OnList),
+		Result:     result,
+		RightTypes: rtyps,
+		Types:      append([]types.Type{}, typs...),
+		Cond:       colexec.RewriteFilterExprList(n.OnList),
 	}
 }
 
-func constructLoopSemi(n *plan.Node, typs []types.Type, proc *process.Process) *loopsemi.Argument {
+func constructLoopSemi(n *plan.Node, proc *process.Process,
+	typs, rtyps []types.Type) *loopsemi.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr, proc)
@@ -1066,36 +1055,43 @@ func constructLoopSemi(n *plan.Node, typs []types.Type, proc *process.Process) *
 		result[i] = pos
 	}
 	return &loopsemi.Argument{
-		Typs:   typs,
-		Result: result,
-		Cond:   colexec.RewriteFilterExprList(n.OnList),
+		Result:     result,
+		RightTypes: rtyps,
+		Types:      append([]types.Type{}, typs...),
+		Cond:       colexec.RewriteFilterExprList(n.OnList),
 	}
 }
 
-func constructLoopLeft(n *plan.Node, typs []types.Type, proc *process.Process) *loopleft.Argument {
+func constructLoopLeft(n *plan.Node, proc *process.Process,
+	typs, rtyps []types.Type) *loopleft.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	return &loopleft.Argument{
-		Typs:   typs,
-		Result: result,
-		Cond:   colexec.RewriteFilterExprList(n.OnList),
+		Result:     result,
+		RightTypes: rtyps,
+		Types:      append([]types.Type{}, typs...),
+		Cond:       colexec.RewriteFilterExprList(n.OnList),
 	}
 }
 
-func constructLoopSingle(n *plan.Node, typs []types.Type, proc *process.Process) *loopsingle.Argument {
+func constructLoopSingle(n *plan.Node, proc *process.Process,
+	typs, rtyps []types.Type) *loopsingle.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	return &loopsingle.Argument{
-		Result: result,
-		Cond:   colexec.RewriteFilterExprList(n.OnList),
+		Result:     result,
+		RightTypes: rtyps,
+		Types:      append([]types.Type{}, typs...),
+		Cond:       colexec.RewriteFilterExprList(n.OnList),
 	}
 }
 
-func constructLoopAnti(n *plan.Node, typs []types.Type, proc *process.Process) *loopanti.Argument {
+func constructLoopAnti(n *plan.Node, proc *process.Process,
+	typs, rtyps []types.Type) *loopanti.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr, proc)
@@ -1105,13 +1101,15 @@ func constructLoopAnti(n *plan.Node, typs []types.Type, proc *process.Process) *
 		result[i] = pos
 	}
 	return &loopanti.Argument{
-		Typs:   typs,
-		Result: result,
-		Cond:   colexec.RewriteFilterExprList(n.OnList),
+		Result:     result,
+		RightTypes: rtyps,
+		Types:      append([]types.Type{}, typs...),
+		Cond:       colexec.RewriteFilterExprList(n.OnList),
 	}
 }
 
-func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *loopmark.Argument {
+func constructLoopMark(n *plan.Node, proc *process.Process,
+	typs, rtyps []types.Type) *loopmark.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr, proc)
@@ -1124,9 +1122,10 @@ func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *
 		}
 	}
 	return &loopmark.Argument{
-		Typs:   typs,
-		Result: result,
-		Cond:   colexec.RewriteFilterExprList(n.OnList),
+		Result:     result,
+		RightTypes: rtyps,
+		Types:      append([]types.Type{}, typs...),
+		Cond:       colexec.RewriteFilterExprList(n.OnList),
 	}
 }
 
@@ -1136,23 +1135,15 @@ func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Arg
 		arg := in.Arg.(*anti.Argument)
 		return &hashbuild.Argument{
 			NeedHashMap: true,
-			Typs:        arg.Typs,
+			Types:       arg.RightTypes,
 			Conditions:  arg.Conditions[1],
-		}
-	case vm.Mark:
-		arg := in.Arg.(*mark.Argument)
-		return &hashbuild.Argument{
-			NeedHashMap:    true,
-			NeedSelectList: true,
-			Typs:           arg.Typs,
-			Conditions:     arg.Conditions[1],
 		}
 	case vm.Join:
 		arg := in.Arg.(*join.Argument)
 		return &hashbuild.Argument{
 			NeedHashMap:    true,
 			NeedSelectList: true,
-			Typs:           arg.Typs,
+			Types:          arg.RightTypes,
 			Conditions:     arg.Conditions[1],
 		}
 	case vm.Left:
@@ -1160,7 +1151,7 @@ func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Arg
 		return &hashbuild.Argument{
 			NeedHashMap:    true,
 			NeedSelectList: true,
-			Typs:           arg.Typs,
+			Types:          arg.RightTypes,
 			Conditions:     arg.Conditions[1],
 		}
 	case vm.Right:
@@ -1170,14 +1161,14 @@ func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Arg
 			Nbucket:     arg.Nbucket,
 			IsRight:     true,
 			NeedHashMap: true,
-			Typs:        arg.Right_typs,
+			Types:       arg.Right_typs,
 			Conditions:  arg.Conditions[1],
 		}
 	case vm.Semi:
 		arg := in.Arg.(*semi.Argument)
 		return &hashbuild.Argument{
 			NeedHashMap: true,
-			Typs:        arg.Typs,
+			Types:       arg.RightTypes,
 			Conditions:  arg.Conditions[1],
 		}
 	case vm.Single:
@@ -1185,7 +1176,7 @@ func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Arg
 		return &hashbuild.Argument{
 			NeedHashMap:    true,
 			NeedSelectList: true,
-			Typs:           arg.Typs,
+			Types:          arg.RightTypes,
 			Conditions:     arg.Conditions[1],
 		}
 	case vm.Product:
@@ -1193,51 +1184,50 @@ func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Arg
 		return &hashbuild.Argument{
 			NeedHashMap:    false,
 			NeedSelectList: true,
-			Typs:           arg.Typs,
+			Types:          arg.RightTypes,
 		}
 	case vm.LoopAnti:
 		arg := in.Arg.(*loopanti.Argument)
 		return &hashbuild.Argument{
 			NeedHashMap:    false,
 			NeedSelectList: true,
-			Typs:           arg.Typs,
+			Types:          arg.RightTypes,
 		}
 	case vm.LoopJoin:
 		arg := in.Arg.(*loopjoin.Argument)
 		return &hashbuild.Argument{
 			NeedHashMap:    false,
 			NeedSelectList: true,
-			Typs:           arg.Typs,
+			Types:          arg.RightTypes,
 		}
 	case vm.LoopLeft:
 		arg := in.Arg.(*loopleft.Argument)
 		return &hashbuild.Argument{
 			NeedHashMap:    false,
 			NeedSelectList: true,
-			Typs:           arg.Typs,
+			Types:          arg.RightTypes,
 		}
 	case vm.LoopSemi:
 		arg := in.Arg.(*loopsemi.Argument)
 		return &hashbuild.Argument{
 			NeedHashMap:    false,
 			NeedSelectList: true,
-			Typs:           arg.Typs,
+			Types:          arg.RightTypes,
 		}
 	case vm.LoopSingle:
 		arg := in.Arg.(*loopsingle.Argument)
 		return &hashbuild.Argument{
 			NeedHashMap:    false,
 			NeedSelectList: true,
-			Typs:           arg.Typs,
+			Types:          arg.RightTypes,
 		}
 	case vm.LoopMark:
 		arg := in.Arg.(*loopmark.Argument)
 		return &hashbuild.Argument{
 			NeedHashMap:    false,
 			NeedSelectList: true,
-			Typs:           arg.Typs,
+			Types:          arg.RightTypes,
 		}
-
 	default:
 		panic(moerr.NewInternalError(proc.Ctx, "unsupport join type '%v'", in.Op))
 	}

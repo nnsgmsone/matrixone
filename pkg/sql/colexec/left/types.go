@@ -61,10 +61,15 @@ type Argument struct {
 	Types      []types.Type
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
+	RightTypes []types.Type
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	ctr := arg.ctr
+func (ap *Argument) ReturnTypes() []types.Type {
+	return ap.Types
+}
+
+func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	ctr := ap.ctr
 	if ctr != nil {
 		ctr.CleanMemForNextOp(proc)
 		ctr.cleanBatch()

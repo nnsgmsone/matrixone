@@ -177,6 +177,8 @@ type Compile struct {
 	// remote, but now the tempEngine is just standlone. So for now use this to read
 	// table locally. But int the future, this will disappear.
 	isTemporaryScan bool
+
+	typs []types.Type
 }
 
 type RemoteReceivRegInfo struct {

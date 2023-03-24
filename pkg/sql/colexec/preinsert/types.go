@@ -16,6 +16,8 @@ package preinsert
 
 import (
 	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -33,4 +35,5 @@ type Argument struct {
 	ParentIdx  map[string]int32
 }
 
+func (arg *Argument) ReturnTypes() []types.Type   { return nil }
 func (arg *Argument) Free(*process.Process, bool) {}

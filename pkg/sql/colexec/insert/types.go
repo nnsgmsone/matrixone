@@ -48,6 +48,10 @@ type InsertCtx struct {
 	IdxIdx []int32
 }
 
+func (ap *Argument) ReturnTypes() []types.Type {
+	return ap.Types
+}
+
 // The Argument for insert data directly to s3 can not be free when this function called as some datastructure still needed.
 // therefore, those argument in remote CN will be free in connector operator, and local argument will be free in mergeBlock operator
 func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {

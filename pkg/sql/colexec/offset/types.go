@@ -32,6 +32,10 @@ type Argument struct {
 	ctr    *container
 }
 
+func (ap *Argument) ReturnTypes() []types.Type {
+	return ap.Types
+}
+
 func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	ap.ctr.CleanMemForNextOp(proc)
 }

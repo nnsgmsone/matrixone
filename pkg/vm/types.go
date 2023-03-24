@@ -14,7 +14,10 @@
 
 package vm
 
-import "github.com/matrixorigin/matrixone/pkg/vm/process"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
 
 const (
 	Top = iota
@@ -89,6 +92,8 @@ type Instruction struct {
 }
 
 type InstructionArgument interface {
+	// ReturnTypes of the pipeline
+	ReturnTypes() []types.Type
 	// Free release all the memory allocated from mPool in an operator.
 	// pipelineFailed marks the process status of the pipeline when the method is called.
 	Free(proc *process.Process, pipelineFailed bool)

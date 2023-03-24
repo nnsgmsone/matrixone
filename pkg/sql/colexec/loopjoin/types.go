@@ -36,10 +36,15 @@ type container struct {
 }
 
 type Argument struct {
-	ctr    *container
-	Cond   *plan.Expr
-	Result []colexec.ResultPos
-	Types  []types.Type
+	ctr        *container
+	Cond       *plan.Expr
+	Result     []colexec.ResultPos
+	Types      []types.Type
+	RightTypes []types.Type
+}
+
+func (ap *Argument) ReturnTypes() []types.Type {
+	return ap.Types
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

@@ -466,7 +466,8 @@ func constructValueScanBatch(ctx context.Context, proc *process.Process, node *p
 	return bat, nil
 }
 
-func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan.Node) ([]*Scope, error) {
+func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node,
+	ns []*plan.Node) ([]*Scope, error) {
 	switch n.NodeType {
 	case plan.Node_VALUE_SCAN:
 		ds := &Scope{Magic: Normal}
@@ -485,11 +486,14 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 		}
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(node, ss))), nil
 	case plan.Node_TABLE_SCAN:
+		c.typs = make([]types.Type, len(n.TableDef.Cols))
+		for i, col := range n.TableDef.Cols {
+			c.typs[i] = dupType(col.Typ)
+		}
 		ss, err := c.compileTableScan(n)
 		if err != nil {
 			return nil, err
 		}
-		// RelationName
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_FILTER:
 		curr := c.anal.curr
@@ -524,7 +528,6 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 		}
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_JOIN:
-
 		curr := c.anal.curr
 		c.SetAnalyzeCurrent(nil, int(n.Children[0]))
 		ss, err := c.compilePlanScope(ctx, ns[n.Children[0]], ns)
@@ -537,8 +540,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, n *plan.Node, ns []*plan
 			return nil, err
 		}
 		c.SetAnalyzeCurrent(children, curr)
-
-		return c.compileSort(n, c.compileJoin(ctx, n, ns[n.Children[0]], ns[n.Children[1]], ss, children)), nil
+		return c.compileSort(n, c.compileJoin(ctx, n,
+			ns[n.Children[0]], ns[n.Children[1]], ss, children)), nil
 	case plan.Node_SORT:
 		curr := c.anal.curr
 		c.SetAnalyzeCurrent(nil, int(n.Children[0]))
@@ -877,7 +880,7 @@ func (c *Compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
 			Op:      vm.Restrict,
 			Idx:     c.anal.curr,
 			IsFirst: currentFirstFlag,
-			Arg:     constructRestrict(n),
+			Arg:     constructRestrict(n, c.typs),
 		})
 	}
 	c.anal.isFirst = false
@@ -886,13 +889,14 @@ func (c *Compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 	if len(n.ProjectList) > 0 {
+		c.fillOutputTypes(n)
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
 			ss[i].appendInstruction(vm.Instruction{
 				Op:      vm.Projection,
 				Idx:     c.anal.curr,
 				IsFirst: currentFirstFlag,
-				Arg:     constructProjection(n),
+				Arg:     constructProjection(n, c.typs),
 			})
 		}
 		c.anal.isFirst = false
@@ -902,10 +906,11 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope, ns []*plan.Node) []*Scope {
 	ss = append(ss, children...)
-	rs := c.newScopeList(1, int(n.Stats.BlockNum))
+	rs := c.newScopeList(1, int(n.Stats.BlockNum), ss[0].returnTypes())
 	gn := new(plan.Node)
 	gn.GroupBy = make([]*plan.Expr, len(n.ProjectList))
 	copy(gn.GroupBy, n.ProjectList)
+	c.fillOutputTypes(n)
 	for i := range rs {
 		ch := c.newMergeScope(dupScopeList(ss))
 		ch.appendInstruction(vm.Instruction{
@@ -919,21 +924,23 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope, ns 
 		rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
 			Op:  vm.Group,
 			Idx: c.anal.curr,
-			Arg: constructGroup(c.ctx, gn, n, i, len(rs), true, c.proc),
+			Arg: constructGroup(c.ctx, gn, n, i, len(rs), true, c.proc, c.typs),
 		})
 	}
 	return rs
 }
 
 func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children []*Scope, nodeType plan.Node_NodeType) []*Scope {
-	rs := c.newJoinScopeListWithBucket(c.newScopeList(2, int(n.Stats.BlockNum)), ss, children)
+	c.fillOutputTypes(n)
+	rs := c.newJoinScopeListWithBucket(c.newScopeList(2, int(n.Stats.BlockNum),
+		ss[0].returnTypes()), ss, children)
 	switch nodeType {
 	case plan.Node_MINUS:
 		for i := range rs {
 			rs[i].Instructions[0] = vm.Instruction{
 				Op:  vm.Minus,
 				Idx: c.anal.curr,
-				Arg: constructMinus(n, c.proc, i, len(rs)),
+				Arg: constructMinus(n, c.proc, i, len(rs), c.typs),
 			}
 		}
 	case plan.Node_INTERSECT:
@@ -941,15 +948,7 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children [
 			rs[i].Instructions[0] = vm.Instruction{
 				Op:  vm.Intersect,
 				Idx: c.anal.curr,
-				Arg: constructIntersect(n, c.proc, i, len(rs)),
-			}
-		}
-	case plan.Node_INTERSECT_ALL:
-		for i := range rs {
-			rs[i].Instructions[0] = vm.Instruction{
-				Op:  vm.IntersectAll,
-				Idx: c.anal.curr,
-				Arg: constructIntersectAll(n, c.proc, i, len(rs)),
+				Arg: constructIntersect(n, c.proc, i, len(rs), c.typs),
 			}
 		}
 	}
@@ -964,18 +963,17 @@ func (c *Compile) compileUnionAll(n *plan.Node, ss []*Scope, children []*Scope) 
 
 func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss []*Scope, children []*Scope) []*Scope {
 	var rs []*Scope
+
 	isEq := plan2.IsEquiJoin(n.OnList)
-
-	right_typs := make([]types.Type, len(right.ProjectList))
+	rightTyps := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
-		right_typs[i] = dupType(expr.Typ)
+		rightTyps[i] = dupType(expr.Typ)
 	}
-
-	left_typs := make([]types.Type, len(left.ProjectList))
+	leftTyps := make([]types.Type, len(left.ProjectList))
 	for i, expr := range left.ProjectList {
-		left_typs[i] = dupType(expr.Typ)
+		leftTyps[i] = dupType(expr.Typ)
 	}
-
+	c.fillOutputTypes(n)
 	switch n.JoinType {
 	case plan.Node_INNER:
 		rs = c.newBroadcastJoinScopeList(ss, children)
@@ -984,7 +982,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Product,
 					Idx: c.anal.curr,
-					Arg: constructProduct(n, right_typs, c.proc),
+					Arg: constructProduct(n, c.proc, c.typs, rightTyps),
 				})
 			}
 		} else {
@@ -993,13 +991,13 @@ func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss
 					rs[i].appendInstruction(vm.Instruction{
 						Op:  vm.Join,
 						Idx: c.anal.curr,
-						Arg: constructJoin(n, right_typs, c.proc),
+						Arg: constructJoin(n, c.proc, c.typs, rightTyps),
 					})
 				} else {
 					rs[i].appendInstruction(vm.Instruction{
 						Op:  vm.LoopJoin,
 						Idx: c.anal.curr,
-						Arg: constructLoopJoin(n, right_typs, c.proc),
+						Arg: constructLoopJoin(n, c.proc, c.typs, rightTyps),
 					})
 				}
 			}
@@ -1011,13 +1009,13 @@ func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Semi,
 					Idx: c.anal.curr,
-					Arg: constructSemi(n, right_typs, c.proc),
+					Arg: constructSemi(n, c.proc, c.typs, rightTyps),
 				})
 			} else {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.LoopSemi,
 					Idx: c.anal.curr,
-					Arg: constructLoopSemi(n, right_typs, c.proc),
+					Arg: constructLoopSemi(n, c.proc, c.typs, rightTyps),
 				})
 			}
 		}
@@ -1028,13 +1026,13 @@ func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Left,
 					Idx: c.anal.curr,
-					Arg: constructLeft(n, right_typs, c.proc),
+					Arg: constructLeft(n, c.proc, c.typs, rightTyps),
 				})
 			} else {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.LoopLeft,
 					Idx: c.anal.curr,
-					Arg: constructLoopLeft(n, right_typs, c.proc),
+					Arg: constructLoopLeft(n, c.proc, c.typs, rightTyps),
 				})
 			}
 		}
@@ -1045,7 +1043,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Right,
 					Idx: c.anal.curr,
-					Arg: constructRight(n, left_typs, right_typs, uint64(i), uint64(len(rs)), c.proc),
+					Arg: constructRight(n, leftTyps, rightTyps, uint64(i), uint64(len(rs)), c.proc),
 				})
 			}
 		} else {
@@ -1058,13 +1056,13 @@ func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Single,
 					Idx: c.anal.curr,
-					Arg: constructSingle(n, right_typs, c.proc),
+					Arg: constructSingle(n, c.proc, c.typs, rightTyps),
 				})
 			} else {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.LoopSingle,
 					Idx: c.anal.curr,
-					Arg: constructLoopSingle(n, right_typs, c.proc),
+					Arg: constructLoopSingle(n, c.proc, c.typs, rightTyps),
 				})
 			}
 		}
@@ -1076,32 +1074,24 @@ func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Anti,
 					Idx: c.anal.curr,
-					Arg: constructAnti(n, right_typs, c.proc),
+					Arg: constructAnti(n, c.proc, c.typs, rightTyps),
 				})
 			} else {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.LoopAnti,
 					Idx: c.anal.curr,
-					Arg: constructLoopAnti(n, right_typs, c.proc),
+					Arg: constructLoopAnti(n, c.proc, c.typs, rightTyps),
 				})
 			}
 		}
 	case plan.Node_MARK:
 		rs = c.newBroadcastJoinScopeList(ss, children)
 		for i := range rs {
-			//if isEq {
-			//	rs[i].appendInstruction(vm.Instruction{
-			//		Op:  vm.Mark,
-			//		Idx: c.anal.curr,
-			//		Arg: constructMark(n, typs, c.proc),
-			//	})
-			//} else {
 			rs[i].appendInstruction(vm.Instruction{
 				Op:  vm.LoopMark,
 				Idx: c.anal.curr,
-				Arg: constructLoopMark(n, right_typs, c.proc),
+				Arg: constructLoopMark(n, c.proc, c.typs, rightTyps),
 			})
-			//}
 		}
 	default:
 		panic(moerr.NewNYI(ctx, fmt.Sprintf("join typ '%v'", n.JoinType)))
@@ -1172,7 +1162,7 @@ func (c *Compile) compileTop(n *plan.Node, topN int64, ss []*Scope) []*Scope {
 			Op:      vm.Top,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
-			Arg:     constructTop(n, topN),
+			Arg:     constructTop(n, topN, c.typs),
 		})
 	}
 	c.anal.isFirst = false
@@ -1181,7 +1171,7 @@ func (c *Compile) compileTop(n *plan.Node, topN int64, ss []*Scope) []*Scope {
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeTop,
 		Idx: c.anal.curr,
-		Arg: constructMergeTop(n, topN),
+		Arg: constructMergeTop(n, topN, c.typs),
 	}
 	return []*Scope{rs}
 }
@@ -1197,7 +1187,7 @@ func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 			Op:      vm.Order,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
-			Arg:     constructOrder(n, c.proc),
+			Arg:     constructOrder(n, c.proc, c.typs),
 		})
 	}
 	c.anal.isFirst = false
@@ -1206,7 +1196,7 @@ func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeOrder,
 		Idx: c.anal.curr,
-		Arg: constructMergeOrder(n, c.proc),
+		Arg: constructMergeOrder(n, c.proc, c.typs),
 	}
 	return []*Scope{rs}
 }
@@ -1224,7 +1214,7 @@ func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeOffset,
 		Idx: c.anal.curr,
-		Arg: constructMergeOffset(n, c.proc),
+		Arg: constructMergeOffset(n, c.proc, c.typs),
 	}
 	return []*Scope{rs}
 }
@@ -1240,7 +1230,7 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 			Op:      vm.Limit,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
-			Arg:     constructLimit(n, c.proc),
+			Arg:     constructLimit(n, c.proc, c.typs),
 		})
 	}
 	c.anal.isFirst = false
@@ -1249,13 +1239,14 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeLimit,
 		Idx: c.anal.curr,
-		Arg: constructMergeLimit(n, c.proc),
+		Arg: constructMergeLimit(n, c.proc, c.typs),
 	}
 	return []*Scope{rs}
 }
 
 func (c *Compile) compileAgg(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
 	currentFirstFlag := c.anal.isFirst
+	c.fillOutputTypes(n)
 	for i := range ss {
 		c.anal.isFirst = currentFirstFlag
 		if containBrokenNode(ss[i]) {
@@ -1265,16 +1256,16 @@ func (c *Compile) compileAgg(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scop
 			Op:      vm.Group,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
-			Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, false, c.proc),
+			Arg: constructGroup(c.ctx, n, ns[n.Children[0]],
+				0, 0, false, c.proc, c.typs),
 		})
 	}
 	c.anal.isFirst = false
-
 	rs := c.newMergeScope(ss)
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeGroup,
 		Idx: c.anal.curr,
-		Arg: constructMergeGroup(n, true),
+		Arg: constructMergeGroup(n, true, c.typs),
 	}
 	return []*Scope{rs}
 }
@@ -1284,6 +1275,7 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 	c.anal.isFirst = false
 	rs := c.newScopeList(validScopeCount(ss), int(n.Stats.BlockNum))
 	j := 0
+	c.fillOutputTypes(n)
 	for i := range ss {
 		if containBrokenNode(ss[i]) {
 			isEnd := ss[i].IsEnd
@@ -1299,13 +1291,13 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 			ss[i].IsEnd = true
 		}
 	}
-
 	for i := range rs {
 		rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
 			Op:      vm.Group,
 			Idx:     c.anal.curr,
 			IsFirst: currentIsFirst,
-			Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], i, len(rs), true, c.proc),
+			Arg: constructGroup(c.ctx, n, ns[n.Children[0]],
+				i, len(rs), true, c.proc, c.typs),
 		})
 	}
 	return []*Scope{c.newMergeScope(append(rs, ss...))}
@@ -1349,7 +1341,10 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 		Op:      vm.Merge,
 		Idx:     c.anal.curr,
 		IsFirst: c.anal.isFirst,
-		Arg:     &merge.Argument{},
+		Arg: &merge.Argument{
+			ChildrenNumber: cnt,
+			Types:          append([]types.Type{}, ss[0].returnTypes()...),
+		},
 	})
 	c.anal.isFirst = false
 
@@ -1368,18 +1363,19 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	return rs
 }
 
-func (c *Compile) newScopeList(childrenCount int, blocks int) []*Scope {
+func (c *Compile) newScopeList(childrenCount int, blocks int, typs []types.Type) []*Scope {
 	var ss []*Scope
 
 	currentFirstFlag := c.anal.isFirst
 	for _, n := range c.cnList {
 		c.anal.isFirst = currentFirstFlag
-		ss = append(ss, c.newScopeListWithNode(c.generateCPUNumber(n.Mcpu, blocks), childrenCount)...)
+		ss = append(ss, c.newScopeListWithNode(c.generateCPUNumber(n.Mcpu, blocks),
+			childrenCount, typs)...)
 	}
 	return ss
 }
 
-func (c *Compile) newScopeListWithNode(mcpu, childrenCount int) []*Scope {
+func (c *Compile) newScopeListWithNode(mcpu, childrenCount int, typs []types.Type) []*Scope {
 	ss := make([]*Scope, mcpu)
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
@@ -1390,7 +1386,10 @@ func (c *Compile) newScopeListWithNode(mcpu, childrenCount int) []*Scope {
 			Op:      vm.Merge,
 			Idx:     c.anal.curr,
 			IsFirst: currentFirstFlag,
-			Arg:     &merge.Argument{},
+			Arg: &merge.Argument{
+				ChildrenNumber: childrenCount,
+				Types:          append([]types.Type{}, typs...),
+			},
 		})
 	}
 	c.anal.isFirst = false
@@ -1399,6 +1398,7 @@ func (c *Compile) newScopeListWithNode(mcpu, childrenCount int) []*Scope {
 
 func (c *Compile) newScopeListForRightJoin(childrenCount int, blocks int) []*Scope {
 	var ss []*Scope
+
 	for _, n := range c.cnList {
 		cpunum := c.generateCPUNumber(n.Mcpu, blocks)
 		tmps := make([]*Scope, cpunum)
@@ -1511,6 +1511,7 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope) []*S
 	return rs
 }
 
+/*
 func (c *Compile) newLeftScope(s *Scope, ss []*Scope) *Scope {
 	rs := &Scope{
 		Magic: Merge,
@@ -1530,6 +1531,7 @@ func (c *Compile) newLeftScope(s *Scope, ss []*Scope) *Scope {
 	rs.Proc.Reg.MergeReceivers[0] = s.Proc.Reg.MergeReceivers[0]
 	return rs
 }
+*/
 
 func (c *Compile) newRightScope(s *Scope, ss []*Scope) *Scope {
 	rs := &Scope{
@@ -1868,4 +1870,11 @@ func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*pla
 		}
 	}
 	return vec, nil
+}
+
+func (c *Compile) fillOutputTypes(n *plan.Node) {
+	c.typs = c.typs[:0]
+	for _, node := range n.ProjectList {
+		c.typs = append(c.typs, dupType(node.Typ))
+	}
 }

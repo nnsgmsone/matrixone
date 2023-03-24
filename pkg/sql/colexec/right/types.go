@@ -67,6 +67,10 @@ type Argument struct {
 	NumCPU      uint64
 }
 
+func (ap *Argument) ReturnTypes() []types.Type {
+	return ap.Right_typs
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	ctr := arg.ctr
 	if ctr != nil {

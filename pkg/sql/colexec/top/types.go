@@ -50,6 +50,10 @@ type Argument struct {
 	Types []types.Type
 }
 
+func (ap *Argument) ReturnTypes() []types.Type {
+	return ap.Types
+}
+
 func (ap *Argument) Free(proc *process.Process, _ bool) {
 	ap.ctr.CleanMemForNextOp(proc)
 }
