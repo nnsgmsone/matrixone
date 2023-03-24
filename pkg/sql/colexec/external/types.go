@@ -100,7 +100,7 @@ func (ap *Argument) ReturnTypes() []types.Type {
 	return nil
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
 }
 
 type ParseLineHandler struct {

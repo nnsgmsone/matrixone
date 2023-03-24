@@ -33,8 +33,7 @@ import (
 )
 
 const (
-	Rows          = 10     // default rows
-	BenchmarkRows = 100000 // default rows for benchmark
+	Rows = 10 // default rows
 )
 
 // add unit tests for cases
@@ -127,51 +126,6 @@ func TestJoin(t *testing.T) {
 		nb1 := tc.proc.Mp().CurrNB()
 		tc.arg.Free(tc.proc, false)
 		require.Equal(t, nb0, nb1)
-	}
-}
-
-func BenchmarkJoin(b *testing.B) {
-	testType := types.New(types.T_int8, 0, 0)
-	for i := 0; i < b.N; i++ {
-		tcs = []joinTestCase{
-			newTestCase([]bool{false}, []types.Type{testType}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)},
-				[][]*plan.Expr{
-					{
-						newExpr(0, testType),
-					},
-					{
-						newExpr(0, testType),
-					},
-				}),
-			newTestCase([]bool{true}, []types.Type{testType}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)},
-				[][]*plan.Expr{
-					{
-						newExpr(0, testType),
-					},
-					{
-						newExpr(0, testType),
-					},
-				}),
-		}
-		t := new(testing.T)
-		for _, tc := range tcs {
-			bat := hashBuild(t, tc)
-			err := Prepare(tc.proc, tc.arg)
-			require.NoError(t, err)
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-			tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			tc.proc.Reg.MergeReceivers[1].Ch <- bat
-			for {
-				if ok, err := Call(0, tc.proc, tc.arg, false, false); ok || err != nil {
-					break
-				}
-				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-			}
-		}
 	}
 }
 

@@ -40,6 +40,10 @@ type Argument struct {
 	container    *Container
 }
 
+func (ap *Argument) ReturnTypes() []types.Type {
+	return nil
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	for k := range arg.container.mp {
 		arg.container.mp[k].Clean(proc.GetMPool())

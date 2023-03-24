@@ -76,7 +76,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			}
 		}
 	}
-	ap.ctr.OutBat.Zs = append(ap.ctr.OutBat.Zs, bat.Zs[:len(bs)]...)
+	for i := range bs {
+		if bs[i] {
+			ap.ctr.OutBat.Zs = append(ap.ctr.OutBat.Zs, bat.Zs[i])
+		}
+	}
 	anal.Output(ap.ctr.OutBat, isLast)
 	proc.SetInputBatch(ap.ctr.OutBat)
 	return false, nil

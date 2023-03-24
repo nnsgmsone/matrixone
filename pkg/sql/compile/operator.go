@@ -920,9 +920,10 @@ func constructIntersect(n *plan.Node, proc *process.Process,
 	}
 }
 
-func constructDispatchLocal(all bool, regs []*process.WaitRegister) *dispatch.Argument {
+func constructDispatchLocal(all bool, regs []*process.WaitRegister, typs []types.Type) *dispatch.Argument {
 	arg := new(dispatch.Argument)
 	arg.LocalRegs = regs
+	arg.Types = append([]types.Type{}, typs...)
 	if all {
 		arg.FuncId = dispatch.SendToAllLocalFunc
 	} else {

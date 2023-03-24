@@ -18,10 +18,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"runtime"
 	"strings"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 
@@ -990,7 +991,8 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope, ns 
 		ch.appendInstruction(vm.Instruction{
 			Op: vm.Connector,
 			Arg: &connector.Argument{
-				Reg: rs[i].Proc.Reg.MergeReceivers[0],
+				Reg:   rs[i].Proc.Reg.MergeReceivers[0],
+				Types: append([]types.Type{}, ch.returnTypes()...),
 			},
 		})
 		ch.IsEnd = true
@@ -1006,7 +1008,7 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope, ns 
 
 func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children []*Scope, nodeType plan.Node_NodeType) []*Scope {
 	c.fillOutputTypes(n)
-	rs := c.newJoinScopeListWithBucket(c.newScopeList(2, int(n.Stats.BlockNum),
+	rs := c.newJoinScopeListWithBucket(c.newScopeList(-1, int(n.Stats.BlockNum),
 		ss[0].returnTypes()), ss, children)
 	switch nodeType {
 	case plan.Node_MINUS:
@@ -1112,7 +1114,7 @@ func (c *Compile) compileJoin(ctx context.Context, n, left, right *plan.Node, ss
 		}
 	case plan.Node_RIGHT:
 		if isEq {
-			rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, int(n.Stats.BlockNum)), ss, children)
+			rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(-1, int(n.Stats.BlockNum)), ss, children)
 			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Right,
@@ -1321,6 +1323,10 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 func (c *Compile) compileAgg(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	c.fillOutputTypes(n)
+	typs := make([]types.Type, len(n.GroupBy))
+	for i, expr := range n.GroupBy {
+		typs[i] = dupType(expr.Typ)
+	}
 	for i := range ss {
 		c.anal.isFirst = currentFirstFlag
 		if containBrokenNode(ss[i]) {
@@ -1331,7 +1337,7 @@ func (c *Compile) compileAgg(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scop
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
 			Arg: constructGroup(c.ctx, n, ns[n.Children[0]],
-				0, 0, false, c.proc, c.typs),
+				0, 0, false, c.proc, typs),
 		})
 	}
 	c.anal.isFirst = false
@@ -1347,7 +1353,7 @@ func (c *Compile) compileAgg(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scop
 func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
 	currentIsFirst := c.anal.isFirst
 	c.anal.isFirst = false
-	rs := c.newScopeList(validScopeCount(ss), int(n.Stats.BlockNum))
+	rs := c.newScopeList(validScopeCount(ss), int(n.Stats.BlockNum), ss[0].returnTypes())
 	j := 0
 	c.fillOutputTypes(n)
 	for i := range ss {
@@ -1359,7 +1365,7 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 		if !ss[i].IsEnd {
 			ss[i].appendInstruction(vm.Instruction{
 				Op:  vm.Dispatch,
-				Arg: constructDispatchLocal(true, extraRegisters(rs, j)),
+				Arg: constructDispatchLocal(true, extraRegisters(rs, j), ss[i].returnTypes()),
 			})
 			j++
 			ss[i].IsEnd = true
@@ -1432,7 +1438,8 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 			ss[i].appendInstruction(vm.Instruction{
 				Op: vm.Connector,
 				Arg: &connector.Argument{
-					Reg: rs.Proc.Reg.MergeReceivers[j],
+					Reg:   rs.Proc.Reg.MergeReceivers[j],
+					Types: append([]types.Type{}, ss[i].returnTypes()...),
 				},
 			})
 			j++
@@ -1504,13 +1511,15 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope) []*Scope
 		left.appendInstruction(vm.Instruction{
 			Op: vm.Connector,
 			Arg: &connector.Argument{
-				Reg: rs[i].Proc.Reg.MergeReceivers[0],
+				Reg:   rs[i].Proc.Reg.MergeReceivers[0],
+				Types: append([]types.Type{}, left.returnTypes()...),
 			},
 		})
 		right.appendInstruction(vm.Instruction{
 			Op: vm.Connector,
 			Arg: &connector.Argument{
-				Reg: rs[i].Proc.Reg.MergeReceivers[1],
+				Reg:   rs[i].Proc.Reg.MergeReceivers[1],
+				Types: append([]types.Type{}, right.returnTypes()...),
 			},
 		})
 		left.IsEnd = true
@@ -1570,11 +1579,12 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope) []*S
 			idx = i
 		}
 		rs[i].PreScopes = []*Scope{ss[i]}
-		rs[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
+		rs[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, -1, c.anal.Nodes())
 		ss[i].appendInstruction(vm.Instruction{
 			Op: vm.Connector,
 			Arg: &connector.Argument{
-				Reg: rs[i].Proc.Reg.MergeReceivers[0],
+				Reg:   rs[i].Proc.Reg.MergeReceivers[0],
+				Types: append([]types.Type{}, ss[i].returnTypes()...),
 			},
 		})
 	}
@@ -1589,7 +1599,6 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope) []*S
 	return rs
 }
 
-/*
 func (c *Compile) newLeftScope(s *Scope, ss []*Scope) *Scope {
 	rs := &Scope{
 		Magic: Merge,
@@ -1602,14 +1611,13 @@ func (c *Compile) newLeftScope(s *Scope, ss []*Scope) *Scope {
 	})
 	rs.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructDispatchLocal(false, extraRegisters(ss, 0)),
+		Arg: constructDispatchLocal(false, extraRegisters(ss, 0), rs.returnTypes()),
 	})
 	rs.IsEnd = true
 	rs.Proc = process.NewWithAnalyze(s.Proc, c.ctx, 1, c.anal.Nodes())
 	rs.Proc.Reg.MergeReceivers[0] = s.Proc.Reg.MergeReceivers[0]
 	return rs
 }
-*/
 
 func (c *Compile) newRightScope(s *Scope, ss []*Scope) *Scope {
 	rs := &Scope{
@@ -1623,7 +1631,7 @@ func (c *Compile) newRightScope(s *Scope, ss []*Scope) *Scope {
 	})
 	rs.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructDispatchLocal(true, extraRegisters(ss, 1)),
+		Arg: constructDispatchLocal(true, extraRegisters(ss, 1), rs.returnTypes()),
 	})
 	rs.IsEnd = true
 	rs.Proc = process.NewWithAnalyze(s.Proc, c.ctx, 1, c.anal.Nodes())

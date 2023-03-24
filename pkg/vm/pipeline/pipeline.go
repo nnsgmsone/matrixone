@@ -18,7 +18,9 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -46,13 +48,17 @@ func (p *Pipeline) String() string {
 	return buf.String()
 }
 
-func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (end bool, err error) {
+func (p *Pipeline) Run(r engine.Reader, proc *process.Process, types []types.Type) (end bool, err error) {
+	var ctr colexec.MemforNextOp
+
 	// performance counter
 	perfCounterSet := new(perfcounter.CounterSet)
 	proc.Ctx = perfcounter.WithCounterSet(proc.Ctx, perfCounterSet)
 	defer func() {
 		_ = perfCounterSet //TODO
 	}()
+	ctr.InitByTypes(types, proc)
+	defer ctr.CleanMemForNextOp(proc)
 
 	var bat *batch.Batch
 	// used to handle some push-down request
@@ -69,6 +75,7 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (end bool, err er
 
 	for {
 		if p.isEnd(proc) {
+			p.cleanup(proc, true)
 			return true, nil
 		}
 		// read data from storage engine
@@ -81,9 +88,23 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (end bool, err er
 			a := proc.GetAnalyze(analyzeIdx)
 			a.S3IOByte(bat)
 			a.Alloc(int64(bat.Size()))
+			ctr.OutBat.Reset()
+			for i, vec := range ctr.OutVecs {
+				uf := ctr.Ufs[i]
+				srcVec := bat.GetVector(int32(i))
+				for j := int64(0); j < int64(bat.Length()); j++ {
+					if err := uf(vec, srcVec, j); err != nil {
+						p.cleanup(proc, true)
+						return false, err
+					}
+				}
+			}
+			ctr.OutBat.SetAttributes(bat.Attrs)
+			ctr.OutBat.Zs = append(ctr.OutBat.Zs, bat.Zs...)
+			proc.SetInputBatch(ctr.OutBat)
+		} else {
+			proc.SetInputBatch(nil)
 		}
-
-		proc.SetInputBatch(bat)
 		end, err = vm.Run(p.instructions, proc)
 		if err != nil {
 			p.cleanup(proc, true)
@@ -114,6 +135,7 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (end bool, 
 	pipelineInputBatches := []*batch.Batch{bat, nil}
 	for {
 		if p.isEnd(proc) {
+			p.cleanup(proc, true)
 			return true, nil
 		}
 		for i := range pipelineInputBatches {
@@ -147,6 +169,7 @@ func (p *Pipeline) MergeRun(proc *process.Process) (end bool, err error) {
 	}
 	for {
 		if p.isEnd(proc) {
+			p.cleanup(proc, true)
 			return true, nil
 		}
 		end, err = vm.Run(p.instructions, proc)

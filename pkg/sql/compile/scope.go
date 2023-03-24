@@ -66,11 +66,13 @@ func (s *Scope) Run(c *Compile) (err error) {
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	p := pipeline.New(s.DataSource.Attributes, s.Instructions, s.Reg)
 	if s.DataSource.Bat != nil {
+		defer s.DataSource.Bat.Clean(s.Proc.Mp())
 		if _, err = p.ConstRun(s.DataSource.Bat, s.Proc); err != nil {
 			return err
 		}
 	} else {
-		if _, err = p.Run(s.DataSource.R, s.Proc); err != nil {
+		typs := s.Instructions[0].Arg.(vm.InstructionArgument).ReturnTypes()
+		if _, err = p.Run(s.DataSource.R, s.Proc, typs); err != nil {
 			return err
 		}
 	}
@@ -309,7 +311,7 @@ func (s *Scope) JoinRun(c *Compile) error {
 			Magic:    Merge,
 			NodeInfo: s.NodeInfo,
 		}
-		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 2, c.anal.Nodes())
+		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, -1, c.anal.Nodes())
 		ss[i].Proc.Reg.MergeReceivers[1].Ch = make(chan *batch.Batch, 10)
 	}
 	left_scope, right_scope := c.newLeftScope(s, ss), c.newRightScope(s, ss)
@@ -354,6 +356,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 				Arg: &mergetop.Argument{
 					Fs:    arg.Fs,
 					Limit: arg.Limit,
+					Types: arg.Types,
 				},
 			}
 			for i := range ss {
@@ -364,6 +367,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 					Arg: &top.Argument{
 						Fs:    arg.Fs,
 						Limit: arg.Limit,
+						Types: arg.Types,
 					},
 				})
 			}
@@ -375,7 +379,8 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 				Op:  vm.MergeOrder,
 				Idx: in.Idx,
 				Arg: &mergeorder.Argument{
-					Fs: arg.Fs,
+					Fs:    arg.Fs,
+					Types: arg.Types,
 				},
 			}
 			for i := range ss {
@@ -384,7 +389,8 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 					Idx:     in.Idx,
 					IsFirst: in.IsFirst,
 					Arg: &order.Argument{
-						Fs: arg.Fs,
+						Fs:    arg.Fs,
+						Types: arg.Types,
 					},
 				})
 			}
@@ -397,6 +403,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 				Idx: in.Idx,
 				Arg: &mergelimit.Argument{
 					Limit: arg.Limit,
+					Types: arg.Types,
 				},
 			}
 			for i := range ss {
@@ -406,18 +413,24 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 					IsFirst: in.IsFirst,
 					Arg: &limit.Argument{
 						Limit: arg.Limit,
+						Types: arg.Types,
 					},
 				})
 			}
 		case vm.Group:
 			flg = true
 			arg := in.Arg.(*group.Argument)
+			typs := make([]types.Type, len(arg.Exprs))
+			for i, expr := range arg.Exprs {
+				typs[i] = dupType(expr.Typ)
+			}
 			s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
 			s.Instructions[0] = vm.Instruction{
 				Op:  vm.MergeGroup,
 				Idx: in.Idx,
 				Arg: &mergegroup.Argument{
 					NeedEval: false,
+					Types:    typs,
 				},
 			}
 			for i := range ss {
@@ -442,6 +455,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 				Idx: in.Idx,
 				Arg: &mergeoffset.Argument{
 					Offset: arg.Offset,
+					Types:  arg.Types,
 				},
 			}
 			for i := range ss {
@@ -451,6 +465,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 					IsFirst: in.IsFirst,
 					Arg: &offset.Argument{
 						Offset: arg.Offset,
+						Types:  arg.Types,
 					},
 				})
 			}
@@ -461,20 +476,6 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 			}
 		}
 	}
-	if !flg {
-		for i := range ss {
-			ss[i].Instructions = ss[i].Instructions[:len(ss[i].Instructions)-1]
-		}
-		s.Instructions[0] = vm.Instruction{
-			Op:  vm.Merge,
-			Idx: s.Instructions[0].Idx, // TODO: remove it
-			Arg: &merge.Argument{},
-		}
-		s.Instructions[1] = s.Instructions[len(s.Instructions)-1]
-		s.Instructions = s.Instructions[:2]
-	}
-	s.Magic = Merge
-	s.PreScopes = ss
 	cnt := 0
 	for _, s := range ss {
 		if s.IsEnd {
@@ -482,14 +483,27 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 		}
 		cnt++
 	}
-	s.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, cnt)
-	{
-		for i := 0; i < cnt; i++ {
-			s.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
-				Ctx: s.Proc.Ctx,
-				Ch:  make(chan *batch.Batch, 1),
-			}
+	if !flg {
+		for i := range ss {
+			ss[i].Instructions = ss[i].Instructions[:len(ss[i].Instructions)-1]
 		}
+		s.Instructions[0] = vm.Instruction{
+			Op:  vm.Merge,
+			Idx: s.Instructions[0].Idx, // TODO: remove it
+			Arg: &merge.Argument{
+				ChildrenNumber: len(ss),
+				Types:          append([]types.Type{}, ss[0].returnTypes()...),
+			},
+		}
+		s.Instructions[1] = s.Instructions[len(s.Instructions)-1]
+		s.Instructions = s.Instructions[:2]
+	}
+	s.Magic = Merge
+	s.PreScopes = ss
+	s.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
+	s.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
+		Ctx: s.Proc.Ctx,
+		Ch:  make(chan *batch.Batch, 1),
 	}
 	j := 0
 	for i := range ss {
@@ -497,7 +511,8 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 			ss[i].appendInstruction(vm.Instruction{
 				Op: vm.Connector,
 				Arg: &connector.Argument{
-					Reg: s.Proc.Reg.MergeReceivers[j],
+					Reg:   s.Proc.Reg.MergeReceivers[j],
+					Types: append([]types.Type{}, ss[i].returnTypes()...),
 				},
 			})
 			j++

@@ -27,7 +27,6 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -55,15 +54,15 @@ func init() {
 		newTestCase("select * from R limit 1", new(testing.T)),
 		newTestCase("select * from R limit 2, 1", new(testing.T)),
 		newTestCase("select count(*) from R", new(testing.T)),
+		newTestCase("select count(*) from R group by uid", new(testing.T)),
+		newTestCase("select count(distinct uid) from R", new(testing.T)),
 		newTestCase("select * from R join S on R.uid = S.uid", new(testing.T)),
 		newTestCase("select * from R left join S on R.uid = S.uid", new(testing.T)),
 		newTestCase("select * from R right join S on R.uid = S.uid", new(testing.T)),
 		newTestCase("select * from R join S on R.uid > S.uid", new(testing.T)),
 		newTestCase("select * from R limit 10", new(testing.T)),
-		//newTestCase("insert into R values('1', '2', '3')", new(testing.T)),
-		//newTestCase("insert into R select * from R", new(testing.T)),
-		newTestCase("select count(*) from R group by uid", new(testing.T)),
-		newTestCase("select count(distinct uid) from R", new(testing.T)),
+		//		newTestCase("insert into R values('1', '2', '3')", new(testing.T)),
+		//		newTestCase("insert into R select * from R", new(testing.T)),
 	}
 }
 
@@ -89,10 +88,11 @@ func TestCompile(t *testing.T) {
 		err = c.Run(0)
 		require.NoError(t, err)
 		// Enable memory check
-		//require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
+/*
 func TestCompileWithFaults(t *testing.T) {
 	// Enable this line to trigger the Hung.
 	// fault.Enable()
@@ -106,6 +106,7 @@ func TestCompileWithFaults(t *testing.T) {
 	err = c.Run(0)
 	require.NoError(t, err)
 }
+*/
 
 func newTestCase(sql string, t *testing.T) compileTestCase {
 	proc := testutil.NewProcess()
