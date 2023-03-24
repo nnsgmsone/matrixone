@@ -52,6 +52,14 @@ message Dispatch {
   repeated plan.Type  types = 4;
 }
 
+message MultiArguemnt{
+  bool Dist = 1;
+  repeated plan.Expr GroupExpr = 2;
+  repeated plan.Expr OrderByExpr = 3;
+  string Separator = 4;
+  int32 OrderId = 5;
+}
+
 message Aggregate {
   int32 op = 1;
   bool dist = 2;
@@ -65,6 +73,7 @@ message Group {
   repeated plan.Expr  exprs = 4;
   repeated plan.Type  types = 5;
   repeated Aggregate  aggs = 6;
+  repeated MultiArguemnt MultiAggs = 7;
 }
 
 message Insert{

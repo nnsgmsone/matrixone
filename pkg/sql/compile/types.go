@@ -61,6 +61,9 @@ const (
 	AlterView
 	AlterTable
 	MergeInsert
+	CreateSequence
+	DropSequence
+	AlterSequence
 )
 
 // Source contains information of a relation which will be used in execution,
@@ -116,6 +119,8 @@ type Scope struct {
 	Reg *process.WaitRegister
 
 	RemoteReceivRegInfos []RemoteReceivRegInfo
+	// AttachedScope is used to execute additional sql pipeline
+	AttachedScope *Scope
 }
 
 // scopeContext contextual information to assist in the generation of pipeline.Pipeline.
