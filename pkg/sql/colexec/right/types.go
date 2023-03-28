@@ -38,6 +38,8 @@ type evalVector struct {
 }
 
 type container struct {
+	colexec.MemforNextOp
+
 	state int
 
 	inBuckets []uint8
@@ -57,6 +59,7 @@ type Argument struct {
 	Ibucket    uint64
 	Nbucket    uint64
 	Result     []colexec.ResultPos
+	Types      []types.Type
 	Left_typs  []types.Type
 	Right_typs []types.Type
 	Cond       *plan.Expr
@@ -74,16 +77,16 @@ func (ap *Argument) ReturnTypes() []types.Type {
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	ctr := arg.ctr
 	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
-		ctr.cleanEvalVectors(mp)
+		ctr.cleanBatch()
 		ctr.cleanHashMap()
+		ctr.CleanMemForNextOp(proc)
+		ctr.cleanEvalVectors(proc.Mp())
 	}
 }
 
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
+func (ctr *container) cleanBatch() {
 	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
+		ctr.bat.SubCnt(1)
 		ctr.bat = nil
 	}
 }
