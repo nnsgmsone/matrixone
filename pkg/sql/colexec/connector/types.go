@@ -34,6 +34,10 @@ type Argument struct {
 	ctr   *container
 }
 
+func (ap *Argument) ReturnTypes() []types.Type {
+	return ap.Types
+}
+
 func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	if pipelineFailed {
 		for len(ap.Reg.Ch) > 0 {

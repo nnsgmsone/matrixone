@@ -56,7 +56,6 @@ func Call(_ int, proc *process.Process, arg any, _ bool, _ bool) (bool, error) {
 	if length == 0 {
 		return false, nil
 	}
-
 	ap.ctr.bat.Reset()
 	for i, vec := range ap.ctr.vecs {
 		uf := ap.ctr.ufs[i]
@@ -67,6 +66,8 @@ func Call(_ int, proc *process.Process, arg any, _ bool, _ bool) (bool, error) {
 			}
 		}
 	}
+	ap.ctr.bat.Aggs = append(ap.ctr.bat.Aggs[:0], bat.Aggs...)
+	ap.ctr.bat.Zs = append(ap.ctr.bat.Zs, bat.Zs...)
 	select {
 	case <-reg.Ctx.Done():
 		return true, nil

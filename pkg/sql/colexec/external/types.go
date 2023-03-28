@@ -21,7 +21,9 @@ import (
 	"io"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
@@ -91,11 +93,23 @@ type FilterParam struct {
 	blockReader *blockio.BlockReader
 }
 
-type Argument struct {
-	Es *ExternalParam
+type container struct {
+	colexec.MemforNextOp
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+type Argument struct {
+	ctr *container
+	Es  *ExternalParam
+	// output vector types
+	Types []types.Type
+}
+
+func (ap *Argument) ReturnTypes() []types.Type {
+	return ap.Types
+}
+
+func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	ap.ctr.CleanMemForNextOp(proc)
 }
 
 type ParseLineHandler struct {

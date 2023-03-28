@@ -31,6 +31,10 @@ type Argument struct {
 	Es    []*plan.Expr
 }
 
+func (ap *Argument) ReturnTypes() []types.Type {
+	return ap.Types
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	arg.ctr.CleanMemForNextOp(proc)
 }

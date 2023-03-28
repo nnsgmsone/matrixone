@@ -59,6 +59,11 @@ type Argument struct {
 	Types      []types.Type
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
+	RightTypes []types.Type
+}
+
+func (ap *Argument) ReturnTypes() []types.Type {
+	return ap.Types
 }
 
 func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {

@@ -15,6 +15,7 @@
 package onduplicatekey
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -37,6 +38,10 @@ type Argument struct {
 	OnDuplicateExpr map[string]*plan.Expr
 
 	IdxIdx []int32
+}
+
+func (ap *Argument) ReturnTypes() []types.Type {
+	return nil
 }
 
 func (arg *Argument) Free(*process.Process, bool) {}

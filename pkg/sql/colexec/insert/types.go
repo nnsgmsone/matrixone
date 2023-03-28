@@ -22,18 +22,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type container struct {
-	colexec.MemforNextOp
-}
-
 type Argument struct {
-	ctr       *container
 	Affected  uint64
 	Engine    engine.Engine
 	IsRemote  bool // mark if this insert is cn2s3 directly
-	Container *colexec.WriteS3Container
+	s3Writer  *colexec.S3Writer
 	InsertCtx *InsertCtx
-	Types     []types.Type
 }
 
 type InsertCtx struct {
@@ -48,8 +42,11 @@ type InsertCtx struct {
 	IdxIdx []int32
 }
 
+func (ap *Argument) ReturnTypes() []types.Type {
+	return nil
+}
+
 // The Argument for insert data directly to s3 can not be free when this function called as some datastructure still needed.
 // therefore, those argument in remote CN will be free in connector operator, and local argument will be free in mergeBlock operator
 func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	ap.ctr.CleanMemForNextOp(proc)
 }

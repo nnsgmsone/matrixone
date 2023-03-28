@@ -83,6 +83,10 @@ type Argument struct {
 	MultiAggs []group_concat.Argument // multiAggs, for now it's group_concat
 }
 
+func (ap *Argument) ReturnTypes() []types.Type {
+	return ap.Types
+}
+
 func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	for i := range ap.ctr.pms {
 		ap.ctr.pms[i].CleanMemForNextOp(proc)

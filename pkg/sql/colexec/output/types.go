@@ -16,12 +16,17 @@ package output
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type Argument struct {
 	Data interface{}
 	Func func(interface{}, *batch.Batch) error
+}
+
+func (ap *Argument) ReturnTypes() []types.Type {
+	return nil
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

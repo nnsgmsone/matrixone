@@ -14,7 +14,10 @@
 
 package vm
 
-import "github.com/matrixorigin/matrixone/pkg/vm/process"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
 
 const (
 	Top = iota
@@ -72,6 +75,11 @@ const (
 	// It was used by unit testing to ensure that
 	// all functions related to instructions can reach 100% coverage.
 	LastInstructionOp
+
+	// LockOp is used to add locks to lockservice for pessimistic transactions.
+	// Operator that encounters a write conflict will block until the previous
+	// transaction has released the lock
+	LockOp
 )
 
 // Instruction contains relational algebra
@@ -89,6 +97,8 @@ type Instruction struct {
 }
 
 type InstructionArgument interface {
+	// ReturnTypes of the pipeline
+	ReturnTypes() []types.Type
 	// Free release all the memory allocated from mPool in an operator.
 	// pipelineFailed marks the process status of the pipeline when the method is called.
 	Free(proc *process.Process, pipelineFailed bool)
