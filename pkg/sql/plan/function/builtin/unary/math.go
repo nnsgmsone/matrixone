@@ -16,7 +16,6 @@ package unary
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
@@ -25,70 +24,51 @@ import (
 
 type mathFn func(float64) (float64, error)
 
-func math1(ivecs []*vector.Vector, proc *process.Process, fn mathFn) (*vector.Vector, error) {
-	ivec := ivecs[0]
-	//Here we need to classify it into three scenes
-	//1. if it is a constant
-	//	1.1 if it's not a null value
-	//  1.2 if it's a null value
-	//2 common scene
-	if ivec.IsConst() {
-		if ivec.IsConstNull() {
-			return vector.NewConstNull(types.T_float64.ToType(), ivec.Length(), proc.Mp()), nil
+func math1(length int, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, fn mathFn) error {
+	rs := vector.MustFunctionResult[float64](result)
+	ivec := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
 		} else {
-			val, err := fn(vector.GetFixedAt[float64](ivec, 0))
+			val, err := fn(v)
 			if err != nil {
-				return nil, err
+				return err
 			}
-			return vector.NewConstFixed(types.T_float64.ToType(), val, ivec.Length(), proc.Mp()), nil
-		}
-	} else {
-		vecLen := ivec.Length()
-		rvec, err := proc.AllocVectorOfRows(types.T_float64.ToType(), vecLen, ivec.GetNulls())
-		if err != nil {
-			return nil, err
-		}
-		ivals := vector.MustFixedCol[float64](ivec)
-		rvals := vector.MustFixedCol[float64](rvec)
-		for i := range ivals {
-			rvals[i], err = fn(ivals[i])
-			if err != nil {
-				rvec.Free(proc.Mp())
-				return nil, err
+			if err = rs.Append(val, false); err != nil {
+				return err
 			}
 		}
-		return rvec, nil
 	}
+	return nil
 }
 
-func Acos(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return math1(vs, proc, momath.Acos)
+func Acos(vs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return math1(length, vs, result, proc, momath.Acos)
 }
 
-func Atan(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	//If the vs's lenght is 1, just use the  function with one parameter
-	if len(vs) == 1 {
-		return math1(vs, proc, momath.Atan)
-	} else {
-		return operator.Arith[float64, float64](vs, proc, *vs[0].GetType(), momath.AtanWithTwoArg)
-	}
+func Atan(vs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return math1(length, vs, result, proc, momath.Atan)
 
 }
 
-func Cos(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return math1(vs, proc, momath.Cos)
+func Cos(vs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return math1(length, vs, result, proc, momath.Cos)
 }
 
-func Cot(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return math1(vs, proc, momath.Cot)
+func Cot(vs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return math1(length, vs, result, proc, momath.Cot)
 }
 
-func Exp(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return math1(vs, proc, momath.Exp)
+func Exp(vs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return math1(length, vs, result, proc, momath.Exp)
 }
 
-func Ln(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return math1(vs, proc, momath.Ln)
+func Ln(vs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return math1(length, vs, result, proc, momath.Exp)
 }
 
 func Log(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
@@ -115,14 +95,14 @@ func Log(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return operator.DivFloat[float64]([]*vector.Vector{v2, v1}, proc)
 }
 
-func Sin(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return math1(vs, proc, momath.Sin)
+func Sin(vs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return math1(length, vs, result, proc, momath.Sin)
 }
 
-func Sinh(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return math1(vs, proc, momath.Sinh)
+func Sinh(vs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return math1(length, vs, result, proc, momath.Sinh)
 }
 
-func Tan(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return math1(vs, proc, momath.Tan)
+func Tan(vs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return math1(length, vs, result, proc, momath.Tan)
 }
