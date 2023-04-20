@@ -15,9 +15,7 @@
 package unary
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -71,6 +69,7 @@ func Ln(vs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.
 	return math1(length, vs, result, proc, momath.Exp)
 }
 
+/*
 func Log(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if len(vs) == 1 {
 		return math1(vs, proc, momath.Ln)
@@ -94,6 +93,7 @@ func Log(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	}
 	return operator.DivFloat[float64]([]*vector.Vector{v2, v1}, proc)
 }
+*/
 
 func Sin(vs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return math1(length, vs, result, proc, momath.Sin)

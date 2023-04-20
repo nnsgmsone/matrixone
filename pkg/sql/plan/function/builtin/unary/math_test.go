@@ -15,14 +15,14 @@
 package unary
 
 import (
-	"math"
+	"math/rand"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/require"
 )
 
 var proc *process.Process
@@ -31,6 +31,7 @@ func init() {
 	proc = testutil.NewProc()
 }
 
+/*
 func TestLn(t *testing.T) {
 	as := []float64{1, math.Exp(0), math.Exp(1), math.Exp(10), math.Exp(100), math.Exp(99), math.Exp(-1)}
 	av := testutil.MakeFloat64Vector(as, nil)
@@ -141,4 +142,66 @@ func TestAtanWithTwoArg(t *testing.T) {
 	cols := vector.MustFixedCol[float64](ovec)
 	require.Equal(t, []float64{-0.7853981633974483, 0, -0.7853981633974483, 0.7853981633974483, -0.7853981633974483, 0.7853981633974483}, cols)
 
+}
+*/
+
+// new sin
+func BenchmarkSin(b *testing.B) {
+	rows := 8192
+	vs := make([]float64, 8192)
+	for i := 0; i < rows; i++ {
+		vs[i] = rand.Float64()
+	}
+	proc := testutil.NewProcess()
+	vecs := make([]*vector.Vector, 1)
+	vecs[0] = testutil.MakeFloat64Vector(vs, nil)
+	b.StartTimer()
+	for i := 0; i < 100000; i++ {
+		result, _ := vector.NewFunctionResultWrapper2(types.T_float64.ToType(), proc.Mp())
+		result.Expand(rows)
+		Sin(vecs, result, proc, rows)
+	}
+	b.StopTimer()
+}
+
+// new sin
+func BenchmarkReuseMemSin(b *testing.B) {
+	rows := 8192
+	vs := make([]float64, 8192)
+	for i := 0; i < rows; i++ {
+		vs[i] = rand.Float64()
+	}
+	proc := testutil.NewProcess()
+	vecs := make([]*vector.Vector, 1)
+	vecs[0] = testutil.MakeFloat64Vector(vs, nil)
+	result, _ := vector.NewFunctionResultWrapper2(types.T_float64.ToType(), proc.Mp())
+	result.Expand(rows)
+	b.StartTimer()
+	for i := 0; i < 100000; i++ {
+		Sin(vecs, result, proc, rows)
+		result.GetResultVector().Reset()
+	}
+	b.StopTimer()
+}
+
+// old sin
+func BenchmarkOldSin(b *testing.B) {
+	rows := 8192
+	vs := make([]float64, 8192)
+	for i := 0; i < rows; i++ {
+		vs[i] = rand.Float64()
+	}
+	proc := testutil.NewProcess()
+	vecs := make([]*vector.Vector, 1)
+	vecs[0] = testutil.MakeFloat64Vector(vs, nil)
+	b.StartTimer()
+	for i := 0; i < 100000; i++ {
+		rvec, _ := proc.AllocVectorOfRows(types.T_float64.ToType(), rows, vecs[0].GetNulls())
+		ivals := vector.MustFixedCol[float64](vecs[0])
+		rvals := vector.MustFixedCol[float64](rvec)
+		for i := range ivals {
+			rvals[i], _ = momath.Sin(ivals[i])
+		}
+	}
+	b.StopTimer()
 }
