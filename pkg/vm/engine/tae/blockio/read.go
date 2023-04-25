@@ -195,12 +195,12 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 		if err != nil {
 			return nil, err
 		}
-		rbat := batch.NewWithSize(len(bat.Vecs))
-		for i, vec := range bat.Vecs {
+		rbat := batch.NewWithSize(len(colTypes))
+		for i, typ := range colTypes {
 			if vp == nil {
-				rbat.Vecs[i] = vector.NewVec(*vec.GetType())
+				rbat.Vecs[i] = vector.NewVec(typ)
 			} else {
-				rbat.Vecs[i] = vp.GetVector(*vec.GetType())
+				rbat.Vecs[i] = vp.GetVector(typ)
 			}
 		}
 		if searchFunc != nil {
@@ -211,18 +211,20 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 				if i < len(deleteRows) && deleteRows[i] == sel {
 					return rbat, nil
 				}
-				for i, vec := range bat.Vecs {
-					if vec.GetType().Oid == types.T_Rowid {
+				vecs := bat.Vecs
+				for i, typ := range colTypes {
+					if typ.Oid == types.T_Rowid {
 						if err := vector.AppendFixed(rbat.Vecs[i],
 							model.EncodePhyAddrKeyWithPrefix(prefix, uint32(sel)), false, m); err != nil {
 							rbat.Clean(m)
 							return nil, err
 						}
 					} else {
-						if err := ufs[i](rbat.Vecs[i], vec, sel); err != nil {
+						if err := ufs[i](rbat.Vecs[i], vecs[0], sel); err != nil {
 							rbat.Clean(m)
 							return nil, err
 						}
+						vecs = vecs[1:]
 					}
 				}
 				rbat.SetZs(1, m)
@@ -230,8 +232,8 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 			}
 			return rbat, nil
 		}
-		for i, vec := range bat.Vecs {
-			typ := *vec.GetType()
+		vecs := bat.Vecs
+		for i, typ := range colTypes {
 			if typ.Oid == types.T_Rowid {
 				var rowid types.Rowid
 
@@ -244,10 +246,11 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 					}
 				}
 			} else {
-				if err := vector.GetUnionFunction(typ, m)(rbat.Vecs[i], vec); err != nil {
+				if err := vector.GetUnionFunction(typ, m)(rbat.Vecs[i], vecs[0]); err != nil {
 					rbat.Clean(m)
 					return nil, err
 				}
+				vecs = vecs[1:]
 			}
 			if len(deleteRows) > 0 {
 				rbat.Vecs[i].Shrink(deleteRows, true)
