@@ -135,6 +135,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relati
 	ctx, cancel := context.WithTimeout(context.TODO(), 1000*time.Second)
 	tbl.Ranges(ctx, nil)
 	cancel()
+
 	db.txn.tableMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
 	return tbl, nil
 }
