@@ -16,6 +16,8 @@ package disttae
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -815,19 +817,19 @@ func (cmd cmdToConsumeUnSub) action(e *Engine, _ *routineController) error {
 func (e *Engine) consumeSubscribeResponse(ctx context.Context, rp *logtail.SubscribeResponse,
 	lazyLoad bool) error {
 	lt := rp.GetLogtail()
-	return updatePartitionOfPush(ctx, e.pClient.subscriber.dnNodeID, e, &lt, lazyLoad)
+	return updatePartitionOfPush(ctx, e.pClient.subscriber.dnNodeID, e, &lt, lazyLoad, true)
 }
 
 func (e *Engine) consumeUpdateLogTail(ctx context.Context, rp logtail.TableLogtail,
 	lazyLoad bool) error {
-	return updatePartitionOfPush(ctx, e.pClient.subscriber.dnNodeID, e, &rp, lazyLoad)
+	return updatePartitionOfPush(ctx, e.pClient.subscriber.dnNodeID, e, &rp, lazyLoad, false)
 }
 
 // updatePartitionOfPush is the partition update method of log tail push model.
 func updatePartitionOfPush(
 	ctx context.Context,
 	dnId int,
-	e *Engine, tl *logtail.TableLogtail, lazyLoad bool) (err error) {
+	e *Engine, tl *logtail.TableLogtail, lazyLoad bool, test bool) (err error) {
 	// get table info by table id
 	dbId, tblId := tl.Table.GetDbId(), tl.Table.GetTbId()
 
@@ -856,9 +858,10 @@ func updatePartitionOfPush(
 			e,
 			state,
 			tl,
+			test,
 		)
 	} else {
-		err = consumeLogTailOfPushWithoutLazyLoad(ctx, key.PrimaryIdx, e, state, tl, dbId, key.Id, key.Name)
+		err = consumeLogTailOfPushWithoutLazyLoad(ctx, key.PrimaryIdx, e, state, tl, dbId, key.Id, key.Name, test)
 	}
 
 	if err != nil {
@@ -879,6 +882,7 @@ func consumeLogTailOfPushWithLazyLoad(
 	engine *Engine,
 	state *PartitionState,
 	lt *logtail.TableLogtail,
+	test bool,
 ) (err error) {
 	for i := 0; i < len(lt.Commands); i++ {
 		if err = consumeEntry(ctx, primaryIdx,
@@ -898,6 +902,7 @@ func consumeLogTailOfPushWithoutLazyLoad(
 	databaseId uint64,
 	tableId uint64,
 	tableName string,
+	test bool,
 ) (err error) {
 	var entries []*api.Entry
 	if entries, err = taeLogtail.LoadCheckpointEntries(
@@ -906,6 +911,12 @@ func consumeLogTailOfPushWithoutLazyLoad(
 		tableId, tableName,
 		databaseId, "", engine.fs); err != nil {
 		return
+	}
+	{
+		if len(entries) > 0 && !test {
+			fmt.Printf("+++++++++++++get unexpect ckpt\n")
+			os.Exit(0)
+		}
 	}
 	for _, entry := range entries {
 		if err = consumeEntry(ctx, primaryIdx,
