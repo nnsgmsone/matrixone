@@ -52,13 +52,11 @@ func startCluster(ctx context.Context, stopper *stopper.Stopper, perfCounterSet 
 	if err := startCNServiceCluster(ctx, cfg.CNServiceConfigsFiles, stopper, perfCounterSet); err != nil {
 		return err
 	}
-	/*
-		if *withProxy {
-			if err := startProxyServiceCluster(ctx, cfg.ProxyServiceConfigsFiles, stopper, perfCounterSet); err != nil {
-				return err
-			}
+	if *withProxy {
+		if err := startProxyServiceCluster(ctx, cfg.ProxyServiceConfigsFiles, stopper, perfCounterSet); err != nil {
+			return err
 		}
-	*/
+	}
 	return nil
 }
 
