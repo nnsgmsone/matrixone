@@ -18,7 +18,6 @@ import (
 	"context"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -124,17 +123,19 @@ func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relati
 		createSql:    item.CreateSql,
 		constraint:   item.Constraint,
 	}
-	columnLength := len(item.TableDef.Cols) - 1 // we use this data to fetch zonemap, but row_id has no zonemap
-	metas, err := db.txn.getBlockMetas(ctx, db.databaseId, item.Id,
-		true, columnLength, true)
-	if err != nil {
-		return nil, err
-	}
-	tbl.blockMetas = metas
-	tbl.updated = false
-	ctx, cancel := context.WithTimeout(context.TODO(), 1000*time.Second)
-	tbl.Ranges(ctx, nil)
-	cancel()
+	/*
+		columnLength := len(item.TableDef.Cols) - 1 // we use this data to fetch zonemap, but row_id has no zonemap
+		metas, err := db.txn.getBlockMetas(ctx, db.databaseId, item.Id,
+			true, columnLength, true)
+		if err != nil {
+			return nil, err
+		}
+		tbl.blockMetas = metas
+		tbl.updated = false
+		ctx, cancel := context.WithTimeout(context.TODO(), 1000*time.Second)
+		tbl.Ranges(ctx, nil)
+		cancel()
+	*/
 
 	db.txn.tableMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
 	return tbl, nil
