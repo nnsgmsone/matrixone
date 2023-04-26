@@ -191,7 +191,8 @@ func (client *pushClient) unsubscribeTable(
 		if err := unsubscriber(ctx, tblId); err != nil {
 			return err
 		}
-		logutil.Infof("send unsubscribe tbl[db: %d, tbl: %d] request succeed", tblId.DbId, tblId.TbId)
+		logutil.Infof("%s send unsubscribe tbl[db: %d, tbl: %d] request succeed",
+			client.uuid, tblId.DbId, tblId.TbId)
 		return nil
 	}
 }

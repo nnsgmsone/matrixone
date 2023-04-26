@@ -335,7 +335,7 @@ func (ss *Session) FilterLogtail(tails ...wrapLogtail) []logtail.TableLogtail {
 			ss.logger.Info("table not subscribed, filter out",
 				zap.String("id", string(t.id)),
 				zap.String("checkpoint", t.tail.CkpLocation),
-				zap.String("uuid", ss.stream.uuid),
+				zap.String("nodeid", ss.stream.uuid),
 			)
 		}
 	}
@@ -411,7 +411,11 @@ func (ss *Session) SendErrorResponse(
 func (ss *Session) SendSubscriptionResponse(
 	sendCtx context.Context, tail logtail.TableLogtail,
 ) error {
-	ss.logger.Info("send subscription response", zap.Any("table", tail.Table), zap.String("To", tail.Ts.String()))
+	ss.logger.Info("send subscription response",
+		zap.Any("table", tail.Table),
+		zap.String("To", tail.Ts.String()),
+		zap.String("nodeid", ss.stream.uuid),
+	)
 
 	resp := ss.responses.Acquire()
 	resp.Response = newSubscritpionResponse(tail)
