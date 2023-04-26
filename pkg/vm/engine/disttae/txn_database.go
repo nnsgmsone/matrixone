@@ -18,6 +18,7 @@ import (
 	"context"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -131,7 +132,9 @@ func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relati
 	}
 	tbl.blockMetas = metas
 	tbl.updated = false
+	ctx, cancel := context.WithTimeout(context.TODO(), 1000*time.Second)
 	tbl.Ranges(ctx, nil)
+	cancel()
 	db.txn.tableMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
 	return tbl, nil
 }
