@@ -465,6 +465,10 @@ func (r *syncLogTailTimestamp) getTimestamp() timestamp.Timestamp {
 
 func (r *syncLogTailTimestamp) updateTimestamp(index int, newTimestamp timestamp.Timestamp) {
 	r.tList[index].Lock()
+	if r.tList[index].time.Greater(newTimestamp) {
+		fmt.Printf("++++luanxu log")
+		os.Exit(0)
+	}
 	r.tList[index].time = newTimestamp
 	r.tList[index].Unlock()
 	r.timestampWaiter.NotifyLatestCommitTS(r.getTimestamp())
