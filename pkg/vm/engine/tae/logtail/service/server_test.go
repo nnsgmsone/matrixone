@@ -103,7 +103,7 @@ func TestService(t *testing.T) {
 		t.Log("===> send unsubscription request via logtail client")
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		err := logtailClient.Unsubscribe(ctx, tableA)
+		err := logtailClient.Unsubscribe(ctx, tableA, "")
 		require.NoError(t, err)
 	}
 
