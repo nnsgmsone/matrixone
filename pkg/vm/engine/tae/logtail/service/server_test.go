@@ -75,7 +75,7 @@ func TestService(t *testing.T) {
 		t.Log("===> send subscription request via logtail client")
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		err := logtailClient.Subscribe(ctx, tableA)
+		err := logtailClient.Subscribe(ctx, tableA, "")
 		require.NoError(t, err)
 	}
 
