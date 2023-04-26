@@ -48,6 +48,7 @@ func New(
 	fs fileservice.FileService,
 	cli client.TxnClient,
 	idGen IDGenerator,
+	uuid string,
 ) *Engine {
 	var services []metadata.DNService
 	cluster := clusterservice.GetMOCluster()
@@ -66,6 +67,7 @@ func New(
 		mp:         mp,
 		fs:         fs,
 		cli:        cli,
+		uuid:       uuid,
 		idGen:      idGen,
 		catalog:    cache.NewCatalog(),
 		txns:       make(map[string]*Transaction),
@@ -84,6 +86,7 @@ func New(
 			},
 		),
 	}
+	e.pClient.uuid = uuid
 
 	if err := e.init(ctx, mp); err != nil {
 		panic(err)

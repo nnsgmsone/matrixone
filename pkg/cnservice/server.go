@@ -105,7 +105,7 @@ func NewService(
 	srv.aicm = &defines.AutoIncrCacheManager{AutoIncrCaches: make(map[string]defines.AutoIncrCache), Mu: &sync.Mutex{}, MaxSize: pu.SV.AutoIncrCacheSize}
 
 	srv.pu = pu
-	if err = srv.initMOServer(ctx, pu, srv.aicm); err != nil {
+	if err = srv.initMOServer(ctx, pu, srv.aicm, cfg.UUID); err != nil {
 		return nil, err
 	}
 	if _, err = srv.getHAKeeperClient(); err != nil {
@@ -273,7 +273,7 @@ func (s *service) handleRequest(
 	return nil
 }
 
-func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit, aicm *defines.AutoIncrCacheManager) error {
+func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit, aicm *defines.AutoIncrCacheManager, uuid string) error {
 	var err error
 	logutil.Infof("Shutdown The Server With Ctrl+C | Ctrl+\\.")
 	cancelMoServerCtx, cancelMoServerFunc := context.WithCancel(ctx)
@@ -283,7 +283,7 @@ func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit, ai
 	pu.LockService = s.lockService
 
 	logutil.Info("Initialize the engine ...")
-	err = s.initEngine(ctx, cancelMoServerCtx, pu)
+	err = s.initEngine(ctx, cancelMoServerCtx, pu, uuid)
 	if err != nil {
 		return err
 	}
@@ -297,11 +297,12 @@ func (s *service) initEngine(
 	ctx context.Context,
 	cancelMoServerCtx context.Context,
 	pu *config.ParameterUnit,
+	uuid string,
 ) error {
 	switch s.cfg.Engine.Type {
 
 	case EngineDistributedTAE:
-		if err := s.initDistributedTAE(cancelMoServerCtx, pu); err != nil {
+		if err := s.initDistributedTAE(cancelMoServerCtx, pu, uuid); err != nil {
 			return err
 		}
 

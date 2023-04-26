@@ -30,6 +30,7 @@ import (
 func (s *service) initDistributedTAE(
 	ctx context.Context,
 	pu *config.ParameterUnit,
+	uuid string,
 ) error {
 
 	// txn client
@@ -68,6 +69,7 @@ func (s *service) initDistributedTAE(
 		fs,
 		client,
 		hakeeper,
+		uuid,
 	)
 
 	// log tail client to subscribe table and receive table log.

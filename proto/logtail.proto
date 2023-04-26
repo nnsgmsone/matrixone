@@ -87,6 +87,7 @@ message LogtailRequest {
         SubscribeRequest subscribe_table     = 2;
         UnsubscribeRequest unsubscribe_table = 3;
     }
+    string uuid  = 4;
 };
 
 // logtail stream response

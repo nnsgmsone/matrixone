@@ -74,10 +74,12 @@ func (c *LogtailClient) Close() error {
 // Subscribe subscribes table.
 func (c *LogtailClient) Subscribe(
 	ctx context.Context, table api.TableID,
+	uuid string,
 ) error {
 	c.limiter.Take()
 
 	request := &LogtailRequest{}
+	request.Uuid = uuid
 	request.Request = &logtail.LogtailRequest_SubscribeTable{
 		SubscribeTable: &logtail.SubscribeRequest{
 			Table: &table,
@@ -90,10 +92,12 @@ func (c *LogtailClient) Subscribe(
 // Unsubscribe cancel subscription for table.
 func (c *LogtailClient) Unsubscribe(
 	ctx context.Context, table api.TableID,
+	uuid string,
 ) error {
 	c.limiter.Take()
 
 	request := &LogtailRequest{}
+	request.Uuid = uuid
 	request.Request = &logtail.LogtailRequest_UnsubscribeTable{
 		UnsubscribeTable: &logtail.UnsubscribeRequest{
 			Table: &table,

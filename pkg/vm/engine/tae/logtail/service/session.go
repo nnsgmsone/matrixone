@@ -112,6 +112,7 @@ type message struct {
 // morpcStream describes morpc stream.
 type morpcStream struct {
 	streamID uint64
+	uuid     string
 	limit    int
 	logger   *log.MOLogger
 	cs       morpc.ClientSession
@@ -334,6 +335,7 @@ func (ss *Session) FilterLogtail(tails ...wrapLogtail) []logtail.TableLogtail {
 			ss.logger.Info("table not subscribed, filter out",
 				zap.String("id", string(t.id)),
 				zap.String("checkpoint", t.tail.CkpLocation),
+				zap.String("uuid", ss.stream.uuid),
 			)
 		}
 	}

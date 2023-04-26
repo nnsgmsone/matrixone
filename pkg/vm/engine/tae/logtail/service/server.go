@@ -235,6 +235,7 @@ func (s *LogtailServer) onMessage(
 	}
 
 	stream := morpcStream{
+		uuid:     msg.GetUuid(),
 		streamID: msg.RequestId,
 		limit:    s.maxChunkSize,
 		logger:   s.logger,

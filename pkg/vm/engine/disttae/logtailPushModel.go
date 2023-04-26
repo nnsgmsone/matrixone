@@ -80,6 +80,7 @@ const (
 //	 6. receiveTableLogTailContinuously   : start (1 + parallelNums) routine to receive log tail from service.
 //	-----------------------------------------------------------------------------------------------------
 type pushClient struct {
+	uuid string
 	// Responsible for sending subscription / unsubscription requests to the service
 	// and receiving the log tail from service.
 	subscriber *logTailSubscriber
@@ -103,6 +104,7 @@ func (client *pushClient) init(
 
 	if client.subscriber == nil {
 		client.subscriber = new(logTailSubscriber)
+		client.subscriber.uuid = client.uuid
 	}
 	err := client.subscriber.init(serviceAddr)
 	if err != nil {
@@ -173,7 +175,8 @@ func (client *pushClient) subscribeTable(
 		if err := subscriber(ctx, tblId); err != nil {
 			return err
 		}
-		logutil.Infof("send subscribe tbl[db: %d, tbl: %d] request succeed", tblId.DbId, tblId.TbId)
+		logutil.Infof("%s send subscribe tbl[db: %d, tbl: %d] request succeed",
+			client.uuid, tblId.DbId, tblId.TbId)
 		return nil
 	}
 }
@@ -474,6 +477,7 @@ func (r *syncLogTailTimestamp) greatEq(txnTime timestamp.Timestamp) bool {
 
 type logTailSubscriber struct {
 	dnNodeID      int
+	uuid          string
 	logTailClient *service.LogtailClient
 
 	// return a table subscribe method.
@@ -559,9 +563,9 @@ func (s *logTailSubscriber) subscribeTable(
 	if _, ok := ctx.Deadline(); !ok {
 		newCtx, cancel := context.WithTimeout(ctx, defaultTimeOutToSubscribeTable)
 		_ = cancel
-		return s.logTailClient.Subscribe(newCtx, tblId)
+		return s.logTailClient.Subscribe(newCtx, tblId, s.uuid)
 	}
-	return s.logTailClient.Subscribe(ctx, tblId)
+	return s.logTailClient.Subscribe(ctx, tblId, s.uuid)
 }
 
 // can't call this method directly.
@@ -571,9 +575,9 @@ func (s *logTailSubscriber) unSubscribeTable(
 	if _, ok := ctx.Deadline(); !ok {
 		newCtx, cancel := context.WithTimeout(ctx, defaultTimeOutToSubscribeTable)
 		_ = cancel
-		return s.logTailClient.Unsubscribe(newCtx, tblId)
+		return s.logTailClient.Unsubscribe(newCtx, tblId, s.uuid)
 	}
-	return s.logTailClient.Unsubscribe(ctx, tblId)
+	return s.logTailClient.Unsubscribe(ctx, tblId, s.uuid)
 }
 
 func (s *logTailSubscriber) receiveResponse() logTailSubscriberResponse {

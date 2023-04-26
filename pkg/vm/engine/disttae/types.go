@@ -82,6 +82,9 @@ type Engine struct {
 	// XXX related to cn push model
 	usePushModel bool
 	pClient      pushClient
+
+	// node's uuid
+	uuid string
 }
 
 type Partitions []*Partition
