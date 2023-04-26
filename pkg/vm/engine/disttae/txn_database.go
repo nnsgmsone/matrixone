@@ -131,7 +131,6 @@ func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relati
 	}
 	tbl.blockMetas = metas
 	tbl.updated = false
-	tbl.Ranges(ctx, nil)
 	db.txn.tableMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
 	return tbl, nil
 }

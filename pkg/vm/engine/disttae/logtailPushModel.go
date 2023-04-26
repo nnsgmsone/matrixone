@@ -851,6 +851,9 @@ func updatePartitionOfPush(
 
 	if lazyLoad {
 		state.Checkpoints = append(state.Checkpoints, tl.CkpLocation)
+		if test {
+			fmt.Printf("++++++ckpt: %v\n", len(state.Checkpoints))
+		}
 
 		err = consumeLogTailOfPushWithLazyLoad(
 			ctx,
@@ -916,6 +919,9 @@ func consumeLogTailOfPushWithoutLazyLoad(
 		if len(entries) > 0 && !test {
 			fmt.Printf("+++++++++++++get unexpect ckpt\n")
 			os.Exit(0)
+		}
+		if test {
+			fmt.Printf("++++chkpt: %v\n", len(entries))
 		}
 	}
 	for _, entry := range entries {
