@@ -510,8 +510,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 	if err := tbl.updateLocalState(ctx, INSERT, ibat, packer); err != nil {
 		return err
 	}
-	return nil
-	// return tbl.db.txn.DumpBatch(false, tbl.writesOffset)
+	return tbl.db.txn.DumpBatch(false, tbl.writesOffset)
 }
 
 func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
