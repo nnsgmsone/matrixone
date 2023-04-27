@@ -55,7 +55,7 @@ func (p *Partition) MutateState() (*PartitionState, func()) {
 func (p Partitions) Snapshot() []*PartitionState {
 	ret := make([]*PartitionState, 0, len(p))
 	for _, partition := range p {
-		ret = append(ret, partition.state.Load())
+		ret = append(ret, partition.state.Load().Copy())
 	}
 	return ret
 }

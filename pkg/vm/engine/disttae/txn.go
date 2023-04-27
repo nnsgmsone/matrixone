@@ -44,13 +44,15 @@ func (txn *Transaction) getBlockMetas(
 	blocks := make([][]BlockMeta, len(txn.dnStores))
 	name := genMetaTableName(tbl.tableId)
 	ts := types.TimestampToTS(txn.meta.SnapshotTS)
-	states := txn.engine.getPartitions(tbl.db.databaseId, tbl.tableId).Snapshot()
+	if tbl._parts == nil {
+		tbl._parts = txn.engine.getPartitions(tbl.db.databaseId, tbl.tableId).Snapshot()
+	}
 	for i := range txn.dnStores {
-		if i >= len(states) {
+		if i >= len(tbl._parts) {
 			continue
 		}
 		var blockInfos []catalog.BlockInfo
-		state := states[i]
+		state := tbl._parts[i]
 		iter := state.Blocks.Iter()
 		for ok := iter.First(); ok; ok = iter.Next() {
 			entry := iter.Item()

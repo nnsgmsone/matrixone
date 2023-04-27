@@ -123,12 +123,9 @@ func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relati
 		createSql:    item.CreateSql,
 		constraint:   item.Constraint,
 	}
-	metas, err := db.txn.getBlockMetas(ctx, tbl, true)
-	if err != nil {
+	if err := tbl.updateBlockMetas(ctx, nil); err != nil {
 		return nil, err
 	}
-	tbl.blockMetas = metas
-	tbl.blockMetasUpdated = false
 	db.txn.tableMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
 	return tbl, nil
 }
@@ -306,6 +303,7 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 	tbl.tableName = name
 	tbl.tableId = tableId
 	tbl.getTableDef()
+	tbl._parts = tbl.db.txn.engine.getPartitions(tbl.db.databaseId, tbl.tableId).Snapshot()
 	db.txn.createMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
 	return nil
 }

@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -92,10 +91,7 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 	}
 
 	ts := types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)
-	parts, err := tbl.getParts(ctx)
-	if err != nil {
-		return 0, err
-	}
+	parts := tbl._parts
 	for _, part := range parts {
 		iter := part.NewRowsIter(ts, nil, false)
 		for iter.Next() {
@@ -220,13 +216,11 @@ func (tbl *txnTable) GetEngineType() engine.EngineType {
 
 func (tbl *txnTable) reset(newId uint64) {
 	tbl.tableId = newId
-	tbl.setPartsOnce = sync.Once{}
-	tbl._parts = nil
-	tbl._partsErr = nil
 	tbl.blockMetas = nil
 	tbl.modifiedBlocks = nil
 	tbl.blockMetasUpdated = false
 	tbl.localState = NewPartitionState(true)
+	tbl._parts = tbl.db.txn.engine.getPartitions(tbl.db.databaseId, tbl.tableId).Snapshot()
 }
 
 // return all unmodified blocks
@@ -252,11 +246,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, err
 	if err != nil {
 		return nil, err
 	}
-	parts, err := tbl.getParts(ctx)
-	if err != nil {
-		return nil, err
-	}
-
+	parts := tbl._parts
 	ranges := make([][]byte, 0, 1)
 	ranges = append(ranges, []byte{})
 	tbl.skipBlocks = make(map[types.Blockid]uint8)
@@ -906,11 +896,7 @@ func (tbl *txnTable) newReader(
 		mp[attr.Attr.Name] = attr.Attr.Type
 	}
 
-	parts, err := tbl.getParts(ctx)
-	if err != nil {
-		return nil, err
-	}
-
+	parts := tbl._parts
 	var iter partitionStateIter
 	if len(encodedPrimaryKey) > 0 {
 		iter = parts[partitionIndex].NewPrimaryKeyIter(
@@ -1095,13 +1081,6 @@ func (tbl *txnTable) updateLocalState(
 func (tbl *txnTable) nextLocalTS() timestamp.Timestamp {
 	tbl.localTS = tbl.localTS.Next()
 	return tbl.localTS
-}
-
-func (tbl *txnTable) getParts(ctx context.Context) ([]*PartitionState, error) {
-	tbl.setPartsOnce.Do(func() {
-		tbl._parts = tbl.db.txn.engine.getPartitions(tbl.db.databaseId, tbl.tableId).Snapshot()
-	})
-	return tbl._parts, tbl._partsErr
 }
 
 func (tbl *txnTable) updateBlockMetas(ctx context.Context, expr *plan.Expr) error {
