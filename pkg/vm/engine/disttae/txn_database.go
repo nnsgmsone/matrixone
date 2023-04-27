@@ -18,7 +18,6 @@ import (
 	"context"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -124,12 +123,6 @@ func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relati
 		createSql:    item.CreateSql,
 		constraint:   item.Constraint,
 	}
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	if err := tbl.updateBlockMetas(ctx, nil); err != nil {
-		cancel()
-		return nil, err
-	}
-	cancel()
 	db.txn.tableMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
 	return tbl, nil
 }

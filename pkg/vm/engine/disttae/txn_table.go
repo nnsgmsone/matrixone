@@ -48,12 +48,14 @@ func (tbl *txnTable) Stats(ctx context.Context, expr *plan.Expr, statsInfoMap an
 	if !ok {
 		return plan2.DefaultStats(), nil
 	}
-	if len(tbl.blockMetas) == 0 || !tbl.blockMetasUpdated {
-		err := tbl.updateBlockMetas(ctx, expr)
-		if err != nil {
-			return plan2.DefaultStats(), err
+	/*
+		if len(tbl.blockMetas) == 0 || !tbl.blockMetasUpdated {
+			err := tbl.updateBlockMetas(ctx, expr)
+			if err != nil {
+				return plan2.DefaultStats(), err
+			}
 		}
-	}
+	*/
 	if len(tbl.blockMetas) > 0 {
 		return CalcStats(ctx, &tbl.blockMetas, expr, tbl.getTableDef(), tbl.db.txn.proc, tbl.getCbName(), s)
 	} else {
