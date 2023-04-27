@@ -567,6 +567,8 @@ func (tbl *txnTable) compaction() error {
 		return err
 	}
 
+	var deletedIDs []string
+	defer tbl.db.txn.deletedBlocks.removeBlockDeletedInfos(deletedIDs)
 	tbl.db.txn.deletedBlocks.iter(func(id string, deleteOffsets []int64) bool {
 		blkId := types.Blockid(*(*[20]byte)([]byte(id)))
 		pos := tbl.db.txn.cnBlkId_Pos[string(blkId[:])]
@@ -576,7 +578,7 @@ func (tbl *txnTable) compaction() error {
 			return true
 		}
 		delete(tbl.db.txn.cnBlkId_Pos, string(blkId[:]))
-		tbl.db.txn.deletedBlocks.removeBlockDeletedInfo(id)
+		deletedIDs = append(deletedIDs, id)
 		if len(deleteOffsets) == 0 {
 			return true
 		}
