@@ -150,7 +150,7 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string,
 			panic(moerr.NewInternalError(ctx, "blockReader reads different number of columns"))
 		}
 	}
-	deleteRows := make([]int64, len(r.blks[0].deletes))
+	deleteRows := make([]int64, 0, len(r.blks[0].deletes))
 	for _, row := range r.blks[0].deletes {
 		deleteRows = append(deleteRows, int64(row))
 	}
