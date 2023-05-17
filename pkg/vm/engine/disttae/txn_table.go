@@ -608,7 +608,7 @@ func (tbl *txnTable) GetHideKeys(ctx context.Context) ([]*engine.Attribute, erro
 }
 
 func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
-	if bat == nil || bat.Length() == 0 {
+	if bat == nil {
 		return nil
 	}
 
@@ -619,8 +619,12 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 			return err
 		}
 		fileName := location.Name().String()
-		ibat, err := bat.Dup(tbl.db.txn.proc.Mp())
-		if err != nil {
+		ibat := batch.NewWithSize(len(bat.Attrs))
+		ibat.Attrs = append(ibat.Attrs, bat.Attrs...)
+		for j := range bat.Vecs {
+			ibat.SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
+		}
+		if _, err := ibat.Append(ctx, tbl.db.txn.proc.Mp(), bat); err != nil {
 			return err
 		}
 		return tbl.db.txn.WriteFile(INSERT, tbl.db.databaseId, tbl.tableId, tbl.db.databaseName, tbl.tableName, fileName, ibat, tbl.db.txn.dnStores[0])
@@ -630,8 +634,11 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 	for j := range bat.Vecs {
 		ibat.SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
 	}
-	ibat, err := bat.Dup(tbl.db.txn.proc.Mp())
-	if err != nil {
+	if _, err := ibat.Append(ctx, tbl.db.txn.proc.Mp(), bat); err != nil {
+		return err
+	}
+	if err := tbl.db.txn.WriteBatch(INSERT, tbl.db.databaseId, tbl.tableId,
+		tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.dnStores[0], tbl.primaryIdx, false, false); err != nil {
 		return err
 	}
 	var packer *types.Packer
