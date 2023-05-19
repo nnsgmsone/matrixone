@@ -256,6 +256,9 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 
 	for p.iter.Next() {
 		entry := p.iter.Entry()
+		if entry.Deleted {
+			continue
+		}
 		if _, ok := p.deletes[entry.RowID]; ok {
 			continue
 		}
