@@ -19,50 +19,50 @@ drop table t1;
 create table t1 ( a tinyint not null default 1, tinyint8 tinyint primary key);
 insert into t1 (tinyint8) values (-1),(127),(-128);
 select * from t1 order by a desc, 2 asc;
-a	tinyint8
-1	-128
-1	-1
-1	127
+a    tinyint8
+1    -128
+1    -1
+1    127
 select min(tinyint8),max(tinyint8),max(tinyint8)-1 from t1;
-min(tinyint8)	max(tinyint8)	max(tinyint8)-1
--128	127	126
+min(tinyint8)    max(tinyint8)    max(tinyint8) - 1
+-128    127    126
 select min(tinyint8),max(tinyint8),max(tinyint8)-1 from t1 group by a order by 1;
-min(tinyint8)	max(tinyint8)	max(tinyint8)-1
--128	127	126
+min(tinyint8)    max(tinyint8)    max(tinyint8) - 1
+-128    127    126
 drop table t1;
 create table t1 ( a tinyint not null default 1, tinyint8 tinyint unsigned primary key);
 insert into t1 (tinyint8) values (0),(255), (0xFE), (253);
 select * from t1 order by 2 asc;
-a	tinyint8
-1	0
-1	253
-1	254
-1	255
+a    tinyint8
+1    0
+1    253
+1    254
+1    255
 select * from t1 order by tinyint8 limit 1,3;
-a	tinyint8
-1	253
-1	254
-1	255
+a    tinyint8
+1    253
+1    254
+1    255
 select * from t1 order by tinyint8 limit 3 offset 1;
-a	tinyint8
-1	253
-1	254
-1	255
+a    tinyint8
+1    253
+1    254
+1    255
 select min(tinyint8),max(tinyint8),max(tinyint8)-1 from t1;
-min(tinyint8)	max(tinyint8)	max(tinyint8)-1
-0	255	254
+min(tinyint8)    max(tinyint8)    max(tinyint8) - 1
+0    255    254
 select min(tinyint8),max(tinyint8),max(tinyint8)-1 from t1 group by a order by abs(1);
-min(tinyint8)	max(tinyint8)	max(tinyint8)-1
-0	255	254
+min(tinyint8)    max(tinyint8)    max(tinyint8) - 1
+0    255    254
 drop table t1;
 create table t1 (id tinyint primary key, a tinyint);
 insert into t1 values (1,1);
 select * from t1;
-id	a
-1	1
+id    a
+1    1
 select * from t1 limit 99;
-id	a
-1	1
+id    a
+1    1
 drop table if exists t1;
 drop table if exists t2;
 create table t1 (
@@ -82,26 +82,26 @@ insert into t2 values( 127, 4);
 insert into t1 values(5,-128);
 insert into t2 values(5,-128);
 select * from t1;
-valueu8	value8
-5	-128
-255	1
-127	2
+valueu8    value8
+255    1
+127    2
+5    -128
 select * from t2;
-valueu8	value8
-5	-128
-255	3
-127	4
+valueu8    value8
+255    3
+127    4
+5    -128
 select * from t1 join t2 on t1.valueu8=t2.valueu8  order by 1 asc, t2.value8 desc;
-valueu8	value8	valueu8	value8
-5	-128	5	-128
-127	2	127	4
-255	1	255	3
+valueu8    value8    valueu8    value8
+5    -128    5    -128
+127    2    127    4
+255    1    255    3
 select * from t1 join t2 on t1.valueu8=t2.valueu8 where t1.valueu8=255 order by 1+2 desc;
-valueu8	value8	valueu8	value8
-255	1	255	3
+valueu8    value8    valueu8    value8
+255    1    255    3
 select * from t1 join t2 on t1.value8=t2.value8 order by 2,3 asc;
-valueu8	value8	valueu8	value8
-5	-128	5	-128
+valueu8    value8    valueu8    value8
+5    -128    5    -128
 drop table if exists t1;
 drop table if exists t2;
 create table t1 (tinyint8 tinyint not null);
@@ -138,27 +138,27 @@ INSERT INTO t1 (id,a) VALUES
 (4,CAST(0xFF AS UNSIGNED));
 UPDATE t1 SET b = a;
 select * from t1 where ((a = 255) and (b = '255')) order by 1 desc, 2 asc;
-id	a	b
-4	255	255
+id    a    b
+4    255    255
 drop table t1;
 CREATE TABLE t_tinyint(id TINYINT);
 INSERT INTO t_tinyint VALUES (1), (2);
 SELECT id, id >= 1.1 FROM t_tinyint;
-id	id >= 1.1
-1	false	
-2	true	
+id    id >= 1.1
+1    false
+2    true
 SELECT id, 1.1 <= id FROM t_tinyint;
-id	1.1 <= id
-1	false	
-2	true	
+id    1.1 <= id
+1    false
+2    true
 SELECT id, id = 1.1 FROM t_tinyint;
-id	id = 1.1
-1	false	
-2	false	
+id    id = 1.1
+1    false
+2    false
 SELECT id, 1.1 = id FROM t_tinyint;
-id	1.1 = id
-1	false	
-2	false	
+id    1.1 = id
+1    false
+2    false
 SELECT * from t_tinyint WHERE id = 1.1;
 id
 SELECT * from t_tinyint WHERE id = 1.1e0;
@@ -212,7 +212,7 @@ count(*)
 3
 drop table t;
 SELECT (254 BETWEEN 0 AND 255);
-(254 BETWEEN 0 AND 255)
+254 between 0 and 255
 true
 SELECT  -32000 <= 0;
 -32000 <= 0
@@ -221,31 +221,31 @@ SELECT 0 <= 127;
 0 <= 127
 true
 SELECT CAST(100 AS UNSIGNED) BETWEEN 1 AND -1;
-CAST(100 AS UNSIGNED) BETWEEN 1 AND -1
+cast(100 as unsigned) between 1 and -1
 false
 SELECT CAST(100 AS UNSIGNED) NOT BETWEEN 1 AND -1;
-CAST(100 AS UNSIGNED) NOT BETWEEN 1 AND -1
+cast(100 as unsigned) not between 1 and -1
 true
 SELECT CAST(0 AS UNSIGNED) BETWEEN 0 AND -1;
-CAST(0 AS UNSIGNED) BETWEEN 0 AND -1
+cast(0 as unsigned) between 0 and -1
 false
 SELECT CAST(0 AS UNSIGNED) NOT BETWEEN 0 AND -1;
-CAST(0 AS UNSIGNED) NOT BETWEEN 0 AND -1
+cast(0 as unsigned) not between 0 and -1
 true
 SELECT ( 255 BETWEEN 255 AND 255 );
-( 255 BETWEEN 255 AND 255 )
+255 between 255 and 255
 true
 SELECT ( 127 BETWEEN 255 AND 1 );
-( 127 BETWEEN 255 AND 1 )
+127 between 255 and 1
 false
 SELECT ( -1 BETWEEN 255 AND 1 );
-( -1 BETWEEN 255 AND 1 )
+-1 between 255 and 1
 false
 SELECT ( 0 BETWEEN 255 AND 1 );
-( 0 BETWEEN 255 AND 1 )
+0 between 255 and 1
 false
 SELECT ( 1 BETWEEN 255 AND 1 );
-( 1 BETWEEN 255 AND 1 )
+1 between 255 and 1
 false
 drop table if exists t1;
 drop table if exists t2;
@@ -256,16 +256,16 @@ CREATE TABLE t1 (a tinyint(3), b tinyint(5) primary key);
 INSERT INTO t1 VALUES (1,1),(1,2);
 update t1 set a=2 where a=1 limit 1;
 select * from t1;
-a	b
-2	1
-1	2
+a    b
+1    2
+2    1
 INSERT INTO t1 VALUES (1,3);
 update t1 set a=2 where a=1;
 select * from t1;
-a	b
-2	1
-2	2
-2	3
+a    b
+2    1
+2    2
+2    3
 drop table t1;
 create table t1 (
 a tinyint not null,
@@ -282,79 +282,79 @@ primary key (a));
 insert into t1 (a) values (2),(4),(6),(8),(10),(12),(14),(16),(18),(20),(22),(24),(26),(23);
 update t1 set a=a+101;
 select a,b from t1;
-a	b
-103	0
-105	0
-107	0
-109	0
-111	0
-113	0
-115	0
-117	0
-119	0
-121	0
-123	0
-124	0
-125	0
-127	0
+a    b
+103    0
+105    0
+107    0
+109    0
+111    0
+113    0
+115    0
+117    0
+119    0
+121    0
+123    0
+125    0
+127    0
+124    0
 update t1 set a=127 where a=25;
 select a,b from t1;
-a	b
-103	0
-105	0
-107	0
-109	0
-111	0
-113	0
-115	0
-117	0
-119	0
-121	0
-123	0
-124	0
-125	0
-127	0
+a    b
+103    0
+105    0
+107    0
+109    0
+111    0
+113    0
+115    0
+117    0
+119    0
+121    0
+123    0
+125    0
+127    0
+124    0
 update t1 set a=a-1 where 1 > 2;
 select a,b from t1;
-a	b
-103	0
-105	0
-107	0
-109	0
-111	0
-113	0
-115	0
-117	0
-119	0
-121	0
-123	0
-124	0
-125	0
-127	0
+a    b
+103    0
+105    0
+107    0
+109    0
+111    0
+113    0
+115    0
+117    0
+119    0
+121    0
+123    0
+125    0
+127    0
+124    0
 update t1 set a=a-1 where 3 > 2;
 select a,b from t1;
-a	b
-102	0
-104	0
-106	0
-108	0
-110	0
-112	0
-114	0
-116	0
-118	0
-120	0
-122	0
-123	0
-124	0
-126	0
+a    b
+102    0
+104    0
+106    0
+108    0
+110    0
+112    0
+114    0
+116    0
+118    0
+120    0
+122    0
+124    0
+126    0
+123    0
 drop table t1;
 create table t1 (a tinyint primary key, b char(32));
 insert into t1 values (1,'apple'), (2,'apple');
 select * from t1;
-a	b
-1	apple
-2	apple
+a    b
+1    apple
+2    apple
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -364,12 +364,12 @@ CREATE TABLE t1 (a tinyint(3), b tinyint(5) primary key);
 INSERT INTO t1 VALUES (1,1),(1,2);
 delete from t1 where a=1 limit 1;
 select * from t1;
-a	b
-1	2
+a    b
+1    2
 INSERT INTO t1 VALUES (1,3);
 delete from t1 where a=1;
 select * from t1;
-a	b
+a    b
 drop table t1;
 create table t1 (
 a tinyint not null,
@@ -386,60 +386,60 @@ primary key (a));
 insert into t1 (a) values (2),(4),(6),(8),(10),(12),(14),(16),(18),(20),(22),(24),(26),(23);
 delete from t1 where a=2+2;
 select a,b from t1;
-a	b
-2	0
-6	0
-8	0
-10	0
-12	0
-14	0
-16	0
-18	0
-20	0
-22	0
-23	0
-24	0
-26	0
+a    b
+2    0
+6    0
+8    0
+10    0
+12    0
+14    0
+16    0
+18    0
+20    0
+22    0
+24    0
+26    0
+23    0
 delete from t1 where  a=24;
 select a,b from t1;
-a	b
-2	0
-6	0
-8	0
-10	0
-12	0
-14	0
-16	0
-18	0
-20	0
-22	0
-23	0
-26	0
+a    b
+2    0
+6    0
+8    0
+10    0
+12    0
+14    0
+16    0
+18    0
+20    0
+22    0
+26    0
+23    0
 delete from t1 where  3 < 2;
 select a,b from t1;
-a	b
-2	0
-6	0
-8	0
-10	0
-12	0
-14	0
-16	0
-18	0
-20	0
-22	0
-23	0
-26	0
+a    b
+2    0
+6    0
+8    0
+10    0
+12    0
+14    0
+16    0
+18    0
+20    0
+22    0
+26    0
+23    0
 delete from t1 where  1 < 2;
 select a,b from t1;
-a	b
+a    b
 drop table t1;
 create table t1 (a tinyint primary key, b char(32));
 insert into t1 values (1,'apple'), (2,'apple');
 select * from t1;
-a	b
-1	apple
-2	apple
+a    b
+1    apple
+2    apple
 drop table t1;
 create table t1(a tinyint);
 insert into t1 values(-128), (127);

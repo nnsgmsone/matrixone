@@ -20,12 +20,12 @@ eeee
 (select a from t1) minus (select a from t1 limit 1);
 a
 aaaa
-null
 eeee
+null
 (select a from t1) minus (select a from t1 limit 2);
 a
-null
 eeee
+null
 (select a from t1) minus (select a from t1 limit 3);
 a
 null
@@ -33,12 +33,12 @@ null
 a
 (select b from t1) minus (select a from t1);
 b
-bbbb
 cccc
+bbbb
 (select b from t1) minus (select b from t1 limit 1);
 b
-aaaa
 bbbb
+aaaa
 null
 (select b from t1) minus (select b from t1 limit 2);
 b
@@ -57,8 +57,8 @@ eeee
 a
 ((select a from t1) union (select b from t1)) minus (select a from t1);
 a
-bbbb
 cccc
+bbbb
 drop table t1;
 drop table if exists t2;
 create table t2(
@@ -109,9 +109,9 @@ null
 2022-01-01 00:00:00
 (select col3 from t2) minus (select col1 from t2 limit 0);
 col3
-2022-01-02 00:00:00
 null
 2022-01-01 00:00:00
+2022-01-02 00:00:00
 (select col3 from t2) minus (select col2 from t2 limit 0);
 col3
 null
@@ -119,9 +119,9 @@ null
 2022-01-02 00:00:00
 (select col3 from t2) minus (select col3 from t2 limit 0);
 col3
-2022-01-02 00:00:00
 null
 2022-01-01 00:00:00
+2022-01-02 00:00:00
 drop table t2;
 drop table if exists t3;
 create table t3(
@@ -140,30 +140,30 @@ insert into t4 values(127.0,127.0);
 insert into t4 values(127.44,127.44);
 (select a from t3) union (select col1 from t4) minus (select col1 from t4);
 a
-30.0
-10.0
--10.0
 20.0
+10.0
+30.0
+-10.0
 (select a from t3) union (select col2 from t4) minus (select col2 from t4);
 a
-30.0
-10.0
--10.0
-20.0
+20.00
+10.00
+30.00
+-10.00
 (select a from t3) union (select col1 from t4) minus (select a from t3);
 a
-127.0
 100.01000213623047
 1.100000023841858
-127.44000244140625
 0.0
+127.0
+127.44000244140625
 (select a from t3) union (select col2 from t4) minus (select a from t3);
 a
-127.44
-127.0
 100.01
-1.1
-0.0
+1.10
+0.00
+127.00
+127.44
 (select col1 from t4) minus (select col1 from t4);
 col1
 (select col1 from t4) minus (select col2 from t4);
@@ -175,9 +175,9 @@ col1
 col2
 (select col2 from t4) minus (select col1 from t4);
 col2
-127.44
 100.01
 1.1
+127.44
 drop table t3;
 drop table t4;
 drop table if exists t5;
@@ -210,26 +210,26 @@ col2
 b
 (select b from t5) minus (select col2 from t6);
 b
-dd
-cc
 aa
 bb
+cc
+dd
 (select b from t5) minus (select col3 from t6);
 b
-dd
 cc
+dd
 (select col1 from t6) minus (select b from t5);
 col1
 (select col2 from t6) minus (select b from t5);
 col2
-44
-22
 11
+22
 33
+44
 (select col3 from t6) minus (select b from t5);
 col3
-22
 11
+22
 drop table t5;
 drop table t6;
 drop table if exists t7;
@@ -264,14 +264,14 @@ b
 4
 select * from (select a from t7 minus select b from t7 where a > 2) a;
 a
-3
 2
+3
 select * from (select b from t7 minus select a from t7 where a > 4) a;
 b
-1
 3
 4
 5
+1
 drop table t7;
 drop table if exists t8;
 create table t8 (
@@ -380,8 +380,8 @@ minus
 select A.NAME, A.PHONE, B.NAME, B.PHONE from t11 A
 left join t11 B on A.NAME = B.NAME and B.IID = 2 where A.IID = 1 and (A.PHONE <> B.PHONE or B.NAME is null);
 name    phone    name    phone
-null    null    g    777
 null    null    f    666
+null    null    g    777
 set @val1=1;
 set @val2=2;
 prepare s1 from
@@ -408,8 +408,8 @@ insert into t12(a) values (10);
 insert into t12(a) values (20);
 (select a from t12 ) minus (select b from t12);
 a
-20
 10
+20
 (select a from t12 ) minus (select a from t12);
 a
 (select b from t12 ) minus (select a from t12);
@@ -425,7 +425,6 @@ col1 date,
 col2 datetime,
 col3 timestamp
 );
-
 insert into t2 values ();
 insert into t2 values('2022-01-01', '2022-01-01', '2022-01-01');
 insert into t2 values('2022-01-01', '2022-01-01 00:00:00.99999', '2022-01-01 00:00:00.000000');
@@ -446,19 +445,19 @@ null
 2022-01-01 00:00:00
 (select col2 from t2) minus (select col1 from t2 limit 0);
 col2
-2022-01-01 00:00:01
 null
 2022-01-01 00:00:00
+2022-01-01 00:00:01
 (select col2 from t2) minus (select col3 from t2 limit 0);
 col2
-2022-01-01 00:00:01
 null
 2022-01-01 00:00:00
+2022-01-01 00:00:01
 (select col3 from t2) minus (select col1 from t2 limit 0);
 col3
-2022-01-02 00:00:00
 null
 2022-01-01 00:00:00
+2022-01-02 00:00:00
 (select col3 from t2) minus (select col2 from t2 limit 0);
 col3
 null

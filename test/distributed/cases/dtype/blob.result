@@ -71,7 +71,7 @@ i    a
 6    234567
 7    123456
 SELECT load_file('$resources/file_test/normal.txt');
-load_file(/home/yjw/blob/matrixone/test/resources/file_test/normal.txt)
+load_file(/root/ssd/tp/insert/matrixone/test/distributed/resources/file_test/normal.txt)
 Hello world!
 insert into t2 values(66,load_file("$resources/file_test/normal.txt"));
 select * from t2;
@@ -89,10 +89,10 @@ length(a)
 6
 6
 SELECT LENGTH(load_file("$resources/file_test/normal.txt"));
-length(load_file(/home/yjw/blob/matrixone/test/resources/file_test/normal.txt))
+length(load_file(/root/ssd/tp/insert/matrixone/test/distributed/resources/file_test/normal.txt))
 12
 SELECT LENGTH(load_file("$resources/file_test/empty.txt"));
-length(load_file(/home/yjw/blob/matrixone/test/resources/file_test/empty.txt))
+length(load_file(/root/ssd/tp/insert/matrixone/test/distributed/resources/file_test/empty.txt))
 null
 SELECT SUBSTRING(a,1,4), LENGTH(a) FROM t1 GROUP BY a;
 substring(a, 1, 4)    length(a)

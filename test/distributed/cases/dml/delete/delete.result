@@ -181,11 +181,17 @@ a    b
 2    2
 2    3
 drop table if exists t1;
+
 create table t1(a int, b int, unique key(a));
+
 insert into t1 values(1, 1);
+
 insert into t1 values(2, 2);
+
 insert into t1 values(3, 3);
+
 insert into t1 values(4, 4);
+
 select * from t1;
 a    b
 1    1
@@ -193,18 +199,26 @@ a    b
 3    3
 4    4
 delete from t1 where a = 1;
+
 select * from t1;
 a    b
 2    2
 3    3
 4    4
 insert into t1 values(1, 2);
+
 drop table if exists t1;
+
 create table t1(a int, b int, unique key(a, b));
+
 insert into t1 values(1, 2);
+
 insert into t1 values(1, 3);
+
 insert into t1 values(2, 2);
+
 insert into t1 values(2, 3);
+
 select * from t1;
 a    b
 1    2
@@ -212,13 +226,17 @@ a    b
 2    2
 2    3
 delete from t1 where a = 1;
+
 select * from t1;
 a    b
 2    2
 2    3
 insert into t1 values(1, 2);
+
 insert into t1 values(1, null);
+
 delete from t1 where a = 1;
+
 drop database if exists db1;
 use `delete`;
 create table temp(a int);
@@ -234,20 +252,29 @@ insert into t select * from t;
 insert into t select * from t;
 insert into t select * from t;
 insert into t select * from t;
+
 begin;
+
 insert into t select * from t;
+
 delete from t where a = 1;
+
 select count(*) from t;
 count(*)
 8387584
 rollback;
+
 begin;
+
 insert into t select * from t;
+
 delete from t where a = 1;
+
 select count(*) from t;
 count(*)
 8387584
 commit;
+
 select count(*) from t;
 count(*)
 8387584

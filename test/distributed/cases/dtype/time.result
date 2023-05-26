@@ -145,10 +145,10 @@ select cast(time("-11:22:33") as BIGINT);
 cast(time(-11:22:33) as bigint)
 -112233
 select cast(time("11:22:33") as DECIMAL);
-cast(time(11:22:33) as decimal(34))
+cast(time(11:22:33) as decimal(38))
 112233
 select cast(time("-11:22:33") as DECIMAL);
-cast(time(-11:22:33) as decimal(34))
+cast(time(-11:22:33) as decimal(38))
 -112233
 drop table if exists t1;
 create table t1(t time);

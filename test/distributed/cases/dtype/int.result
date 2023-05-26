@@ -12,58 +12,58 @@ a
 delete from t1 where a=4294967295;
 select * from t1;
 a
-4294967291
-4294967293
 4294967294
+4294967293
+4294967291
 drop table t1;
 create table t1 ( a int not null default 1, int32 int primary key);
 insert into t1 (int32) values (-1),(1234567890),(2147483647);
 select * from t1 order by a desc, int32 asc;
-a	int32
-1	-1
-1	1234567890
-1	2147483647
+a    int32
+1    -1
+1    1234567890
+1    2147483647
 select min(int32),max(int32),max(int32)-1 from t1;
-min(int32)	max(int32)	max(int32)-1
--1	2147483647	2147483646
+min(int32)    max(int32)    max(int32) - 1
+-1    2147483647    2147483646
 select min(int32),max(int32),max(int32)-1 from t1 group by a;
-min(int32)	max(int32)	max(int32)-1
--1	2147483647	2147483646
+min(int32)    max(int32)    max(int32) - 1
+-1    2147483647    2147483646
 drop table t1;
 create table t1 ( a int not null default 1, int32 int unsigned primary key);
 insert into t1 (int32) values (0),(4294967295), (0xFFFFFFFE), (4294967293), (4294967291);
 select * from t1 order by a desc, 2 asc;
-a	int32
-1	0
-1	4294967291
-1	4294967293
-1	4294967294
-1	4294967295
+a    int32
+1    0
+1    4294967291
+1    4294967293
+1    4294967294
+1    4294967295
 select * from t1 order by int32 limit 1,3;
-a	int32
-1	4294967291
-1	4294967293
-1	4294967294
+a    int32
+1    4294967291
+1    4294967293
+1    4294967294
 select * from t1 order by int32 limit 3 offset 1;
-a	int32
-1	4294967291
-1	4294967293
-1	4294967294
+a    int32
+1    4294967291
+1    4294967293
+1    4294967294
 select min(int32),max(int32),max(int32)-1 from t1;
-min(int32)	max(int32)	max(int32)-1
-0	4294967295	4294967294
+min(int32)    max(int32)    max(int32) - 1
+0    4294967295    4294967294
 select min(int32),max(int32),max(int32)-1 from t1 group by a;
-min(int32)	max(int32)	max(int32)-1
-0	4294967295	4294967294
+min(int32)    max(int32)    max(int32) - 1
+0    4294967295    4294967294
 drop table t1;
 create table t1 (id int primary key, a int);
 insert into t1 values (1,1);
 select * from t1 order by 1+2;
-id	a
-1	1
+id    a
+1    1
 select * from t1 limit 9999999999;
-id	a
-1	1
+id    a
+1    1
 drop table if exists t1;
 drop table if exists t2;
 create table t1 (
@@ -83,26 +83,26 @@ insert into t2 values( 2147483647, 4);
 insert into t1 values(5,-2147483648);
 insert into t2 values(5,-2147483648);
 select * from t1;
-valueu32	value32
-5	-2147483648
-4294967295	1
-2147483647	2
+valueu32    value32
+4294967295    1
+2147483647    2
+5    -2147483648
 select * from t2 order by 2 asc;
-valueu32	value32
-5	-2147483648
-4294967295	3
-2147483647	4
+valueu32    value32
+5    -2147483648
+4294967295    3
+2147483647    4
 select * from t1 join t2 on t1.valueu32=t2.valueu32 order by 1 asc, t2.value32 desc;
-valueu32	value32	valueu32	value32
-5	-2147483648	5	-2147483648
-2147483647	2	2147483647	4
-4294967295	1	4294967295	3
+valueu32    value32    valueu32    value32
+5    -2147483648    5    -2147483648
+2147483647    2    2147483647    4
+4294967295    1    4294967295    3
 select * from t1 join t2 on t1.valueu32=t2.valueu32 where t1.valueu32=4294967295 order by abs(3) desc;
-valueu32	value32	valueu32	value32
-4294967295	1	4294967295	3
+valueu32    value32    valueu32    value32
+4294967295    1    4294967295    3
 select * from t1 join t2 on t1.value32=t2.value32 order by 2 desc;
-valueu32	value32	valueu32	value32
-5	-2147483648	5	-2147483648
+valueu32    value32    valueu32    value32
+5    -2147483648    5    -2147483648
 drop table if exists t1;
 drop table if exists t2;
 create table t1 (sint32 int not null);
@@ -144,21 +144,21 @@ id	a	b
 CREATE TABLE t_int(id INT);
 INSERT INTO t_int VALUES (1), (2);
 SELECT id, id >= 1.1 FROM t_int;
-id	id >= 1.1
-1	false	
-2	true	
+id    id >= 1.1
+1    false
+2    true
 SELECT id, 1.1 <= id FROM t_int;
-id	1.1 <= id
-1	false	
-2	true	
+id    1.1 <= id
+1    false
+2    true
 SELECT id, id = 1.1 FROM t_int;
-id	id = 1.1
-1	false	
-2	false	
+id    id = 1.1
+1    false
+2    false
 SELECT id, 1.1 = id FROM t_int;
-id	1.1 = id
-1	false	
-2	false	
+id    1.1 = id
+1    false
+2    false
 SELECT * from t_int WHERE id = 1.1;
 id
 SELECT * from t_int WHERE id = 1.1e0;
@@ -213,7 +213,7 @@ count(*)
 2
 drop table t;
 SELECT (4294967294 BETWEEN 0 AND 4294967295);
-(4294967294 BETWEEN 0 AND 4294967295)
+4294967294 between 0 and 4294967295
 true
 SELECT  -2147483600 <= 0;
 -2147483600 <= 0
@@ -222,31 +222,31 @@ SELECT 0 <= 2147483647;
 0 <= 2147483647
 true
 SELECT CAST(100 AS UNSIGNED) BETWEEN 1 AND -1;
-CAST(100 AS UNSIGNED) BETWEEN 1 AND -1
+cast(100 as unsigned) between 1 and -1
 false
 SELECT CAST(100 AS UNSIGNED) NOT BETWEEN 1 AND -1;
-CAST(100 AS UNSIGNED) NOT BETWEEN 1 AND -1
+cast(100 as unsigned) not between 1 and -1
 true
 SELECT CAST(0 AS UNSIGNED) BETWEEN 0 AND -1;
-CAST(0 AS UNSIGNED) BETWEEN 0 AND -1
+cast(0 as unsigned) between 0 and -1
 false
 SELECT CAST(0 AS UNSIGNED) NOT BETWEEN 0 AND -1;
-CAST(0 AS UNSIGNED) NOT BETWEEN 0 AND -1
+cast(0 as unsigned) not between 0 and -1
 true
 SELECT ( 4294967296 BETWEEN 4294967296 AND 4294967296 );
-( 4294967296 BETWEEN 4294967296 AND 4294967296 )
+4294967296 between 4294967296 and 4294967296
 true
 SELECT ( 2147483647 BETWEEN 4294967296 AND 1 );
-( 2147483647 BETWEEN 4294967296 AND 1 )
+2147483647 between 4294967296 and 1
 false
 SELECT ( -1 BETWEEN 4294967296 AND 1 );
-( -1 BETWEEN 4294967296 AND 1 )
+-1 between 4294967296 and 1
 false
 SELECT ( 0 BETWEEN 4294967296 AND 1 );
-( 0 BETWEEN 4294967296 AND 1 )
+0 between 4294967296 and 1
 false
 SELECT ( 1 BETWEEN 4294967296 AND 1 );
-( 1 BETWEEN 4294967296 AND 1 )
+1 between 4294967296 and 1
 false
 drop table if exists t1;
 drop table if exists t2;
@@ -257,16 +257,16 @@ CREATE TABLE t1 (a int(3), b int(5) primary key);
 INSERT INTO t1 VALUES (1,1),(1,2);
 update t1 set a=2 where a=1 limit 1;
 select * from t1;
-a	b
-2	1
-1	2
+a    b
+1    2
+2    1
 INSERT INTO t1 VALUES (1,3);
 update t1 set a=2 where a=1;
 select * from t1;
-a	b
-2	1
-2	2
-2	3
+a    b
+2    1
+2    2
+2    3
 drop table t1;
 create table t1 (
 a int not null,
@@ -283,79 +283,79 @@ primary key (a));
 insert into t1 (a) values (2),(4),(6),(8),(10),(12),(14),(16),(18),(20),(22),(24),(26),(23);
 update t1 set a=a+101;
 select a,b from t1;
-a	b
-103	0
-105	0
-107	0
-109	0
-111	0
-113	0
-115	0
-117	0
-119	0
-121	0
-123	0
-124	0
-125	0
-127	0
+a    b
+103    0
+105    0
+107    0
+109    0
+111    0
+113    0
+115    0
+117    0
+119    0
+121    0
+123    0
+125    0
+127    0
+124    0
 update t1 set a=127 where a=25;
 select a,b from t1;
-a	b
-103	0
-105	0
-107	0
-109	0
-111	0
-113	0
-115	0
-117	0
-119	0
-121	0
-123	0
-124	0
-125	0
-127	0
+a    b
+103    0
+105    0
+107    0
+109    0
+111    0
+113    0
+115    0
+117    0
+119    0
+121    0
+123    0
+125    0
+127    0
+124    0
 update t1 set a=a-1 where 1 > 2;
 select a,b from t1;
-a	b
-103	0
-105	0
-107	0
-109	0
-111	0
-113	0
-115	0
-117	0
-119	0
-121	0
-123	0
-124	0
-125	0
-127	0
+a    b
+103    0
+105    0
+107    0
+109    0
+111    0
+113    0
+115    0
+117    0
+119    0
+121    0
+123    0
+125    0
+127    0
+124    0
 update t1 set a=a-1 where 3 > 2;
 select a,b from t1;
-a	b
-102	0
-104	0
-106	0
-108	0
-110	0
-112	0
-114	0
-116	0
-118	0
-120	0
-122	0
-123	0
-124	0
-126	0
+a    b
+102    0
+104    0
+106    0
+108    0
+110    0
+112    0
+114    0
+116    0
+118    0
+120    0
+122    0
+124    0
+126    0
+123    0
 drop table t1;
 create table t1 (a int primary key, b char(32));
 insert into t1 values (1,'apple'), (2,'apple');
 select * from t1;
-a	b
-1	apple
-2	apple
+a    b
+1    apple
+2    apple
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -365,12 +365,12 @@ CREATE TABLE t1 (a int(3), b int(5) primary key);
 INSERT INTO t1 VALUES (1,1),(1,2);
 delete from t1 where a=1 limit 1;
 select * from t1;
-a	b
-1	2
+a    b
+1    2
 INSERT INTO t1 VALUES (1,3);
 delete from t1 where a=1;
 select * from t1;
-a	b
+a    b
 drop table t1;
 create table t1 (
 a int not null,
@@ -387,60 +387,60 @@ primary key (a));
 insert into t1 (a) values (2),(4),(6),(8),(10),(12),(14),(16),(18),(20),(22),(24),(26),(23);
 delete from t1 where a=2+2;
 select a,b from t1;
-a	b
-2	0
-6	0
-8	0
-10	0
-12	0
-14	0
-16	0
-18	0
-20	0
-22	0
-23	0
-24	0
-26	0
+a    b
+2    0
+6    0
+8    0
+10    0
+12    0
+14    0
+16    0
+18    0
+20    0
+22    0
+24    0
+26    0
+23    0
 delete from t1 where  a=24;
 select a,b from t1;
-a	b
-2	0
-6	0
-8	0
-10	0
-12	0
-14	0
-16	0
-18	0
-20	0
-22	0
-23	0
-26	0
+a    b
+2    0
+6    0
+8    0
+10    0
+12    0
+14    0
+16    0
+18    0
+20    0
+22    0
+26    0
+23    0
 delete from t1 where  3 < 2;
 select a,b from t1;
-a	b
-2	0
-6	0
-8	0
-10	0
-12	0
-14	0
-16	0
-18	0
-20	0
-22	0
-23	0
-26	0
+a    b
+2    0
+6    0
+8    0
+10    0
+12    0
+14    0
+16    0
+18    0
+20    0
+22    0
+26    0
+23    0
 delete from t1 where  1 < 2;
 select a,b from t1;
-a	b
+a    b
 drop table t1;
 create table t1 (a int primary key, b char(32));
 insert into t1 values (1,'apple'), (2,'apple');
 select * from t1;
-a	b
-1	apple
-2	apple
+a    b
+1    apple
+2    apple
 drop table t1;
 create table t1(a int);
 insert into t1 values(-2147483648), (2147483647);

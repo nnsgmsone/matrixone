@@ -3,11 +3,11 @@ create table t1(a binary(2));
 insert into t1 values(null);
 select * from t1;
 a
-NULL
+null
 insert into t1 values("时");
 select * from t1;
 a
-NULL
+null
 æ¶
 insert into t1 values(rpad("1", 500, "1"));
 internal error: Can't cast '1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111...' from VARCHAR type to BINARY type. Src length 500 is larger than Dest length 2
@@ -21,8 +21,8 @@ a
 insert into t1 values("65");
 select * from t1 where a > '6 ';
 a
-65
 66
+65
 select * from t1 where a = '6';
 a
 select * from t1 where a = '6 ';
@@ -33,7 +33,7 @@ SELECT CAST(TIMESTAMP "2022-01-22 21:45:33" AS BINARY(6));
 cast(timestamp(2022-01-22 21:45:33) as binary(6))
 2022-0
 select cast('12345' as binary);
-case(12345 as binary)
+cast(12345 as binary)
 12345
 select concat(binary('ab'), binary('cd'));
 concat(binary(ab), binary(cd))

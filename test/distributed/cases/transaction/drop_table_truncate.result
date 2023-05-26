@@ -5,7 +5,7 @@ insert into t5 values(10),(20),(30);
 drop table t5;
 start transaction;
 show tables;
-Tables_in_autocommit_1
+Tables_in_drop_table_truncate
 insert into t5 values(100),(2000),(3000);
 no such table drop_table_truncate.t5
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted

@@ -74,10 +74,10 @@ GRANT manage grants ON account  `dump`@`localhost`
 GRANT account all ON account  `dump`@`localhost`
 GRANT show tables ON database * `dump`@`localhost`
 GRANT create table ON database * `dump`@`localhost`
-GRANT drop table ON database * `dump`@`localhost`
-GRANT alter table ON database * `dump`@`localhost`
 GRANT create view ON database * `dump`@`localhost`
+GRANT drop table ON database * `dump`@`localhost`
 GRANT drop view ON database * `dump`@`localhost`
+GRANT alter table ON database * `dump`@`localhost`
 GRANT alter view ON database * `dump`@`localhost`
 GRANT database all ON database * `dump`@`localhost`
 GRANT database ownership ON database * `dump`@`localhost`
@@ -110,10 +110,10 @@ GRANT manage grants ON account  `root`@`localhost`
 GRANT account all ON account  `root`@`localhost`
 GRANT show tables ON database * `root`@`localhost`
 GRANT create table ON database * `root`@`localhost`
-GRANT drop table ON database * `root`@`localhost`
-GRANT alter table ON database * `root`@`localhost`
 GRANT create view ON database * `root`@`localhost`
+GRANT drop table ON database * `root`@`localhost`
 GRANT drop view ON database * `root`@`localhost`
+GRANT alter table ON database * `root`@`localhost`
 GRANT alter view ON database * `root`@`localhost`
 GRANT database all ON database * `root`@`localhost`
 GRANT database ownership ON database * `root`@`localhost`
@@ -227,15 +227,15 @@ mo_user_grant
 mo_role_grant
 mo_role_privs
 mo_user_defined_function
-mo_stored_procedure
 mo_mysql_compatibility_mode
 mo_pubs
-mo_database
-mo_columns
+mo_stored_procedure
 mo_tables
+mo_columns
+mo_database
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-13
+14
 show column_number from mo_database;
 Number of columns in mo_database
 9

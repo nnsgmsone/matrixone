@@ -2,7 +2,7 @@ select cast('0000-01-01' as date),cast('0000-01-01' as date)-1;
 cast('0000-01-01' as date)	cast('0000-01-01' as date)-1
 0000-01-01	100
 select cast('2000-01-01' as date);
-cast('2000-01-01' as date)
+cast(2000-01-01 as date)
 2000-01-01
 select cast('200-01-1' as date);
 cast(200-01-1 as date)
@@ -10,27 +10,27 @@ cast(200-01-1 as date)
 select cast('2021-02-29' as date);
 invalid argument parsedate, bad value 2021-02-29
 select cast('2022-02-01' as date)-cast('2022-01-01' as date);
-cast('2022-02-01' as date)-cast('2022-01-01' as date)
+cast(2022-02-01 as date) - cast(2022-01-01 as date)
 31
 select cast('2020-02-01' as date)+NULL;
-cast('2020-02-01' as date)+NULL
-NULL
+cast(2020-02-01 as date) + null
+null
 select cast('0000-00-00' as date);
 invalid argument parsedate, bad value 0000-00-00
 select cast(cast(0x13488c5 as signed) as date);
 cast(cast(0x13488c5 as signed) as date)
 2022-01-01
 SELECT DATE_ADD('2017-06-15', INTERVAL 10 DAY);
-DATE_ADD('2017-06-15', INTERVAL 10 DAY)
+date_add(2017-06-15, interval(10, day))
 2017-06-25 00:00:00
 SELECT DATE_ADD('2017-06-15', INTERVAL 10 MONTH);
-DATE_ADD('2017-06-15', INTERVAL 10 MONTH)
+date_add(2017-06-15, interval(10, month))
 2018-04-15 00:00:00
 SELECT DATE_ADD('2017-06-15', INTERVAL 1 YEAR);
-DATE_ADD('2017-06-15', INTERVAL 1 YEAR)
+date_add(2017-06-15, interval(1, year))
 2018-06-15 00:00:00
 SELECT DATE_ADD('20200215', INTERVAL 14 DAY);
-DATE_ADD(20200215, INTERVAL 14 DAY)
+date_add(20200215, interval(14, day))
 2020-02-29 00:00:00
 drop table if exists t1;
 create table t1 (a date not null, primary key(a));
@@ -45,19 +45,24 @@ select * from t1 where a='2022-01-01' order by 1 desc;
 a
 2022-01-01
 delete from t1 where a=20220102;
+
 select * from t1 where a<>'20220104' order by 1 asc;
 a
 2022-01-01
 2022-01-03
 update t1 set a='2022-02-02' where a='2022-01-03';
+
 select * from t1;
 a
 2022-01-01
 2022-01-04
 2022-02-02
 drop table t1;
+
 create table t1 ( a int not null default 1, big date primary key);
+
 insert into t1 (big) values ('2000-01-01'),('2001-01-01'),('2002-01-01');
+
 select * from t1 order by a desc, big asc;
 a	big
 1	2000-01-01
@@ -86,8 +91,8 @@ drop table t1;
 create table t1 (id date not null default '2022-01-31', a int, primary key (a));
 insert into t1(a) values (1);
 select * from t1;
-id	a
-2022-01-31	1
+id    a
+2022-01-31    1
 drop table if exists t1;
 drop table if exists t2;
 create table t1 (
@@ -106,18 +111,18 @@ insert into t2 values('2022-01-03', 3);
 insert into t2 values('2022-01-02', 4);
 insert into t2 values('2022-01-01', 5);
 select * from t1;
-dvalue	value32
-2022-01-01	1
-2022-01-02	2
+dvalue    value32
+2022-01-01    1
+2022-01-02    2
 select * from t2 order by 2 desc;
-dvalue	value32
-2022-01-01	5
-2022-01-02	4
-2022-01-03	3
+dvalue    value32
+2022-01-01    5
+2022-01-02    4
+2022-01-03    3
 select * from t1 join t2 on t1.dvalue=t2.dvalue order by 1 desc,t2.value32 asc;
-dvalue	value32	dvalue	value32
-2022-01-02	2	2022-01-02	4
-2022-01-01	1	2022-01-01	5
+dvalue    value32    dvalue    value32
+2022-01-02    2    2022-01-02    4
+2022-01-01    1    2022-01-01    5
 select * from t1 join t2 on t1.dvalue=t2.dvalue where t1.dvalue>='2022-01-01' group by t1.dvalue order by t2.dvalue;
 SQL syntax error: column "t1.value32" must appear in the GROUP BY clause or be used in an aggregate function
 drop table if exists t1;
@@ -135,9 +140,9 @@ id	id = 202020101
 2020-01-01	false	
 2022-01-02	false	
 SELECT id, '20200101' = id FROM t_date;
-id	20200101 = id
-2020-01-01	true	
-2022-01-02	false	
+id    20200101 = id
+2020-01-01    true
+2022-01-02    false
 SELECT * from t_date WHERE id = 20200101;
 id
 2020-01-01
@@ -200,16 +205,16 @@ CREATE TABLE t1 (a date, b int primary key);
 insert INTO t1 VALUES ('2022-01-01',1),('2022-01-01',2);
 update t1 set a='2022-01-02' where a='2022-01-01' limit 1;
 select * from t1;
-a	b
-2022-01-02	1
-2022-01-01	2
+a    b
+2022-01-01    2
+2022-01-02    1
 insert INTO t1 VALUES ('2022-01-01',3);
 update t1 set a='2022-01-02' where a='2022-01-01';
 select * from t1;
-a	b
-2022-01-02	1
-2022-01-02	2
-2022-01-02	3
+a    b
+2022-01-02    1
+2022-01-02    2
+2022-01-02    3
 drop table t1;
 create table t1 (
 a date not null,
@@ -217,6 +222,7 @@ b date not null default '2000-01-01'
 );
 insert into t1 (a) values ('2022-01-02'),('2022-01-04'),('2022-01-06'),('2022-01-08'),('2022-01-10'),('2022-01-12');
 update t1 set a=a+101;
+
 select a,b from t1;
 a	b
 2022-02-03	2000-01-01
@@ -226,6 +232,7 @@ a	b
 2022-02-11	2000-01-01
 2022-02-13	2000-01-01
 update t1 set a='2022-01-27' where a='2022-02-05';
+
 select a,b from t1;
 a	b
 2022-02-03	2000-01-01
@@ -235,6 +242,7 @@ a	b
 2022-02-11	2000-01-01
 2022-02-13	2000-01-01
 update t1 set a=a-1 where 1 > 2;
+
 select a,b from t1;
 a	b
 2022-02-03	2000-01-01
@@ -244,6 +252,7 @@ a	b
 2022-02-11	2000-01-01
 2022-02-13	2000-01-01
 update t1 set a=a-1 where 3 > 2;
+
 select a,b from t1;
 a	b
 2022-02-02	2000-01-01
@@ -256,9 +265,9 @@ drop table t1;
 create table t1 (a date primary key, b char(32));
 insert into t1 values ('20220101','apple'),('2022-01-02','apple');
 select * from t1;
-a	b
-2022-01-01	apple
-2022-01-02	apple
+a    b
+2022-01-01    apple
+2022-01-02    apple
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -267,11 +276,14 @@ drop table if exists t12;
 CREATE TABLE t1 (a date, b int primary key);
 insert INTO t1 VALUES ('2022-01-01',1),('2022-01-01',2);
 delete from t1 where a='2022-01-01' limit 1;
+
 select * from t1;
 a	b
 2022-01-01	2
 insert INTO t1 VALUES ('2022-01-01',3);
+
 delete from t1 where a='2022-01-01';
+
 select * from t1;
 a	b
 drop table t1;
@@ -280,6 +292,7 @@ a date not null,
 b date not null default '2000-01-01');
 insert into t1 (a) values ('2022-01-02'),('2022-01-04'),('2022-01-06'),('2022-01-08'),('2022-01-10'),('2022-01-12');
 delete from t1 where a=20220101+3;
+
 select a,b from t1;
 a	b
 2022-01-02	2000-01-01
@@ -288,6 +301,7 @@ a	b
 2022-01-10	2000-01-01
 2022-01-12	2000-01-01
 delete from t1 where  3 < 2;
+
 select a,b from t1;
 a	b
 2022-01-02	2000-01-01
@@ -296,12 +310,13 @@ a	b
 2022-01-10	2000-01-01
 2022-01-12	2000-01-01
 delete from t1 where  1 < 2;
+
 select a,b from t1;
 a	b
 drop table t1;
 create table t1 (a date primary key, b char(32));
 insert into t1 values ('20220101','apple'),('2022-01-02','apple');
 select * from t1;
-a	b
-2022-01-01	apple
-2022-01-02	apple
+a    b
+2022-01-01    apple
+2022-01-02    apple

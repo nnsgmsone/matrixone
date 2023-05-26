@@ -154,7 +154,7 @@ id    a    b
 UPDATE t1 SET b = a;
 select * from t1;
 id    a    b
-1    0.0    0
+1    0.0    0E+00
 2    9.223372036854776E18    9.223372036854776E+18
 3    9.223372036854776E18    9.223372036854776E+18
 4    1.8446744073709552E19    1.8446744073709552E+19
@@ -495,10 +495,10 @@ a
 999.99
 -999.99
 null
-90.00
-90.00
--90.00
--90.00
+90.0
+90.0
+-90.0
+-90.0
 90.01
 90.01
 delete from t1;
@@ -560,11 +560,11 @@ insert into t2 values(999), (-999), (0), (1), (-1);
 insert into t1 select * from t2;
 select * from t1;
 a
-999.00
--999.00
-0.00
-1.00
--1.00
+999.0
+-999.0
+0.0
+1.0
+-1.0
 delete from t1;
 drop table if exists t2;
 create table t2(a int);
@@ -580,11 +580,11 @@ insert into t2 values(999), (-999), (0), (1), (-1);
 insert into t1 select * from t2;
 select * from t1;
 a
-999.00
--999.00
-0.00
-1.00
--1.00
+999.0
+-999.0
+0.0
+1.0
+-1.0
 delete from t1;
 drop table if exists t2;
 create table t2(a bigint);
@@ -600,11 +600,11 @@ insert into t2 values(999), (-999), (0), (1), (-1);
 insert into t1 select * from t2;
 select * from t1;
 a
-999.00
--999.00
-0.00
-1.00
--1.00
+999.0
+-999.0
+0.0
+1.0
+-1.0
 drop table if exists t2;
 create table t2(a decimal(10, 3));
 insert into t2 values(999.995);
@@ -622,8 +622,8 @@ select * from t1;
 a
 999.99
 -999.99
-99.00
-99.00
+99.0
+99.0
 drop table if exists t2;
 create table t2(a decimal(30, 3));
 insert into t2 values(999.995);
@@ -641,5 +641,5 @@ select * from t1;
 a
 999.99
 -999.99
-99.00
-99.00
+99.0
+99.0

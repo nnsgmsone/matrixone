@@ -103,7 +103,7 @@ invalid input: json text [1, 2,
 insert into json_table_4 values('{"key1": NULL, "": "value2"}');
 invalid input: json text {"key1": NULL, "": "value2"}
 insert into json_table_4 values('');
-invalid input: json text
+invalid input: json text 
 create table json_table_5(j1 json primary key,j2 json default '{"x": 17, "x": "red"}',j3 json not null );
 not supported: JSON column 'j1' cannot be in primary key
 create table json_table_5(j1 json) partition by hash(j1);
@@ -196,29 +196,29 @@ d1    j1
 1    {"debug": true, "networkTimeout": {"connectSocket": 60000, "downloadFile": 60000, "request": 6000, "uploadFile": 60000}, "pages": ["pages/news/news", "pages/index/index", "pages/movie/movie", "pages/logs/logs"], "permission": {"scope.userLocation": {"desc": "你的位置信息将用于小程序位置接口的效果展示"}}, "requiredBackgroundModes": ["audio", "location"], "style": "v2", "tabBar": {"borderStyle": "black", "color": "#000", "custom": "false", "list": [{"iconPath": "pages/images/yuedu.png", "pagePath": "pages/news/news", "selectedIconPath": "pages/images/193.jpg", "text": "新闻"}, {"iconPath": "pages/images/diany.png", "pagePath": "pages/movie/movie", "selectedIconPath": "pages/images/506.jpg", "text": "电影"}], "position": "bottom", "selectedColor": "#ff6600"}, "window": {"backgroundColor": "#ffffff", "backgroundTextStyle": "light", "navigationBarBackgroundColor": "white", "navigationBarTextStyle": "black", "navigationBarTitleText": "哈哈", "navigationStyle": "custom"}}
 select j1 from  json_table_1 union select j1 from  json_table_3;
 j1
-{}
-{"": "", "12_key": "中文mo"}
-{"d1": [true, false]}
-{"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee": "1234567890000000000000000000000000000000000000000000000", "uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu": ["aaaaaaaaaaaaaaaaaaaaaaa11111111111111111111111111111111111111"]}
-{"key_56": 78.9, "芝士面包": "12abc"}
+{"debug": true, "networkTimeout": {"connectSocket": 60000, "downloadFile": 60000, "request": 6000, "uploadFile": 60000}, "pages": ["pages/news/news", "pages/index/index", "pages/movie/movie", "pages/logs/logs"], "permission": {"scope.userLocation": {"desc": "你的位置信息将用于小程序位置接口的效果展示"}}, "requiredBackgroundModes": ["audio", "location"], "style": "v2", "tabBar": {"borderStyle": "black", "color": "#000", "custom": "false", "list": [{"iconPath": "pages/images/yuedu.png", "pagePath": "pages/news/news", "selectedIconPath": "pages/images/193.jpg", "text": "新闻"}, {"iconPath": "pages/images/diany.png", "pagePath": "pages/movie/movie", "selectedIconPath": "pages/images/506.jpg", "text": "电影"}], "position": "bottom", "selectedColor": "#ff6600"}, "window": {"backgroundColor": "#ffffff", "backgroundTextStyle": "light", "navigationBarBackgroundColor": "white", "navigationBarTextStyle": "black", "navigationBarTitleText": "哈哈", "navigationStyle": "custom"}}
 {"key10": "value1", "key2": "value2"}
 {"key1": "@#$_%^&*()!@", "key123456": 223}
+{"key_56": 78.9, "芝士面包": "12abc"}
+{"": "", "12_key": "中文mo"}
 {"13key4": "中文mo", "a 1": "b 1"}
 {"d1": "2020-10-09", "d2": "2019-08-20 12:30:00"}
-{"debug": true, "networkTimeout": {"connectSocket": 60000, "downloadFile": 60000, "request": 6000, "uploadFile": 60000}, "pages": ["pages/news/news", "pages/index/index", "pages/movie/movie", "pages/logs/logs"], "permission": {"scope.userLocation": {"desc": "你的位置信息将用于小程序位置接口的效果展示"}}, "requiredBackgroundModes": ["audio", "location"], "style": "v2", "tabBar": {"borderStyle": "black", "color": "#000", "custom": "false", "list": [{"iconPath": "pages/images/yuedu.png", "pagePath": "pages/news/news", "selectedIconPath": "pages/images/193.jpg", "text": "新闻"}, {"iconPath": "pages/images/diany.png", "pagePath": "pages/movie/movie", "selectedIconPath": "pages/images/506.jpg", "text": "电影"}], "position": "bottom", "selectedColor": "#ff6600"}, "window": {"backgroundColor": "#ffffff", "backgroundTextStyle": "light", "navigationBarBackgroundColor": "white", "navigationBarTextStyle": "black", "navigationBarTitleText": "哈哈", "navigationStyle": "custom"}}
+{"d1": [true, false]}
+{}
+{"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee": "1234567890000000000000000000000000000000000000000000000", "uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu": ["aaaaaaaaaaaaaaaaaaaaaaa11111111111111111111111111111111111111"]}
 select j1 from  json_table_1 intersect select j1 from  json_table_3;
 j1
 select j1 from  json_table_1 minus select j1 from  json_table_3;
 j1
-{}
-{"": "", "12_key": "中文mo"}
-{"d1": [true, false]}
-{"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee": "1234567890000000000000000000000000000000000000000000000", "uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu": ["aaaaaaaaaaaaaaaaaaaaaaa11111111111111111111111111111111111111"]}
-{"key_56": 78.9, "芝士面包": "12abc"}
 {"key10": "value1", "key2": "value2"}
 {"key1": "@#$_%^&*()!@", "key123456": 223}
+{"key_56": 78.9, "芝士面包": "12abc"}
+{"": "", "12_key": "中文mo"}
 {"13key4": "中文mo", "a 1": "b 1"}
 {"d1": "2020-10-09", "d2": "2019-08-20 12:30:00"}
+{"d1": [true, false]}
+{}
+{"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee": "1234567890000000000000000000000000000000000000000000000", "uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu": ["aaaaaaaaaaaaaaaaaaaaaaa11111111111111111111111111111111111111"]}
 create table json_table_71(j1 json);
 insert into  json_table_71 values('{
 "orderType": "BUY",
