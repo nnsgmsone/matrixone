@@ -894,6 +894,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			Proc:         process.NewWithAnalyze(c.proc, c.ctx, 1, c.anal.Nodes()),
 			Instructions: []vm.Instruction{{Op: vm.Merge, Arg: &merge.Argument{}}},
 		}
+		rs.Proc.Reg.MergeReceivers[0].Ch = make(chan *batch.Batch, c.NumCPU()) // reset the channel buffer of shrink
 		c.appendStepRegs(n.SourceStep, rs.Proc.Reg.MergeReceivers[0])
 		return []*Scope{rs}, nil
 	case plan.Node_SINK:
