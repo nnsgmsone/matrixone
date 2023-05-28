@@ -801,6 +801,9 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		if toWriteS3 {
 			dataScope := c.newMergeScope(ss)
 			dataScope.IsEnd = true
+			if c.anal.qry.LoadTag {
+				dataScope.Proc.Reg.MergeReceivers[0].Ch = make(chan *batch.Batch, dataScope.NodeInfo.Mcpu) // reset the channel buffer of sink for load
+			}
 			mcpu := dataScope.NodeInfo.Mcpu
 			scopes := make([]*Scope, 0, mcpu)
 			regs := make([]*process.WaitRegister, 0, mcpu)
