@@ -301,6 +301,12 @@ func (d *mpoolDetails) reportJson() string {
 	return ret
 }
 
+// the alloc records of mpool
+type AllocRecords struct {
+	sync.Mutex
+	allocs map[unsafe.Pointer]string
+}
+
 // The memory pool.
 type MPool struct {
 	id      int64      // mpool generated, used to look up the MPool
@@ -312,6 +318,8 @@ type MPool struct {
 	pools   [NumFixedPool]fixedPool
 	details *mpoolDetails
 
+	allocRecords AllocRecords
+
 	// To remove: this thing is highly unlikely to be of any good use.
 	sels *sync.Pool
 }
@@ -320,6 +328,27 @@ const (
 	NoFixed = 1
 	NoLock  = 2
 )
+
+func (ar *AllocRecords) Get(ptr unsafe.Pointer) bool {
+	ar.Lock()
+	defer ar.Unlock()
+	if _, ok := ar.allocs[ptr]; ok {
+		return true
+	}
+	return false
+}
+
+func (ar *AllocRecords) Add(ptr unsafe.Pointer, tag string) {
+	ar.Lock()
+	defer ar.Unlock()
+	ar.allocs[ptr] = tag
+}
+
+func (ar *AllocRecords) Del(ptr unsafe.Pointer) {
+	ar.Lock()
+	defer ar.Unlock()
+	delete(ar.allocs, ptr)
+}
 
 func (mp *MPool) PutSels(sels []int64) {
 	mp.sels.Put(&sels)
@@ -363,6 +392,12 @@ func (mp *MPool) destroy() {
 	globalStats.RecordManyFrees(mp.tag,
 		mp.stats.NumAlloc.Load()-mp.stats.NumFree.Load(),
 		mp.stats.NumCurrBytes.Load())
+	mp.allocRecords.Lock()
+	defer mp.allocRecords.Unlock()
+	for k, v := range mp.allocRecords.allocs {
+		logutil.Errorf("mp %s not free %v alloc by %v",
+			mp.tag, k, v)
+	}
 }
 
 // New a MPool.   Tag is user supplied, used for debugging/diagnostics.
@@ -385,6 +420,8 @@ func NewMPool(tag string, cap int64, flag int) (*MPool, error) {
 
 	mp.noFixed = (flag & NoFixed) != 0
 	mp.noLock = (flag & NoFixed) != 0
+
+	mp.allocRecords.allocs = make(map[unsafe.Pointer]string)
 
 	if !mp.noFixed {
 		for i := 0; i < NumFixedPool; i++ {
@@ -538,6 +575,8 @@ func (mp *MPool) Alloc(sz int) ([]byte, error) {
 	pHdr.fixedPoolIdx = NumFixedPool
 	pHdr.allocSz = int32(sz)
 	pHdr.SetGuard()
+	//	mp.allocRecords.Add(hdr, util.UnsafeBytesToString(debug.Stack()))
+	mp.allocRecords.Add(hdr, mp.tag)
 	return pHdr.ToSlice(sz, sz), nil
 }
 
@@ -552,6 +591,10 @@ func (mp *MPool) Free(bs []byte) {
 	offset := -kMemHdrSz
 	hdr := unsafe.Add(pb, offset)
 	pHdr := (*memHdr)(hdr)
+	if !mp.allocRecords.Get(hdr) {
+		panic(moerr.NewInternalErrorNoCtx("freeing unallocated memory"))
+	}
+	defer mp.allocRecords.Del(hdr)
 
 	if !pHdr.CheckGuard() {
 		panic(moerr.NewInternalErrorNoCtx("mp header corruption"))
