@@ -316,8 +316,6 @@ func (c *Compile) runOnce() error {
 			wg.Done()
 		}(s)
 	}
-	defer c.proc.FreeVectors()
-
 	wg.Wait()
 	c.scope = nil
 	close(errC)

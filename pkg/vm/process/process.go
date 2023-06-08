@@ -202,6 +202,10 @@ func (proc *Process) WithSpanContext(sc trace.SpanContext) {
 	proc.Ctx = trace.ContextWithSpanContext(proc.Ctx, sc)
 }
 
+func (proc *Process) CopyVectorPool(src *Process) {
+	proc.vp = src.vp
+}
+
 func (proc *Process) PutBatch(bat *batch.Batch) {
 	if bat == batch.EmptyBatch {
 		return

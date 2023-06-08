@@ -3226,6 +3226,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		pu.FileService,
 		pu.LockService,
 		ses.GetAutoIncrCacheManager())
+	proc.CopyVectorPool(ses.proc)
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows

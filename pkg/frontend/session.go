@@ -77,6 +77,9 @@ type Session struct {
 	// mpool
 	mp *mpool.MPool
 
+	// the process of the session
+	proc *process.Process
+
 	pu *config.ParameterUnit
 
 	isInternal bool
@@ -383,6 +386,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 			panic(err)
 		}
 	}
+	ses.proc = process.New(nil, ses.mp, nil, nil, nil, nil, nil)
 
 	runtime.SetFinalizer(ses, func(ss *Session) {
 		ss.Close()
@@ -428,6 +432,9 @@ func (ses *Session) Close() {
 	ses.sqlHelper = nil
 	//  The mpool cleanup must be placed at the end,
 	// and you must wait for all resources to be cleaned up before you can delete the mpool
+	if ses.proc != nil {
+		ses.proc.FreeVectors()
+	}
 	if ses.isNotBackgroundSession {
 		mp := ses.GetMemPool()
 		mpool.DeleteMPool(mp)
