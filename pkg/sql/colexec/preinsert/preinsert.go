@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -51,10 +52,19 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 		return false, nil
 	}
 	defer proc.PutBatch(bat)
-	newBat, err := util.CopyBatch(bat, proc)
-	if err != nil {
-		return false, err
+	newBat := batch.NewWithSize(len(arg.Attrs))
+	newBat.Attrs = make([]string, 0, len(arg.Attrs))
+	for idx := range arg.Attrs {
+		newBat.Attrs = append(newBat.Attrs, arg.Attrs[idx])
+		srcVec := bat.Vecs[idx]
+		vec := proc.GetVector(*srcVec.GetType())
+		if err := vector.GetUnionAllFunction(*srcVec.GetType(), proc.Mp())(vec, srcVec); err != nil {
+			newBat.Clean(proc.Mp())
+			return false, err
+		}
+		newBat.SetVector(int32(idx), vec)
 	}
+	newBat.Zs = append(newBat.Zs, bat.Zs...)
 	if arg.HasAutoCol {
 		err := genAutoIncrCol(newBat, proc, arg)
 		if err != nil {
