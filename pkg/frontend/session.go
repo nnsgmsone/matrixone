@@ -386,7 +386,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 			panic(err)
 		}
 	}
-	ses.proc = process.New(nil, ses.mp, nil, nil, nil, nil, nil)
+	ses.proc = process.New(context.TODO(), ses.mp, nil, nil, nil, nil, nil)
 
 	runtime.SetFinalizer(ses, func(ss *Session) {
 		ss.Close()

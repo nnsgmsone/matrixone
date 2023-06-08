@@ -50,21 +50,11 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 		proc.SetInputBatch(batch.EmptyBatch)
 		return false, nil
 	}
-
 	defer proc.PutBatch(bat)
-
-	newBat := batch.NewWithSize(len(arg.Attrs))
-	newBat.Attrs = make([]string, 0, len(arg.Attrs))
-	for idx := range arg.Attrs {
-		newBat.Attrs = append(newBat.Attrs, arg.Attrs[idx])
-		newBat.SetVector(int32(idx), proc.GetVector(*bat.GetVector(int32(idx)).GetType()))
-		err := newBat.Vecs[idx].UnionBatch(bat.Vecs[idx], 0, bat.Vecs[idx].Length(), nil, proc.Mp())
-		if err != nil {
-			return false, err
-		}
+	newBat, err := util.CopyBatch(bat, proc)
+	if err != nil {
+		return false, err
 	}
-	newBat.Zs = append(newBat.Zs, bat.Zs...)
-
 	if arg.HasAutoCol {
 		err := genAutoIncrCol(newBat, proc, arg)
 		if err != nil {
@@ -72,7 +62,6 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 			return false, err
 		}
 	}
-
 	// check new rows not null
 	err = colexec.BatchDataNotNullCheck(newBat, arg.TableDef, proc.Ctx)
 	if err != nil {
@@ -86,13 +75,11 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 		newBat.Clean(proc.GetMPool())
 		return false, err
 	}
-
 	err = genClusterBy(newBat, proc, arg.TableDef)
 	if err != nil {
 		newBat.Clean(proc.GetMPool())
 		return false, err
 	}
-
 	if arg.IsUpdate {
 		idx := len(bat.Vecs) - 1
 		newBat.Attrs = append(newBat.Attrs, catalog.Row_ID)
@@ -103,7 +90,6 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 		}
 		newBat.Vecs = append(newBat.Vecs, rowIdVec)
 	}
-
 	proc.SetInputBatch(newBat)
 	return false, nil
 }

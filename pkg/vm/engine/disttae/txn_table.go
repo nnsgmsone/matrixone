@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -940,13 +941,13 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 			return err
 		}
 		fileName := location.Name().String()
-		ibat, err := bat.Dup(tbl.db.txn.proc.Mp())
+		ibat, err := util.CopyBatch(bat, tbl.db.txn.proc)
 		if err != nil {
 			return err
 		}
 		return tbl.db.txn.WriteFile(INSERT, tbl.db.databaseId, tbl.tableId, tbl.db.databaseName, tbl.tableName, fileName, ibat, tbl.db.txn.dnStores[0])
 	}
-	ibat, err := bat.Dup(tbl.db.txn.proc.Mp())
+	ibat, err := util.CopyBatch(bat, tbl.db.txn.proc)
 	if err != nil {
 		return err
 	}
@@ -954,15 +955,6 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.dnStores[0], tbl.primaryIdx, false, false); err != nil {
 		return err
 	}
-	/*
-		var packer *types.Packer
-		put := tbl.db.txn.engine.packerPool.Get(&packer)
-		defer put.Put()
-		if err := tbl.updateLocalState(ctx, INSERT, ibat, packer); err != nil {
-			return err
-		}
-	*/
-
 	return tbl.db.txn.DumpBatch(false, tbl.writesOffset)
 }
 
@@ -990,7 +982,10 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 			return err
 		}
 		fileName := location.Name().String()
-		copBat := CopyBatch(tbl.db.txn.proc.Ctx, tbl.db.txn.proc, bat)
+		copBat, err := util.CopyBatch(bat, tbl.db.txn.proc)
+		if err != nil {
+			return err
+		}
 		if err := tbl.db.txn.WriteFile(DELETE, tbl.db.databaseId, tbl.tableId,
 			tbl.db.databaseName, tbl.tableName, fileName, copBat, tbl.db.txn.dnStores[0]); err != nil {
 			return err
@@ -1159,18 +1154,11 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 	return tbl.writeDnPartition(ctx, bat)
 }
 
-func CopyBatch(ctx context.Context, proc *process.Process, bat *batch.Batch) *batch.Batch {
-	ibat := batch.NewWithSize(len(bat.Attrs))
-	ibat.Attrs = append(ibat.Attrs, bat.Attrs...)
-	for i := 0; i < len(ibat.Attrs); i++ {
-		ibat.SetVector(int32(i), vector.NewVec(*bat.GetVector(int32(i)).GetType()))
-	}
-	ibat.Append(ctx, proc.GetMPool(), bat)
-	return ibat
-}
-
 func (tbl *txnTable) writeDnPartition(ctx context.Context, bat *batch.Batch) error {
-	ibat := CopyBatch(ctx, tbl.db.txn.proc, bat)
+	ibat, err := util.CopyBatch(bat, tbl.db.txn.proc)
+	if err != nil {
+		return err
+	}
 	if err := tbl.db.txn.WriteBatch(DELETE, tbl.db.databaseId, tbl.tableId,
 		tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.dnStores[0], tbl.primaryIdx, false, false); err != nil {
 		return err
