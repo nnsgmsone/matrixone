@@ -450,8 +450,8 @@ func insertAutoValues[T constraints.Integer](
 		manuals := roaring64.NewBitmap()
 		maxValue := uint64(0)
 		col.lockDo(func() {
-			for _, v := range vs {
-				if v > 0 {
+			for i, v := range vs {
+				if v > 0 && !nulls.Contains(vec.GetNulls(), uint64(i)) {
 					manuals.Add(uint64(v))
 				}
 			}
