@@ -235,7 +235,6 @@ func (s *service) registerExecutorsLocked() {
 			if err := motrace.InitSchema(moServerCtx, ieFactory); err != nil {
 				return err
 			}
-
 			// init metric/log merge task cron rule
 			if err := export.CreateCronTask(moServerCtx, task.TaskCode_MetricLogMerge, ts); err != nil {
 				return err
@@ -245,7 +244,6 @@ func (s *service) registerExecutorsLocked() {
 			if err := metric.CreateCronTask(moServerCtx, task.TaskCode_MetricStorageUsage, ts); err != nil {
 				return err
 			}
-
 			return nil
 		})
 

@@ -465,8 +465,13 @@ message Stats {
 	int32   parallelism = 13;
 }
 
+message RowsetExpr {
+    int32 row_pos = 1;
+    Expr expr = 2;
+}
+
 message ColData {
-	repeated Expr data = 1;
+    repeated RowsetExpr data = 1;
 }
 
 message RowsetData {
@@ -692,6 +697,7 @@ message Node {
 	bool IsEnd = 36;
 	repeated LockTarget lock_targets = 37;
 	repeated Expr block_filter_list = 38;
+    bytes uuid = 39;
 }
 
 message LockTarget {

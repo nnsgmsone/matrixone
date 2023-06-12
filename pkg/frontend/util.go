@@ -522,6 +522,7 @@ func rewriteExpr(
 	return e, nil
 }
 
+/*
 func rowsetDataToVector(
 	ctx context.Context,
 	proc *process.Process,
@@ -583,6 +584,49 @@ func rowsetDataToVector(
 		vec.Free(proc.Mp())
 	}
 
+	return nil
+}
+*/
+
+func evalRowsetData(ctx context.Context, proc *process.Process,
+	exprs []*plan.RowsetExpr, vec *vector.Vector,
+	compileCtx plan2.CompilerContext, params []*plan.Expr) error {
+	var err error
+	var bats []*batch.Batch
+
+	bat := batch.NewWithSize(0)
+	bat.Zs = []int64{1}
+	defer bat.Clean(proc.Mp())
+	bats = []*batch.Batch{bat}
+	for _, expr := range exprs {
+		// the code will remove after param expr supported
+		if e, ok := expr.Expr.Expr.(*plan.Expr_F); ok {
+			if e.F.Func.ObjName == "cast" {
+				if arg, ok := e.F.Args[0].Expr.(*plan.Expr_P); ok {
+					e.F.Args[0], err = plan2.GetVarValue(ctx, compileCtx, proc,
+						batch.EmptyForConstFoldBatch, params[int(arg.P.Pos)])
+					if err != nil {
+						return err
+					}
+				} else if _, ok := e.F.Args[0].Expr.(*plan.Expr_V); ok {
+					e.F.Args[0], err = plan2.GetVarValue(ctx, compileCtx, proc,
+						batch.EmptyForConstFoldBatch, e.F.Args[0])
+					if err != nil {
+						return err
+					}
+				}
+			}
+		}
+		val, err := colexec.EvalExpressionOnce(proc, expr.Expr, bats)
+		if err != nil {
+			return err
+		}
+		if err := vec.Copy(val, int64(expr.RowPos), 0, proc.Mp()); err != nil {
+			val.Free(proc.Mp())
+			return err
+		}
+		val.Free(proc.Mp())
+	}
 	return nil
 }
 

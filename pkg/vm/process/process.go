@@ -56,6 +56,7 @@ func New(
 		vp: &vectorPool{
 			vecs: make(map[uint8][]*vector.Vector),
 		},
+		valueScanBatch: make(map[[16]byte]*batch.Batch),
 	}
 }
 
@@ -200,6 +201,10 @@ func (proc *Process) AllocVectorOfRows(typ types.Type, nele int, nsp *nulls.Null
 
 func (proc *Process) WithSpanContext(sc trace.SpanContext) {
 	proc.Ctx = trace.ContextWithSpanContext(proc.Ctx, sc)
+}
+
+func (proc *Process) CopyValueScanBatch(src *Process) {
+	proc.valueScanBatch = src.valueScanBatch
 }
 
 func (proc *Process) CopyVectorPool(src *Process) {

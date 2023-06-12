@@ -509,7 +509,7 @@ func (e *Engine) delTransaction(txn *Transaction) {
 		if txn.writes[i].bat == nil {
 			continue
 		}
-		txn.writes[i].bat.Clean(e.mp)
+		txn.proc.PutBatch(txn.writes[i].bat)
 	}
 	txn.tableMap = nil
 	txn.createMap = nil

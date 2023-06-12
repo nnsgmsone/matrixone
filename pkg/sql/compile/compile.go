@@ -572,6 +572,8 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 }
 
 func constructValueScanBatch(ctx context.Context, proc *process.Process, node *plan.Node) (*batch.Batch, error) {
+	var nodeId uuid.UUID
+
 	if node == nil || node.TableDef == nil { // like : select 1, 2
 		bat := batch.NewWithSize(1)
 		bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, proc.Mp())
@@ -582,17 +584,17 @@ func constructValueScanBatch(ctx context.Context, proc *process.Process, node *p
 	tableDef := node.TableDef
 	colCount := len(tableDef.Cols)
 	colsData := node.RowsetData.Cols
-	rowCount := len(colsData[0].Data)
-	bat := batch.NewWithSize(colCount)
-
+	copy(nodeId[:], node.Uuid)
+	bat := proc.GetValueScanBatch(nodeId)
+	if bat == nil {
+		return nil, moerr.NewInfo(ctx, fmt.Sprintf("constructValueScanBatch failed, node id: %s", nodeId.String()))
+	}
 	for i := 0; i < colCount; i++ {
-		vec, err := rowsetDataToVector(ctx, proc, colsData[i].Data)
-		if err != nil {
+		if err := evalRowsetData(ctx, proc, colsData[i].Data, bat.Vecs[i]); err != nil {
+			bat.Clean(proc.Mp())
 			return nil, err
 		}
-		bat.Vecs[i] = vec
 	}
-	bat.SetZs(rowCount, proc.Mp())
 	return bat, nil
 }
 
@@ -2569,6 +2571,7 @@ func isSameCN(addr string, currentCNAddr string) bool {
 	return parts1[0] == parts2[0]
 }
 
+/*
 func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
 	rowCount := len(exprs)
 	if rowCount == 0 {
@@ -2655,6 +2658,7 @@ func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*pla
 	}
 	return vec, nil
 }
+*/
 
 func (s *Scope) affectedRows() uint64 {
 	affectedRows := uint64(0)
@@ -2688,4 +2692,26 @@ func (c *Compile) runSqlWithResult(sql string) (executor.Result, error) {
 		WithTxn(c.proc.TxnOperator).
 		WithDatabase(c.db)
 	return exec.Exec(c.proc.Ctx, sql, opts)
+}
+
+func evalRowsetData(ctx context.Context, proc *process.Process,
+	exprs []*plan.RowsetExpr, vec *vector.Vector) error {
+	var bats []*batch.Batch
+
+	bat := batch.NewWithSize(0)
+	bat.Zs = []int64{1}
+	defer bat.Clean(proc.Mp())
+	bats = []*batch.Batch{bat}
+	for _, expr := range exprs {
+		val, err := colexec.EvalExpressionOnce(proc, expr.Expr, bats)
+		if err != nil {
+			return err
+		}
+		if err := vec.Copy(val, int64(expr.RowPos), 0, proc.Mp()); err != nil {
+			val.Free(proc.Mp())
+			return err
+		}
+		val.Free(proc.Mp())
+	}
+	return nil
 }

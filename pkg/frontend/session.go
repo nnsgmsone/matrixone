@@ -434,6 +434,10 @@ func (ses *Session) Close() {
 	// and you must wait for all resources to be cleaned up before you can delete the mpool
 	if ses.proc != nil {
 		ses.proc.FreeVectors()
+		bats := ses.proc.GetValueScanBatchs()
+		for _, bat := range bats {
+			bat.Clean(ses.proc.Mp())
+		}
 	}
 	if ses.isNotBackgroundSession {
 		mp := ses.GetMemPool()
@@ -957,6 +961,7 @@ func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error 
 
 	plan := prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan()
 	isInsertValues, bat := checkPlanIsInsertValues(plan)
+
 	prepareStmt.IsInsertValues = isInsertValues
 	prepareStmt.InsertBat = bat
 	if prepareStmt.IsInsertValues {
@@ -1039,6 +1044,7 @@ func (ses *Session) GetGlobalVar(name string) (interface{}, error) {
 func (ses *Session) GetTxnCompileCtx() *TxnCompilerContext {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
+	ses.txnCompileCtx.proc = ses.proc
 	return ses.txnCompileCtx
 }
 

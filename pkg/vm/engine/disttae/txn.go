@@ -119,9 +119,10 @@ func (txn *Transaction) WriteBatch(
 
 func (txn *Transaction) DumpBatch(force bool, offset int) error {
 	var size uint64
+
 	txn.Lock()
 	defer txn.Unlock()
-	if !((offset > 0 && txn.workspaceSize >= colexec.WriteS3Threshold) ||
+	if !((!force && txn.workspaceSize >= colexec.WriteS3Threshold) ||
 		(force && txn.workspaceSize >= colexec.TagS3Size)) {
 		return nil
 	}
@@ -185,7 +186,7 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 		}
 		// free batches
 		for _, bat := range mp[key] {
-			bat.Clean(txn.proc.GetMPool())
+			txn.proc.PutBatch(bat)
 		}
 	}
 	txn.workspaceSize -= size

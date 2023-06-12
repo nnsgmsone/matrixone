@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -237,16 +238,15 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 					rowCount := len(colsData[0].Data)
 
 					bat := prepareStmt.InsertBat
-					bat.CleanOnlyData()
 					for i := 0; i < colCount; i++ {
-						if err = rowsetDataToVector(cwft.proc.Ctx, cwft.proc, cwft.ses.txnCompileCtx,
-							colsData[i].Data, bat.Vecs[i], executePlan.Args, prepareStmt.ufs[i]); err != nil {
+						if err := evalRowsetData(cwft.proc.Ctx, cwft.proc, colsData[i].Data,
+							bat.Vecs[i], cwft.ses.txnCompileCtx, executePlan.Args); err != nil {
 							return nil, err
 						}
 					}
-					bat.AddCnt(1)
+					bat.SetCnt(2)
 					for i := 0; i < rowCount; i++ {
-						bat.Zs = append(bat.Zs, 1)
+						bat.Zs[i] = 1
 					}
 					cwft.proc.SetPrepareBatch(bat)
 					break
