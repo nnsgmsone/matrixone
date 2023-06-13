@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -153,9 +154,10 @@ type Process struct {
 	Reg Register
 	Lim Limitation
 
-	vp           *vectorPool
-	mp           *mpool.MPool
-	prepareBatch *batch.Batch
+	vp              *vectorPool
+	mp              *mpool.MPool
+	prepareBatch    *batch.Batch
+	prepareExprList any
 
 	valueScanBatch map[[16]byte]*batch.Batch
 
@@ -187,6 +189,9 @@ type Process struct {
 	DispatchNotifyCh chan WrapCs
 
 	Aicm *defines.AutoIncrCacheManager
+
+	resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	prepareParams       *vector.Vector
 }
 
 type vectorPool struct {
@@ -238,10 +243,35 @@ func (proc *Process) GetValueScanBatchs() []*batch.Batch {
 	return bats
 }
 
+func (proc *Process) SetPrepareParams(prepareParams *vector.Vector) {
+	proc.prepareParams = prepareParams
+}
+
+func (proc *Process) GetPrepareParamsAt(i int) (*vector.Vector, error) {
+	if i < 0 || i >= proc.prepareParams.Length() {
+		return nil, moerr.NewInternalError(proc.Ctx, "get prepare params error, index %d not exists", i)
+	}
+	val := proc.prepareParams.GetRawBytesAt(i)
+	vec := vector.NewConstBytes(*proc.prepareParams.GetType(), val, 1, proc.Mp())
+	return vec, nil
+}
+
+func (proc *Process) SetResolveVariableFunc(f func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)) {
+	proc.resolveVariableFunc = f
+}
+
+func (proc *Process) GetResolveVariableFunc() func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+	return proc.resolveVariableFunc
+}
+
 func (proc *Process) SetLastInsertID(num uint64) {
 	if proc.LastInsertID != nil {
 		atomic.StoreUint64(proc.LastInsertID, num)
 	}
+}
+
+func (proc *Process) GetSessionInfo() *SessionInfo {
+	return &proc.SessionInfo
 }
 
 func (proc *Process) GetLastInsertID() uint64 {

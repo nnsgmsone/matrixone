@@ -65,6 +65,10 @@ const (
 	INIT_ROWID_OFFSET             = math.MaxUint32
 )
 
+const (
+	INSERT_MERGE_THRESHOLD = 1024
+)
+
 var (
 	_ client.Workspace = (*Transaction)(nil)
 )
@@ -115,6 +119,9 @@ type Transaction struct {
 	writes []Entry
 	// txn workspace size
 	workspaceSize uint64
+	tableWrites   struct {
+		tableEntries map[uint64][]tableEntry
+	}
 
 	dnStores []DNStore
 	proc     *process.Process
@@ -213,6 +220,8 @@ func (txn *Transaction) PutCnBlockDeletes(blockId *types.Blockid, offsets []int6
 }
 
 func (txn *Transaction) IncrStatemenetID(ctx context.Context) error {
+	txn.mergeTxnWorkspace()
+	txn.dumpBatch(false, 0)
 	txn.Lock()
 	defer txn.Unlock()
 	if txn.statementID > 0 {
@@ -291,6 +300,11 @@ type Entry struct {
 	truncate bool
 }
 
+type tableEntry struct {
+	rows    int
+	entries []*Entry
+}
+
 // isGeneratedByTruncate denotes the entry is yielded by the truncate operation.
 func (e *Entry) isGeneratedByTruncate() bool {
 	return e.typ == DELETE &&
@@ -331,12 +345,12 @@ type txnTable struct {
 	dnList    []int
 	db        *txnDatabase
 	//	insertExpr *plan.Expr
-	defs           []engine.TableDef
-	tableDef       *plan.TableDef
-	seqnums        []uint16
-	typs           []types.Type
-	_partState     *logtailreplay.PartitionState
-	modifiedBlocks []ModifyBlockMeta
+	defs       []engine.TableDef
+	tableDef   *plan.TableDef
+	seqnums    []uint16
+	typs       []types.Type
+	_partState *logtailreplay.PartitionState
+	dirtyBlks  []catalog.BlockInfo
 
 	// blockInfos stores all the block infos for this table of this transaction
 	// it is only generated when the table is not created by this transaction
@@ -443,8 +457,9 @@ type blockReader struct {
 type blockMergeReader struct {
 	withFilterMixin
 
-	table *txnTable
-	blks  []ModifyBlockMeta
+	table  *txnTable
+	blks   []catalog.BlockInfo
+	buffer []int64
 }
 
 type mergeReader struct {
@@ -454,10 +469,10 @@ type mergeReader struct {
 type emptyReader struct {
 }
 
-type ModifyBlockMeta struct {
-	meta    catalog.BlockInfo
-	deletes []int64
-}
+//type ModifyBlockMeta struct {
+//	meta    catalog.BlockInfo
+//	deletes []int64
+//}
 
 type pkRange struct {
 	isRange bool

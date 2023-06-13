@@ -199,11 +199,25 @@ func getPkValueExpr(builder *QueryBuilder, tableDef *TableDef, pkPosInValues int
 				continue
 			}
 
-			oldExpr := node.RowsetData.Cols[pkPosInValues].Data[0]
-			if !rule.IsConstant(oldExpr.Expr) {
-				return nil
+			for _, node := range builder.qry.Nodes {
+				if node.NodeType != plan.Node_VALUE_SCAN {
+					continue
+				}
+				if len(node.RowsetData.Cols[0].Data) != 1 {
+					continue
+				}
+
+				oldExpr := node.RowsetData.Cols[pkPosInValues].Data[0]
+				if !rule.IsConstant(oldExpr.Expr) {
+					return nil
+				}
+				pkValueExpr, err := forceCastExpr2(builder.GetContext(), DeepCopyExpr(oldExpr.Expr), colTyp, targetTyp)
+				if err != nil {
+					return nil
+				}
+				return pkValueExpr
 			}
-			pkValueExpr, err := forceCastExpr2(builder.GetContext(), DeepCopyExpr(oldExpr.Expr), colTyp, targetTyp)
+			pkValueExpr, err := forceCastExpr2(builder.GetContext(), DeepCopyExpr(oldExpr), colTyp, targetTyp)
 			if err != nil {
 				return nil
 			}

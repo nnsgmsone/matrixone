@@ -24,10 +24,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func (txn *Transaction) getBlockInfos(
@@ -88,7 +91,7 @@ func (txn *Transaction) WriteBatch(
 		if !insertBatchHasRowId {
 			txn.genBlock()
 			len := bat.Length()
-			vec := vector.NewVec(types.T_Rowid.ToType())
+			vec := txn.proc.GetVector(types.T_Rowid.ToType())
 			for i := 0; i < len; i++ {
 				if err := vector.AppendFixed(vec, txn.genRowId(), false,
 					txn.proc.Mp()); err != nil {
@@ -104,7 +107,7 @@ func (txn *Transaction) WriteBatch(
 		}
 		txn.workspaceSize += uint64(bat.Size())
 	}
-	txn.writes = append(txn.writes, Entry{
+	e := Entry{
 		typ:          typ,
 		bat:          bat,
 		tableId:      tableId,
@@ -113,17 +116,28 @@ func (txn *Transaction) WriteBatch(
 		databaseName: databaseName,
 		dnStore:      dnStore,
 		truncate:     truncate,
-	})
+	}
+	if e.typ == INSERT && databaseId != catalog.MO_CATALOG_ID && !truncate {
+		txn.addTableWrite(tableId, &e)
+	}
+	txn.writes = append(txn.writes, e)
 	return nil
 }
 
-func (txn *Transaction) DumpBatch(force bool, offset int) error {
+func (txn *Transaction) dumpBatch(force bool, offset int) error {
 	var size uint64
 
 	txn.Lock()
 	defer txn.Unlock()
-	if !((!force && txn.workspaceSize >= colexec.WriteS3Threshold) ||
-		(force && txn.workspaceSize >= colexec.TagS3Size)) {
+	var S3SizeThreshold = colexec.TagS3Size
+	if txn.proc != nil && txn.proc.Ctx != nil {
+		isMoLogger, ok := txn.proc.Ctx.Value(defines.IsMoLogger{}).(bool)
+		if ok && isMoLogger {
+			S3SizeThreshold = colexec.TagS3SizeForMOLogger
+		}
+	}
+	if (!force && txn.workspaceSize < colexec.WriteS3Threshold) ||
+		(force && txn.workspaceSize < S3SizeThreshold) {
 		return nil
 	}
 	for i := offset; i < len(txn.writes); i++ {
@@ -134,9 +148,11 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 			size += uint64(txn.writes[i].bat.Size())
 		}
 	}
-	if offset > 0 && size < txn.workspaceSize {
+	if !((!force && size > colexec.WriteS3Threshold) ||
+		(force && size >= S3SizeThreshold)) {
 		return nil
 	}
+
 	mp := make(map[[2]string][]*batch.Batch)
 	for i := offset; i < len(txn.writes); i++ {
 		// TODO: after shrink, we should update workspace size
@@ -152,7 +168,7 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 			mp[key] = append(mp[key], bat)
 			// DON'T MODIFY THE IDX OF AN ENTRY IN LOG
 			// THIS IS VERY IMPORTANT FOR CN BLOCK COMPACTION
-			// maybe this will cause that the log imcrements unlimitly
+			// maybe this will cause that the log increments unlimitedly
 			// txn.writes = append(txn.writes[:i], txn.writes[i+1:]...)
 			// i--
 			txn.writes[i].bat = nil
@@ -415,12 +431,27 @@ func (txn *Transaction) genRowId() types.Rowid {
 func (txn *Transaction) mergeTxnWorkspace() {
 	txn.Lock()
 	defer txn.Unlock()
-	for _, e := range txn.writes {
-		if sels, ok := txn.batchSelectList[e.bat]; ok {
-			e.bat.Shrink(sels)
-			delete(txn.batchSelectList, e.bat)
+	if len(txn.batchSelectList) > 0 {
+		for _, e := range txn.writes {
+			if sels, ok := txn.batchSelectList[e.bat]; ok {
+				e.bat.Shrink(sels)
+				delete(txn.batchSelectList, e.bat)
+			}
 		}
 	}
+	if !txn.mergeTableWrites(txn.proc) {
+		return
+	}
+	writes := txn.writes[:0]
+	for i, write := range txn.writes {
+		if write.typ == INSERT && write.bat == nil &&
+			len(write.fileName) == 0 {
+			continue
+		}
+		writes = append(writes, txn.writes[i])
+	}
+	txn.writes = writes
+	txn.statements[txn.statementID-1] = len(txn.writes)
 }
 
 func (txn *Transaction) getTableWrites(databaseId uint64, tableId uint64, writes []Entry) []Entry {
@@ -436,4 +467,67 @@ func (txn *Transaction) getTableWrites(databaseId uint64, tableId uint64, writes
 		writes = append(writes, entry)
 	}
 	return writes
+}
+
+func (txn *Transaction) addTableWrite(id uint64, e *Entry) {
+	if _, ok := txn.tableWrites.tableEntries[id]; !ok {
+		txn.tableWrites.tableEntries[id] = []tableEntry{
+			{
+				rows:    0,
+				entries: []*Entry{e},
+			},
+		}
+	}
+	tes := txn.tableWrites.tableEntries[id]
+	te := tes[len(tes)-1]
+	te.rows += e.bat.Length()
+	te.entries = append(te.entries, e)
+}
+
+func (txn *Transaction) newTableWriteEntry(id uint64) {
+	txn.tableWrites.tableEntries[id] = append(txn.tableWrites.tableEntries[id], tableEntry{})
+}
+
+func (txn *Transaction) mergeTableWrites(proc *process.Process) bool {
+	merged := false
+	for k, tes := range txn.tableWrites.tableEntries {
+		for _, te := range tes {
+			if te.rows > INSERT_MERGE_THRESHOLD && te.rows/len(te.entries) > INSERT_MERGE_THRESHOLD {
+				continue
+			}
+			if len(te.entries) == 1 {
+				continue
+			}
+			merged = true
+			var bat *batch.Batch
+			for i := range te.entries {
+				if bat == nil {
+					bat = te.entries[i].bat
+					continue
+				}
+				if bat.Length() > int(options.DefaultBlockMaxRows) {
+					bat = te.entries[i].bat
+					continue
+				}
+				for i, vec := range bat.Vecs {
+					if err := vector.GetUnionAllFunction(*vec.GetType(), proc.Mp())(vec, te.entries[i].bat.Vecs[i]); err != nil {
+						return merged
+					}
+				}
+				bat.Zs = append(bat.Zs, te.entries[i].bat.Zs...)
+				proc.PutBatch(te.entries[i].bat)
+				te.entries[i].bat = nil
+				te.entries[i] = nil
+			}
+			entries := te.entries[:0]
+			for i := range te.entries {
+				if te.entries[i] != nil {
+					entries = append(entries, te.entries[i])
+				}
+			}
+			te.entries = entries
+		}
+		txn.tableWrites.tableEntries[k] = tes[len(tes)-1:]
+	}
+	return merged
 }

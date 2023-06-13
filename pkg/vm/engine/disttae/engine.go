@@ -219,7 +219,7 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 				return "", "", err
 			}
 			distDb := db.(*txnDatabase)
-			tableName, rel, _ := distDb.getRelationById(noRepCtx, tableId)
+			tableName, rel := distDb.getRelationById(noRepCtx, tableId)
 			if rel != nil {
 				tblName = tableName
 				break
@@ -251,7 +251,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 				return false
 			}
 			distDb := db.(*txnDatabase)
-			tableName, rel, err = distDb.getRelationById(noRepCtx, tableId)
+			tableName, rel = distDb.getRelationById(noRepCtx, tableId)
 			if rel != nil {
 				return false
 			}
@@ -267,7 +267,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 				return "", "", nil, err
 			}
 			distDb := db.(*txnDatabase)
-			tableName, rel, err = distDb.getRelationById(noRepCtx, tableId)
+			tableName, rel = distDb.getRelationById(noRepCtx, tableId)
 			if rel != nil {
 				break
 			}
@@ -373,16 +373,13 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		blockId_dn_delete_metaLoc_batch: make(map[types.Blockid][]*batch.Batch),
 		batchSelectList:                 make(map[*batch.Batch][]int64),
 	}
+	txn.tableWrites.tableEntries = make(map[uint64][]tableEntry)
 	txn.readOnly.Store(true)
 	// transaction's local segment for raw batch.
 	colexec.Srv.PutCnSegment(id, colexec.TxnWorkSpaceIdType)
 	e.newTransaction(op, txn)
 
-	if err := e.pClient.checkTxnTimeIsLegal(ctx, txn.meta.SnapshotTS); err != nil {
-		e.delTransaction(txn)
-		return err
-	}
-
+	e.pClient.validLogTailMustApplied(txn.meta.SnapshotTS)
 	return nil
 }
 
@@ -398,7 +395,7 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 		return nil
 	}
 	txn.mergeTxnWorkspace()
-	err := txn.DumpBatch(true, 0)
+	err := txn.dumpBatch(true, 0)
 	if err != nil {
 		return err
 	}
@@ -470,15 +467,12 @@ func (e *Engine) Hints() (h engine.Hints) {
 func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
 	expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
-	blks := make([]*catalog.BlockInfo, len(ranges))
-	for i := range ranges {
-		blks[i] = catalog.DecodeBlockInfo(ranges[i])
-		blks[i].EntryState = false
-	}
 	if len(ranges) < num || len(ranges) == 1 {
 		for i := range ranges {
+			blk := catalog.DecodeBlockInfo(ranges[i])
+			blk.EntryState = false
 			rds[i] = newBlockReader(
-				ctx, tblDef, ts, []*catalog.BlockInfo{blks[i]}, expr, e.fs,
+				ctx, tblDef, ts, []*catalog.BlockInfo{blk}, expr, e.fs,
 			)
 		}
 		for j := len(ranges); j < num; j++ {
@@ -487,7 +481,7 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 		return rds, nil
 	}
 
-	infos, steps := groupBlocksToObjects(blks, num)
+	infos, steps := groupBlocksToObjects(ranges, num)
 	blockReaders := newBlockReaders(ctx, e.fs, tblDef, -1, ts, num, expr)
 	distributeBlocksToBlockReaders(blockReaders, num, infos, steps)
 	for i := 0; i < num; i++ {
@@ -555,5 +549,5 @@ func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
 	// after we set it to empty, actually this part of memory was not immediately released.
 	// maybe a very old transaction still using that.
 	delete(e.partitions, [2]uint64{dbId, tblId})
-	logutil.Infof("clean memory table of tbl[dbId: %d, tblId: %d]", dbId, tblId)
+	logutil.Debugf("clean memory table of tbl[dbId: %d, tblId: %d]", dbId, tblId)
 }

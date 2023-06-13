@@ -88,6 +88,9 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.Aicm = p.Aicm
 	proc.LoadTag = p.LoadTag
 
+	proc.prepareParams = p.prepareParams
+	proc.resolveVariableFunc = p.resolveVariableFunc
+
 	// reg and cancel
 	proc.Ctx = newctx
 	proc.Cancel = cancel
@@ -153,6 +156,14 @@ func (proc *Process) SetPrepareBatch(bat *batch.Batch) {
 
 func (proc *Process) GetPrepareBatch() *batch.Batch {
 	return proc.prepareBatch
+}
+
+func (proc *Process) SetPrepareExprList(exprList any) {
+	proc.prepareExprList = exprList
+}
+
+func (proc *Process) GetPrepareExprList() any {
+	return proc.prepareExprList
 }
 
 func (proc *Process) OperatorOutofMemory(size int64) bool {
