@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -331,15 +332,17 @@ func (r *blockReader) Read(
 	}
 
 	//prefetch some objects
-	for len(r.steps) > 0 && r.steps[0] == r.currentStep {
-		if filter != nil && blockInfo.Sorted {
-			blockio.BlockPrefetch(r.filterState.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]})
-		} else {
-			blockio.BlockPrefetch(r.columns.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]})
+	/*
+		for len(r.steps) > 0 && r.steps[0] == r.currentStep {
+			if filter != nil && blockInfo.Sorted {
+				blockio.BlockPrefetch(r.filterState.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]})
+			} else {
+				blockio.BlockPrefetch(r.columns.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]})
+			}
+			r.infos = r.infos[1:]
+			r.steps = r.steps[1:]
 		}
-		r.infos = r.infos[1:]
-		r.steps = r.steps[1:]
-	}
+	*/
 
 	// read the block
 	bat, err := blockio.BlockRead(
@@ -360,6 +363,21 @@ func (r *blockReader) Read(
 
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 		logutil.Debug(testutil.OperatorCatchBatch("block reader", bat))
+	}
+	{
+		fmt.Printf("+++++read: %v\n", bat.Size())
+	}
+	if bat.Length() > 0 {
+		ibat, _ := bat.Dup(mp)
+		{
+			bat.Vecs = nil
+			bat.Zs = nil
+			bat = ibat
+		}
+	} else {
+		bat.Vecs = nil
+		bat.Zs = nil
+		return batch.EmptyBatch, nil
 	}
 	return bat, nil
 }
