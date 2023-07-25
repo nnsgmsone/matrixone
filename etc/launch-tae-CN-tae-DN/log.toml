@@ -3,7 +3,7 @@ service-type = "LOG"
 data-dir = "./mo-data"
 
 [log]
-level = "info"
+level = "fatal"
 format = "console"
 max-size = 512
 
@@ -26,3 +26,7 @@ disk-evict-target = 0.8
 [[fileservice]]
 name = "ETL"
 backend = "DISK-ETL"
+
+[observability]
+disableTrace = true
+disableMetric = true

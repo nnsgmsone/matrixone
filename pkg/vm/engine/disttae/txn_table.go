@@ -17,7 +17,6 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1655,6 +1654,9 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 }
 
 func (tbl *txnTable) PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keysVector *vector.Vector) (bool, error) {
+	{
+		return true, nil
+	}
 
 	switch tbl.tableId {
 	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
@@ -1731,7 +1733,6 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 	var rowid types.Rowid
 	var objMeta objectio.ObjectMeta
 
-	sels := make([]int, 0, 8192)
 	columns := []uint16{objectio.SEQNUM_ROWID}
 	colTypes := []types.Type{objectio.RowidType}
 	tableDef := tbl.getTableDef()
@@ -1785,22 +1786,6 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 		if err != nil {
 			return rowid, false, err
 		}
-		{
-			sels = sels[:0]
-			state, err := tbl.getPartitionState(tbl.proc.Ctx)
-			if err != nil {
-				return rowid, false, err
-			}
-			ts := types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)
-			iter := state.NewRowsIter(ts, &blk.BlockID, true)
-			for iter.Next() {
-				entry := iter.Entry()
-				_, offset := entry.RowID.Decode()
-				sels = append(sels, int(offset))
-			}
-			iter.Close()
-			sort.Ints(sels)
-		}
 		vec, err := colexec.EvalExpressionOnce(tbl.db.txn.proc, filter, []*batch.Batch{bat})
 		if err != nil {
 			return rowid, false, err
@@ -1808,20 +1793,10 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 		bs := vector.MustFixedCol[bool](vec)
 		for i, b := range bs {
 			if b {
-				if _, ok := sort.Find(len(sels), func(j int) int {
-					if i > sels[j] {
-						return 1
-					}
-					if i < sels[j] {
-						return -1
-					}
-					return 0
-				}); !ok {
-					rowids := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
-					vec.Free(tbl.proc.Mp())
-					bat.Clean(tbl.proc.Mp())
-					return rowids[i], true, nil
-				}
+				rowids := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
+				vec.Free(tbl.proc.Mp())
+				bat.Clean(tbl.proc.Mp())
+				return rowids[i], true, nil
 			}
 		}
 		vec.Free(tbl.proc.Mp())
