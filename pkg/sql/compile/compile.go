@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"os"
 	"runtime"
 	"sort"
 	"strings"
@@ -904,6 +905,10 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) >
 			float64(DistributedThreshold) &&
 			!arg.DeleteCtx.CanTruncate {
+			{
+				fmt.Printf("++++remote delete: %v\n", nodeStats.GetCost())
+				os.Exit(0)
+			}
 			rs := c.newDeleteMergeScope(arg, ss)
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op: vm.MergeDelete,
@@ -1004,6 +1009,10 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			float64(DistributedThreshold) || c.anal.qry.LoadTag
 
 		if toWriteS3 {
+			{
+				fmt.Printf("++++remote delete: %v\n", toWriteS3)
+				os.Exit(0)
+			}
 			if !haveSinkScanInPlan(ns, n.Children[0]) && len(ss) != 1 {
 				insertArg, err := constructInsert(n, c.e, c.proc)
 				if err != nil {
