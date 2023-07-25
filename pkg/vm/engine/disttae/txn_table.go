@@ -625,13 +625,14 @@ func (tbl *txnTable) rangesOnePart(
 		if err != nil {
 			return err
 		}
-		deleteBlks, createBlks := state.Copy().GetBlksBetween(types.TimestampToTS(tbl.db.txn.lastTS),
+		deleteBlks, createBlks := state.Copy().GetBlksBetween(types.TimestampToTS(tbl.lastTS),
 			types.TimestampToTS(tbl.db.txn.meta.SnapshotTS))
 		if len(deleteBlks) > 0 {
 			if err := tbl.updateDeleteInfo(deleteBlks, createBlks, committedblocks); err != nil {
 				return err
 			}
 		}
+		tbl.lastTS = tbl.db.txn.meta.SnapshotTS
 	}
 
 	//blks contains all visible blocks to this txn, namely
