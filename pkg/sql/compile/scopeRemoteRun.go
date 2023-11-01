@@ -17,10 +17,12 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
 	"hash/crc32"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 
@@ -206,6 +208,7 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 	if sender.receiveCh == nil {
 		sender.receiveCh, err = sender.streamSender.Receive()
 		if err != nil {
+			getLogger().Error("failed to receive message from server:", zap.String("err", err.Error()))
 			return err
 		}
 	}
@@ -219,18 +222,21 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 	case *dispatch.Argument:
 		lastArg = arg
 	default:
+		getLogger().Error("failed to receive message from server: not connector or dispatcher")
 		return moerr.NewInvalidInput(c.ctx, "last operator should only be connector or dispatcher")
 	}
 
 	for {
 		val, err = sender.receiveMessage()
 		if err != nil || val == nil {
+			getLogger().Error("failed to receive message from server:", zap.String("err", err.Error()))
 			return err
 		}
 
 		m := val.(*pipeline.Message)
 
 		if errInfo, get := m.TryToGetMoErr(); get {
+			getLogger().Error("failed to receive message from server:", zap.String("err", errInfo.Error()))
 			return errInfo
 		}
 		if m.IsEndMessage() {
@@ -238,6 +244,7 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 			if len(anaData) > 0 {
 				ana := new(pipeline.AnalysisList)
 				if err = ana.Unmarshal(anaData); err != nil {
+					getLogger().Error("failed to receive message from server:", zap.String("err", err.Error()))
 					return err
 				}
 				mergeAnalyseInfo(c.anal, ana)
@@ -246,6 +253,7 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 		}
 		// XXX some order check just for safety ?
 		if sequence != m.Sequence {
+			getLogger().Error("failed to receive message from server: out of order")
 			return moerr.NewInternalErrorNoCtx("Batch packages passed by morpc are out of order")
 		}
 		sequence++
@@ -260,12 +268,14 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 			continue
 		}
 		if m.Checksum != crc32.ChecksumIEEE(dataBuffer) {
+			getLogger().Error("failed to receive message from server: checksum failed")
 			return moerr.NewInternalErrorNoCtx("Packages delivered by morpc is broken")
 		}
 
 		bat, err := decodeBatch(c.proc.Mp(), c.proc, dataBuffer)
 		dataBuffer = nil
 		if err != nil {
+			getLogger().Error("failed to receive message from server:", zap.String("err", err.Error()))
 			return err
 		}
 		lastAnalyze.Network(bat)
@@ -273,10 +283,12 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 
 		if isConnector {
 			if ok, err := connector.Call(-1, s.Proc, lastArg, false, false); err != nil || ok == process.ExecStop {
+				getLogger().Error("failed to receive message from server:", zap.String("err", err.Error()))
 				return err
 			}
 		} else {
 			if ok, err := dispatch.Call(-1, s.Proc, lastArg, false, false); err != nil || ok == process.ExecStop {
+				getLogger().Error("failed to receive message from server:", zap.String("err", err.Error()))
 				return err
 			}
 		}

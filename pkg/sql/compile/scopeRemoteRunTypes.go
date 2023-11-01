@@ -16,10 +16,11 @@ package compile
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"hash/crc32"
 	"runtime"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -146,16 +147,21 @@ func (sender *messageSenderOnClient) send(
 }
 
 func (sender *messageSenderOnClient) receiveMessage() (morpc.Message, error) {
-	select {
-	case <-sender.ctx.Done():
-		return nil, nil
+	for {
+		select {
+		case <-sender.ctx.Done():
+			return nil, nil
 
-	case val, ok := <-sender.receiveCh:
-		if !ok || val == nil {
-			// ch close
-			return nil, moerr.NewStreamClosed(sender.ctx)
+		case val, ok := <-sender.receiveCh:
+			if !ok || val == nil {
+				// ch close
+				return nil, moerr.NewStreamClosed(sender.ctx)
+			}
+			return val, nil
+		case <-time.After(120 * time.Second):
+			getLogger().Error("failed to receive message from server: out of time")
+			continue
 		}
-		return val, nil
 	}
 }
 
