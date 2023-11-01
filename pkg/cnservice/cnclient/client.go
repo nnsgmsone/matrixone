@@ -155,10 +155,9 @@ func NewCNClient(
 		morpc.WithBackendLogger(logger),
 	)
 
-	cli.client, err = morpc.NewClient(
-		"pipeline-client",
-		factory,
+	cli.client, err = morpc.NewClient(factory,
 		morpc.WithClientMaxBackendPerHost(cfg.MaxSenderNumber),
+		morpc.WithClientTag("cn-client"),
 		morpc.WithClientLogger(logger),
 	)
 	cli.ready = err == nil

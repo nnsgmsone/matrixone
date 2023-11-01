@@ -80,7 +80,6 @@ func WithServerDisableAutoCancelContext() ServerOption {
 
 type server struct {
 	name        string
-	metrics     *serverMetrics
 	address     string
 	logger      *zap.Logger
 	codec       Codec
@@ -103,16 +102,12 @@ type server struct {
 // NewRPCServer create rpc server with options. After the rpc server starts, one link corresponds to two
 // goroutines, one read and one write. All messages to be written are first written to a buffer chan and
 // sent to the client by the write goroutine.
-func NewRPCServer(
-	name, address string,
-	codec Codec,
-	options ...ServerOption) (RPCServer, error) {
+func NewRPCServer(name, address string, codec Codec, options ...ServerOption) (RPCServer, error) {
 	s := &server{
 		name:     name,
-		metrics:  newServerMetrics(name),
 		address:  address,
 		codec:    codec,
-		stopper:  stopper.NewStopper(name),
+		stopper:  stopper.NewStopper(fmt.Sprintf("rpc-server-%s", name)),
 		sessions: &sync.Map{},
 	}
 	for _, opt := range options {
@@ -192,8 +187,6 @@ func (s *server) adjust() {
 }
 
 func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) error {
-	s.metrics.receiveCounter.Inc()
-
 	cs, err := s.getSession(rs)
 	if err != nil {
 		return err
@@ -314,10 +307,6 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 				fetch()
 
 				if len(responses) > 0 {
-					s.metrics.sendingBatchSizeGauge.Set(float64(len(responses)))
-
-					start := time.Now()
-
 					var fields []zap.Field
 					ce := s.logger.Check(zap.DebugLevel, "write responses")
 					if ce != nil {
@@ -327,8 +316,6 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 					written := 0
 					timeout := time.Duration(0)
 					for _, f := range responses {
-						s.metrics.writeLatencyDurationHistogram.Observe(start.Sub(f.send.createAt).Seconds())
-
 						if !s.options.filter(f.send.Message) {
 							f.messageSent(messageSkipped)
 							continue
@@ -391,8 +378,6 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 					for _, f := range responses {
 						f.messageSent(nil)
 					}
-
-					s.metrics.writeDurationHistogram.Observe(time.Since(start).Seconds())
 				}
 			}
 		}
@@ -401,7 +386,6 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 
 func (s *server) closeClientSession(cs *clientSession) {
 	s.sessions.Delete(cs.conn.ID())
-	s.metrics.sessionSizeGauge.Set(float64(s.getSessionCount()))
 	if err := cs.Close(); err != nil {
 		s.logger.Error("close client session failed",
 			zap.Error(err))
@@ -413,14 +397,13 @@ func (s *server) getSession(rs goetty.IOSession) (*clientSession, error) {
 		return v.(*clientSession), nil
 	}
 
-	cs := newClientSession(s.metrics, rs, s.codec, s.newFuture)
+	cs := newClientSession(rs, s.codec, s.newFuture)
 	v, loaded := s.sessions.LoadOrStore(rs.ID(), cs)
 	if loaded {
 		close(cs.c)
 		return v.(*clientSession), nil
 	}
 
-	s.metrics.sessionSizeGauge.Set(float64(s.getSessionCount()))
 	rs.Ref()
 	if err := s.startWriteLoop(cs); err != nil {
 		s.closeClientSession(cs)
@@ -459,17 +442,7 @@ func (s *server) closeDisconnectedSession(ctx context.Context) {
 	}
 }
 
-func (s *server) getSessionCount() int {
-	n := 0
-	s.sessions.Range(func(key, value any) bool {
-		n++
-		return true
-	})
-	return n
-}
-
 type clientSession struct {
-	metrics       *serverMetrics
 	codec         Codec
 	conn          goetty.IOSession
 	c             chan *Future
@@ -491,13 +464,11 @@ type clientSession struct {
 }
 
 func newClientSession(
-	metrics *serverMetrics,
 	conn goetty.IOSession,
 	codec Codec,
 	newFutureFunc func() *Future) *clientSession {
 	ctx, cancel := context.WithCancel(context.Background())
 	cs := &clientSession{
-		metrics:                 metrics,
 		closedC:                 make(chan struct{}),
 		codec:                   codec,
 		c:                       make(chan *Future, 32),
@@ -571,8 +542,6 @@ func (cs *clientSession) Write(
 }
 
 func (cs *clientSession) send(msg RPCMessage) (*Future, error) {
-	cs.metrics.sendCounter.Inc()
-
 	response := msg.Message
 	if err := cs.codec.Valid(response); err != nil {
 		return nil, err

@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
 	"os"
 	"strings"
@@ -185,9 +184,6 @@ func (h *Handle) HandleCommit(
 	if txn.Is2PC() {
 		txn.SetCommitTS(types.TimestampToTS(meta.GetCommitTS()))
 	}
-
-	v2.TxnBeforeCommitDurationHistogram.Observe(time.Since(start).Seconds())
-
 	err = txn.Commit(ctx)
 	cts = txn.GetCommitTS().ToTimestamp()
 

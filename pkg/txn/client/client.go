@@ -495,12 +495,6 @@ func (client *txnClient) AbortAllRunningTxn() {
 	client.mu.waitActiveTxns = client.mu.waitActiveTxns[:0]
 	client.mu.Unlock()
 
-	if client.timestampWaiter != nil {
-		// Cancel all waiters, means that all waiters do not need to wait for
-		// the newer timestamp from logtail consumer.
-		client.timestampWaiter.Cancel()
-	}
-
 	for _, op := range ops {
 		tempWorkspace := op.workspace
 

@@ -107,8 +107,7 @@ func NewMessageHandler[REQ, RESP MethodBasedMessage](
 		opt(s)
 	}
 
-	rpc, err := s.cfg.NewServer(
-		name,
+	rpc, err := s.cfg.NewServer(name,
 		address,
 		getLogger().RawLogger(),
 		func() Message { return pool.AcquireRequest() },

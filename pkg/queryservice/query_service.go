@@ -16,9 +16,8 @@ package queryservice
 
 import (
 	"context"
-	"time"
-
 	"github.com/pkg/errors"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -73,15 +72,14 @@ func NewQueryService(serviceID string, address string, cfg morpc.Config, sm *Ses
 		func() *pb.Request { return &pb.Request{} },
 		func() *pb.Response { return &pb.Response{} })
 
-	client, err := cfg.NewClient(
-		"query-client",
+	client, err := cfg.NewClient(serviceName,
 		logger.RawLogger(),
 		func() morpc.Message { return pool.AcquireResponse() })
 	if err != nil {
 		return nil, err
 	}
 
-	h, err := morpc.NewMessageHandler("query-server", address, cfg, pool)
+	h, err := morpc.NewMessageHandler(serviceName, address, cfg, pool)
 	if err != nil {
 		return nil, err
 	}

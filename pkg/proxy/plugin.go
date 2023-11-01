@@ -99,9 +99,10 @@ func newRPCPlugin(backend string, timeout time.Duration) (*rpcPlugin, error) {
 	clientOpts := []morpc.ClientOption{
 		morpc.WithClientInitBackends([]string{backend}, []int{1}),
 		morpc.WithClientMaxBackendPerHost(10),
+		morpc.WithClientTag("plugin-client"),
 		morpc.WithClientLogger(logutil.GetGlobalLogger()),
 	}
-	cli, err := morpc.NewClient("plugin-client", bf, clientOpts...)
+	cli, err := morpc.NewClient(bf, clientOpts...)
 	if err != nil {
 		return nil, err
 	}

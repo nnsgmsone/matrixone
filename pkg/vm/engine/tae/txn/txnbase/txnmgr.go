@@ -17,7 +17,6 @@ package txnbase
 import (
 	"context"
 	"fmt"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"sync"
 	"sync/atomic"
@@ -477,12 +476,14 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 	now := time.Now()
 	for _, item := range items {
 		op := item.(*OpTxn)
-		t0 := time.Now()
+
 		// Idempotent check
 		if state := op.Txn.GetTxnState(false); state != txnif.TxnStateActive {
 			op.Txn.WaitDone(moerr.NewTxnNotActiveNoCtx(txnif.TxnStrState(state)), false)
 			continue
 		}
+
+		t0 := time.Now()
 
 		// Mainly do : 1. conflict check for 1PC Commit or 2PC Prepare;
 		//   		   2. push the AppendNode into the MVCCHandle of block
@@ -517,8 +518,6 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 		if err := mgr.EnqueueFlushing(op); err != nil {
 			panic(err)
 		}
-
-		v2.TxnDequeuePreparingDurationHistogram.Observe(time.Since(t0).Seconds())
 	}
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug("[dequeuePreparing]",
@@ -531,9 +530,9 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 func (mgr *TxnManager) onPrepareWAL(items ...any) {
 	now := time.Now()
 	for _, item := range items {
-		t0 := time.Now()
 		op := item.(*OpTxn)
 		if op.Txn.GetError() == nil && op.Op == OpCommit || op.Op == OpPrepare {
+			t0 := time.Now()
 			if err := op.Txn.PrepareWAL(); err != nil {
 				panic(err)
 			}
@@ -555,8 +554,6 @@ func (mgr *TxnManager) onPrepareWAL(items ...any) {
 		if _, err := mgr.FlushQueue.Enqueue(op); err != nil {
 			panic(err)
 		}
-
-		v2.TxnOnPrepareWALDurationHistogram.Observe(time.Since(t0).Seconds())
 	}
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug("[prepareWAL]",
@@ -589,7 +586,6 @@ func (mgr *TxnManager) dequeuePrepared(items ...any) {
 		if enable && dequeuePreparedDuration > threshold && op.Txn.GetContext() != nil {
 			op.Txn.GetStore().SetContext(context.WithValue(op.Txn.GetContext(), common.PrepareWAL, &common.DurationRecords{Duration: dequeuePreparedDuration}))
 		}
-		v2.TxnDequeuePreparedDurationHistogram.Observe(dequeuePreparedDuration.Seconds())
 	}
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug("[dequeuePrepared]",

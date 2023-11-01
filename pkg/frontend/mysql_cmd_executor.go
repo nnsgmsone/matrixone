@@ -1629,10 +1629,6 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 		v2.TxnStatementBuildPlanDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	stats := statistic.StatsInfoFromContext(requestCtx)
-	stats.PlanStart()
-	defer stats.PlanEnd()
-
 	var ret *plan2.Plan
 	var err error
 	if ses != nil {
@@ -2584,10 +2580,8 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 
 	ses.SetQueryInProgress(true)
 	ses.SetQueryStart(time.Now())
-	ses.SetQueryInExecute(true)
 	defer ses.SetQueryEnd(time.Now())
 	defer ses.SetQueryInProgress(false)
-	defer ses.SetQueryInExecute(false)
 
 	// per statement profiler
 	requestCtx, endStmtProfile := fileservice.NewStatementProfiler(requestCtx)
@@ -2741,11 +2735,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				return err
 			}
 		}
-		if ses.GetQueryInExecute() {
-			logStatementStatus(requestCtx, ses, stmt, success, nil)
-		} else {
-			logStatementStatus(requestCtx, ses, stmt, fail, moerr.NewInternalError(requestCtx, "query is killed"))
-		}
+		logStatementStatus(requestCtx, ses, stmt, success, nil)
 		return err
 	}
 
@@ -3637,20 +3627,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 	proc.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
 	ses.txnCompileCtx.SetProcess(ses.proc)
 	ses.proc.SessionInfo = proc.SessionInfo
-
-	statsInfo := statistic.StatsInfo{}
-	requestCtx = statistic.ContextWithStatsInfo(requestCtx, &statsInfo)
-
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
 		input,
 		ses.GetUserName(),
 		pu.StorageEngine,
 		proc, ses)
-
-	ParseDuration := time.Since(beginInstant)
-
 	if err != nil {
-		statsInfo.ParseDuration = ParseDuration
 		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(input.getSql()), input.getSqlSourceTypes(), err)
 		retErr = err
 		if _, ok := err.(*moerr.Error); !ok {
@@ -3668,7 +3650,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 
 	singleStatement := len(cws) == 1
 	sqlRecord := parsers.HandleSqlForRecord(input.getSql())
-
 	for i, cw := range cws {
 		if cwft, ok := cw.(*TxnComputationWrapper); ok {
 			if cwft.stmt.GetQueryType() == tree.QueryTypeDDL || cwft.stmt.GetQueryType() == tree.QueryTypeDCL ||
@@ -3688,11 +3669,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		stmt := cw.GetAst()
 		sqlType := input.getSqlSourceType(i)
 		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant, sqlRecord[i], sqlType, singleStatement)
-
-		statsInfo.Reset()
-		//average parse duration
-		statsInfo.ParseDuration = time.Duration(ParseDuration.Nanoseconds() / int64(len(cws)))
-
 		tenant := ses.GetTenantNameWithStmt(stmt)
 		//skip PREPARE statement here
 		if ses.GetTenantInfo() != nil && !IsPrepareStatement(stmt) {
@@ -4314,18 +4290,6 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 				stats.BytesScan += bytes
 			}
 		}
-
-		statsInfo := statistic.StatsInfoFromContext(ctx)
-		if statsInfo != nil {
-
-			statsByte.WithTimeConsumed(
-				statsByte.GetTimeConsumed() +
-					float64(statsInfo.ParseDuration) +
-					float64(statsInfo.CompileDuration) +
-					float64(statsInfo.PlanDuration))
-
-		}
-
 	} else {
 		statsByte = statistic.DefaultStatsArray
 	}

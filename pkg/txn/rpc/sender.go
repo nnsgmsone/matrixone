@@ -85,8 +85,7 @@ func NewSender(
 
 	s.cfg.BackendOptions = append(s.cfg.BackendOptions,
 		morpc.WithBackendStreamBufferSize(10000))
-	client, err := s.cfg.NewClient(
-		"txn-client",
+	client, err := s.cfg.NewClient("txn-rpc-sender",
 		s.rt.Logger().RawLogger(),
 		func() morpc.Message { return s.acquireResponse() })
 	if err != nil {

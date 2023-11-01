@@ -80,7 +80,7 @@ type ClientConn interface {
 	// GetTenant returns the tenant which this connection belongs to.
 	GetTenant() Tenant
 	// SendErrToClient sends access error to MySQL client.
-	SendErrToClient(err error)
+	SendErrToClient(errMsg string)
 	// BuildConnWithServer selects a CN server and connects to it, then
 	// returns the connection. If sendToClient is true, means that the
 	// packet received from CN server should be sent to client because
@@ -123,12 +123,12 @@ type clientConn struct {
 	router Router
 	// tun is the tunnel which this client connection belongs to.
 	tun *tunnel
-	// redoStmts keeps all the statements that need to re-execute in the
-	// new session after it is transferred. It should contain:
-	// 1. set variable stmts
-	// 2. prepare stmts
-	// 3. use stmts
-	redoStmts []string
+	// setVarStmts keeps all set user variable statements. When connection
+	// is transferred, set all these variables first.
+	setVarStmts []string
+	// prepareStmts keeps all prepare statements. When connection
+	// is transferred, execute all these prepare statements first.
+	prepareStmts []string
 	// tlsConfig is the config of TLS.
 	tlsConfig *tls.Config
 	// ipNetList is the list of ip net, which is parsed from CIDRs.
@@ -225,9 +225,9 @@ func (c *clientConn) GetTenant() Tenant {
 }
 
 // SendErrToClient implements the ClientConn interface.
-func (c *clientConn) SendErrToClient(err error) {
-	errorCode, sqlState, msg := frontend.RewriteError(err, "")
-	p := c.mysqlProto.MakeErrPayload(errorCode, sqlState, msg)
+func (c *clientConn) SendErrToClient(errMsg string) {
+	accErr := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
+	p := c.mysqlProto.MakeErrPayload(accErr.ErrorCode, accErr.SqlStates[0], errMsg)
 	if err := c.mysqlProto.WritePacket(p); err != nil {
 		c.log.Error("failed to send access error to client", zap.Error(err))
 	}
@@ -266,15 +266,29 @@ func (c *clientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []by
 		return c.handleSetVar(ev)
 	case *prepareEvent:
 		return c.handlePrepare(ev)
-	case *useEvent:
-		return c.handleUse(ev)
 	default:
 	}
 	return nil
 }
 
 func (c *clientConn) sendErr(err error, resp chan<- []byte) {
-	errCode, sqlState, errMsg := frontend.RewriteError(err, "")
+	var errCode uint16
+	var sqlState, errMsg string
+	switch myErr := err.(type) {
+	case *moerr.Error:
+		if myErr.MySQLCode() != moerr.ER_UNKNOWN_ERROR {
+			errCode = myErr.MySQLCode()
+		} else {
+			errCode = myErr.ErrorCode()
+		}
+		errMsg = myErr.Error()
+		sqlState = myErr.SqlState()
+	default:
+		fail := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
+		errCode = fail.ErrorCode
+		sqlState = fail.SqlStates[0]
+		errMsg = err.Error()
+	}
 	payload := c.mysqlProto.MakeErrPayload(
 		errCode, sqlState, errMsg)
 	r := &frontend.Packet{
@@ -333,19 +347,13 @@ func (c *clientConn) handleKillQuery(e *killQueryEvent, resp chan<- []byte) erro
 
 // handleSetVar handles the set variable event.
 func (c *clientConn) handleSetVar(e *setVarEvent) error {
-	c.redoStmts = append(c.redoStmts, e.stmt)
+	c.setVarStmts = append(c.setVarStmts, e.stmt)
 	return nil
 }
 
 // handleSetVar handles the prepare event.
 func (c *clientConn) handlePrepare(e *prepareEvent) error {
-	c.redoStmts = append(c.redoStmts, e.stmt)
-	return nil
-}
-
-// handleUse handles the use event.
-func (c *clientConn) handleUse(e *useEvent) error {
-	c.redoStmts = append(c.redoStmts, e.stmt)
+	c.prepareStmts = append(c.prepareStmts, e.stmt)
 	return nil
 }
 
@@ -424,13 +432,19 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 			codeAuthFailed)
 	}
 
-	// Re-execute the statements.
-	for _, stmt := range c.redoStmts {
+	// Set the use defined variables, including session variables and user variables.
+	for _, stmt := range c.setVarStmts {
 		if _, err := sc.ExecStmt(stmt, nil); err != nil {
 			return nil, err
 		}
 	}
 
+	// Execute the prepare statements.
+	for _, stmt := range c.prepareStmts {
+		if _, err := sc.ExecStmt(stmt, nil); err != nil {
+			return nil, err
+		}
+	}
 	return sc, nil
 }
 

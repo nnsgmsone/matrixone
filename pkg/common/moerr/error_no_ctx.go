@@ -270,10 +270,6 @@ func NewTxnStaleNoCtx() *Error {
 	return newError(Context(), ErrTxnStale)
 }
 
-func NewWaiterCanceledNoCtx() *Error {
-	return newError(Context(), ErrWaiterCanceled)
-}
-
 func NewNotFoundNoCtx() *Error {
 	return newError(Context(), ErrNotFound)
 }

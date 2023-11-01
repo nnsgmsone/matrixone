@@ -15,7 +15,6 @@
 package dashboard
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"net/http"
@@ -31,42 +30,26 @@ import (
 )
 
 var (
-	moFolderName = "Matrixone"
+	txnFolderName     = "Txn"
+	logtailFolderName = "LogTail"
+	fsFolderName      = "FileService"
+	taskFolderName    = "Tasks"
 )
 
 type DashboardCreator struct {
-	cli             *grabana.Client
-	dataSource      string
-	extraFilterFunc func() string
-	by              string
+	cli        *grabana.Client
+	dataSource string
 }
 
-func NewCloudDashboardCreator(
+func NewDashboardCreator(
 	host,
 	username,
 	password,
 	dataSource string) *DashboardCreator {
-	dc := &DashboardCreator{
+	return &DashboardCreator{
 		cli:        grabana.NewClient(http.DefaultClient, host, grabana.WithBasicAuth(username, password)),
 		dataSource: dataSource,
 	}
-	dc.extraFilterFunc = dc.getCloudFilters
-	dc.by = "pod"
-	return dc
-}
-
-func NewLocalDashboardCreator(
-	host,
-	username,
-	password,
-	dataSource string) *DashboardCreator {
-	dc := &DashboardCreator{
-		cli:        grabana.NewClient(http.DefaultClient, host, grabana.WithBasicAuth(username, password)),
-		dataSource: dataSource,
-	}
-	dc.extraFilterFunc = dc.getLocalFilters
-	dc.by = "instance"
-	return dc
 }
 
 func (c *DashboardCreator) Create() error {
@@ -82,15 +65,7 @@ func (c *DashboardCreator) Create() error {
 		return err
 	}
 
-	if err := c.initFileServiceDashboard(); err != nil {
-		return err
-	}
-
-	if err := c.initRPCDashboard(); err != nil {
-		return err
-	}
-
-	return nil
+	return c.initFileServiceDashboard()
 }
 
 func (c *DashboardCreator) createFolder(name string) (*grabana.Folder, error) {
@@ -120,30 +95,15 @@ func (c *DashboardCreator) getHistogram(
 	metric string,
 	percents []float64,
 	columns []float32) []row.Option {
-	return c.getHistogramWithExtraBy(metric, percents, columns, "")
-}
-
-func (c *DashboardCreator) getHistogramWithExtraBy(
-	metric string,
-	percents []float64,
-	columns []float32,
-	extraBy string) []row.Option {
 	var options []row.Option
+
 	for i := 0; i < len(percents); i++ {
 		percent := percents[i]
-
-		query := fmt.Sprintf("histogram_quantile(%f, sum(rate(%s[$interval])) by (le, "+c.by+"))", percent, metric)
-		legend := "{{ " + c.by + " }}"
-		if len(extraBy) > 0 {
-			query = fmt.Sprintf("histogram_quantile(%f, sum(rate(%s[$interval])) by (le, "+c.by+", %s))", percent, metric, extraBy)
-			legend = "{{ " + c.by + "-" + extraBy + " }}"
-		}
-
 		options = append(options, c.withGraph(
 			fmt.Sprintf("P%f time", percent*100),
 			columns[i],
-			query,
-			legend,
+			fmt.Sprintf("histogram_quantile(%f, sum(rate(%s[$interval])) by (le, pod))", percent, metric),
+			"{{ pod }}",
 			axis.Unit("s"),
 			axis.Min(0)))
 	}
@@ -161,8 +121,8 @@ func (c *DashboardCreator) getBytesHistogram(
 		options = append(options, c.withGraph(
 			fmt.Sprintf("P%f time", percent*100),
 			columns[i],
-			fmt.Sprintf("histogram_quantile(%f, sum(rate(%s[$interval])) by (le, "+c.by+"))", percent, metric),
-			"{{ "+c.by+" }}",
+			fmt.Sprintf("histogram_quantile(%f, sum(rate(%s[$interval])) by (le, pod))", percent, metric),
+			"{{ pod }}",
 			axis.Unit("bytes"),
 			axis.Min(0)))
 	}
@@ -171,7 +131,7 @@ func (c *DashboardCreator) getBytesHistogram(
 
 func (c *DashboardCreator) withRowOptions(rows ...dashboard.Option) []dashboard.Option {
 	return append(rows,
-		dashboard.AutoRefresh("30s"),
+		dashboard.AutoRefresh("5s"),
 		dashboard.VariableAsInterval(
 			"interval",
 			interval.Default("1m"),
@@ -204,35 +164,4 @@ func (c *DashboardCreator) withRowOptions(rows ...dashboard.Option) []dashboard.
 			query.Label("pod"),
 			query.Request("label_values(pod)"),
 		))
-}
-
-func (c *DashboardCreator) getMetricWithFilter(name string, filter string) string {
-	var metric bytes.Buffer
-	extraFilters := c.extraFilterFunc()
-
-	if len(filter) == 0 && len(extraFilters) == 0 {
-		return name
-	}
-
-	metric.WriteString(name)
-	metric.WriteString("{")
-	if filter != "" {
-		metric.WriteString(filter)
-		if len(extraFilters) > 0 {
-			metric.WriteString(",")
-		}
-	}
-	if len(extraFilters) > 0 {
-		metric.WriteString(c.extraFilterFunc())
-	}
-	metric.WriteString("}")
-	return metric.String()
-}
-
-func (c *DashboardCreator) getCloudFilters() string {
-	return `matrixone_cloud_main_cluster=~"$physicalCluster", matrixone_cloud_cluster=~"$cluster", pod=~"$pod"`
-}
-
-func (c *DashboardCreator) getLocalFilters() string {
-	return ""
 }

@@ -228,7 +228,15 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) (bytesWritten int,
 	fileWithChecksum, put := NewFileWithChecksumOSFile(ctx, f, _BlockContentSize, l.perfCounterSets)
 	defer put.Put()
 
-	r := newIOEntriesReader(ctx, vector.Entries)
+	var r io.Reader
+	r = newIOEntriesReader(ctx, vector.Entries)
+	if vector.Hash.Sum != nil && vector.Hash.New != nil {
+		h := vector.Hash.New()
+		r = io.TeeReader(r, h)
+		defer func() {
+			*vector.Hash.Sum = h.Sum(nil)
+		}()
+	}
 
 	var buf []byte
 	putBuf := ioBufferPool.Get(&buf)

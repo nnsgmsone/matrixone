@@ -20,12 +20,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCreateCloudDashboard(t *testing.T) {
+func TestCreateDashboard(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
 	}
 
-	c := NewCloudDashboardCreator("http://127.0.0.1", "admin", "admin", "Prometheus")
+	c := NewDashboardCreator("http://127.0.0.1:3000", "admin", "admin", "Prometheus")
 	require.NoError(t, c.Create())
 }

@@ -42,8 +42,7 @@ func NewCtlService(
 		func() *pb.Request { return &pb.Request{} },
 		func() *pb.Response { return &pb.Response{} })
 
-	client, err := cfg.NewClient(
-		"ctl-client",
+	client, err := cfg.NewClient("ctlservice",
 		getLogger().RawLogger(),
 		func() morpc.Message { return pool.AcquireResponse() })
 	if err != nil {
@@ -51,7 +50,7 @@ func NewCtlService(
 	}
 
 	h, err := morpc.NewMessageHandler(
-		"ctl-server",
+		"ctlservice",
 		address,
 		cfg,
 		pool)

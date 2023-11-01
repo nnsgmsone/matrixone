@@ -496,6 +496,10 @@ func (s *Scope) PushdownRun() error {
 
 func (s *Scope) JoinRun(c *Compile) error {
 	mcpu := s.NodeInfo.Mcpu
+	{
+		fmt.Printf("++++isRight: %v, %v: right semi: %v\n", mcpu, s.isRight(),
+			s != nil && s.Instructions[0].Op == vm.RightSemi)
+	}
 	if mcpu <= 1 { // no need to parallel
 		buildScope := c.newJoinBuildScope(s, nil)
 		s.PreScopes = append(s.PreScopes, buildScope)

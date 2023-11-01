@@ -1264,8 +1264,9 @@ func makeInsertPlan(
 			}
 
 			// insert stmt but not load stmt, not insert without auto incr pk col
-			if !isUpdate && !builder.qry.LoadTag && !isInsertWithoutAutoPkCol {
-				if len(pkFilterExprs) > 0 {
+			//			if !isUpdate && !builder.qry.LoadTag && !isInsertWithoutAutoPkCol {
+			if /* tableDef.Name != "mo_increment_columns" */ true {
+				if false {
 					scanTableDef := DeepCopyTableDef(tableDef)
 					// scanTableDef.Cols = []*ColDef{scanTableDef.Cols[pkPos]}
 					pkNameMap := make(map[string]int)

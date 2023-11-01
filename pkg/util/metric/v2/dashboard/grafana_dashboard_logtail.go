@@ -21,7 +21,7 @@ import (
 )
 
 func (c *DashboardCreator) initLogTailDashboard() error {
-	folder, err := c.createFolder(moFolderName)
+	folder, err := c.createFolder(logtailFolderName)
 	if err != nil {
 		return err
 	}
@@ -51,7 +51,7 @@ func (c *DashboardCreator) initLogtailCollectRow() dashboard.Option {
 	return dashboard.Row(
 		"Logtail collect duration",
 		c.getHistogram(
-			c.getMetricWithFilter("mo_logtail_collect_duration_seconds_bucket", ``),
+			`mo_logtail_collect_duration_seconds_bucket{matrixone_cloud_main_cluster=~"$physicalCluster", matrixone_cloud_cluster=~"$cluster", pod=~"$pod"}`,
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3})...,
 	)
@@ -63,13 +63,13 @@ func (c *DashboardCreator) initLogtailSubscriptionRow() dashboard.Option {
 		c.withGraph(
 			"logtail subscription average increase",
 			6,
-			`sum(rate(`+c.getMetricWithFilter("mo_logtail_subscription_request_total", "")+`[$interval])) by (`+c.by+`)`,
-			"{{ "+c.by+" }}"),
+			`rate(mo_logtail_subscription_request_total{matrixone_cloud_main_cluster=~"$physicalCluster", matrixone_cloud_cluster=~"$cluster", pod=~"$pod"}[$interval]) by (pod)`,
+			"{{ pod }}"),
 		c.withGraph(
 			"logtail subscription average increase, sensitive",
 			6,
-			`sum(irate(`+c.getMetricWithFilter("mo_logtail_subscription_request_total", "")+`[$interval])) by (`+c.by+`)`,
-			"{{ "+c.by+" }}"),
+			`irate(mo_logtail_subscription_request_total{matrixone_cloud_main_cluster=~"$physicalCluster", matrixone_cloud_cluster=~"$cluster", pod=~"$pod"}[$interval]) by (pod)`,
+			"{{ pod }}"),
 	)
 }
 
@@ -79,19 +79,19 @@ func (c *DashboardCreator) initLogtailQueueRow() dashboard.Option {
 		c.withGraph(
 			"Sending Queue",
 			4,
-			`sum(`+c.getMetricWithFilter("mo_logtail_queue_size", `type="send"`)+`) by (`+c.by+`)`,
-			"{{ "+c.by+" }}"),
+			`sum(mo_logtail_queue_size{type="send", matrixone_cloud_main_cluster=~"$physicalCluster", matrixone_cloud_cluster=~"$cluster", pod=~"$pod"}) by (pod)`,
+			"pod"),
 		c.withGraph(
 			"Receiving Queue",
 			4,
-			`sum(`+c.getMetricWithFilter("mo_logtail_queue_size", `type="receive"`)+`) by (`+c.by+`)`,
-			"{{ "+c.by+" }}"),
+			`sum(mo_logtail_queue_size{type="receive", matrixone_cloud_main_cluster=~"$physicalCluster", matrixone_cloud_cluster=~"$cluster", pod=~"$pod"}) by (pod)`,
+			"pod"),
 
 		c.withGraph(
 			"Checkpoint logtail",
 			4,
-			`sum(rate(`+c.getMetricWithFilter("mo_logtail_load_checkpoint_total", "")+`[$interval])) by (`+c.by+`)`,
-			"{{ "+c.by+" }}"),
+			"sum(mo_logtail_load_checkpoint_total) by (instance)",
+			"{{ instance }}"),
 	)
 }
 
@@ -99,7 +99,7 @@ func (c *DashboardCreator) initLogtailBytesRow() dashboard.Option {
 	return dashboard.Row(
 		"Logtail size",
 		c.getBytesHistogram(
-			c.getMetricWithFilter(`mo_logtail_bytes_bucket`, ``),
+			`mo_logtail_bytes_bucket{matrixone_cloud_main_cluster=~"$physicalCluster", matrixone_cloud_cluster=~"$cluster", pod=~"$pod"}`,
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3})...,
 	)
@@ -109,7 +109,7 @@ func (c *DashboardCreator) initLogtailAppendRow() dashboard.Option {
 	return dashboard.Row(
 		"Logtail append",
 		c.getHistogram(
-			c.getMetricWithFilter(`mo_logtail_append_duration_seconds_bucket`, ``),
+			`mo_logtail_append_duration_seconds_bucket{matrixone_cloud_main_cluster=~"$physicalCluster", matrixone_cloud_cluster=~"$cluster", pod=~"$pod"}`,
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3})...,
 	)
@@ -119,7 +119,7 @@ func (c *DashboardCreator) initLogtailApplyRow() dashboard.Option {
 	return dashboard.Row(
 		"Logtail apply",
 		c.getHistogram(
-			c.getMetricWithFilter(`mo_logtail_apply_duration_seconds_bucket`, ``),
+			`mo_logtail_apply_duration_seconds_bucket{matrixone_cloud_main_cluster=~"$physicalCluster", matrixone_cloud_cluster=~"$cluster", pod=~"$pod"}`,
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3})...,
 	)
@@ -129,7 +129,7 @@ func (c *DashboardCreator) initLogtailSendRow() dashboard.Option {
 	return dashboard.Row(
 		"Logtail send total",
 		c.getHistogram(
-			c.getMetricWithFilter(`mo_logtail_send_duration_seconds_bucket`, `step="total"`),
+			`mo_logtail_send_duration_seconds_bucket{step="total", matrixone_cloud_main_cluster=~"$physicalCluster", matrixone_cloud_cluster=~"$cluster", pod=~"$pod"}`,
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3})...,
 	)
@@ -139,7 +139,7 @@ func (c *DashboardCreator) initLogtailSendLatencyRow() dashboard.Option {
 	return dashboard.Row(
 		"Logtail send latency",
 		c.getHistogram(
-			c.getMetricWithFilter(`mo_logtail_send_duration_seconds_bucket`, `step="latency"`),
+			`mo_logtail_send_duration_seconds_bucket{step="latency", matrixone_cloud_main_cluster=~"$physicalCluster", matrixone_cloud_cluster=~"$cluster", pod=~"$pod"}`,
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3})...,
 	)
@@ -149,7 +149,7 @@ func (c *DashboardCreator) initLogtailSendNetworkRow() dashboard.Option {
 	return dashboard.Row(
 		"Logtail send network",
 		c.getHistogram(
-			c.getMetricWithFilter(`mo_logtail_send_duration_seconds_bucket`, `step="network"`),
+			`mo_logtail_send_duration_seconds_bucket{step="network", matrixone_cloud_main_cluster=~"$physicalCluster", matrixone_cloud_cluster=~"$cluster", pod=~"$pod"}`,
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3})...,
 	)
@@ -159,7 +159,7 @@ func (c *DashboardCreator) initLogtailLoadCheckpointRow() dashboard.Option {
 	return dashboard.Row(
 		"Logtail load checkpoint",
 		c.getHistogram(
-			c.getMetricWithFilter(`mo_logtail_load_checkpoint_duration_seconds_bucket`, ``),
+			`mo_logtail_load_checkpoint_duration_seconds_bucket{matrixone_cloud_main_cluster=~"$physicalCluster", matrixone_cloud_cluster=~"$cluster", pod=~"$pod"}`,
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3})...,
 	)

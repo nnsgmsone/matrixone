@@ -60,8 +60,7 @@ func NewClient(cfg morpc.Config) (Client, error) {
 	c.cfg.BackendOptions = append(c.cfg.BackendOptions,
 		morpc.WithBackendReadTimeout(defaultRPCTimeout))
 
-	client, err := c.cfg.NewClient(
-		"lock-client",
+	client, err := c.cfg.NewClient("",
 		getLogger().RawLogger(),
 		func() morpc.Message { return acquireResponse() })
 	if err != nil {
@@ -189,8 +188,7 @@ func NewServer(
 		opt(s)
 	}
 
-	rpc, err := s.cfg.NewServer(
-		"lock-server",
+	rpc, err := s.cfg.NewServer("server",
 		address,
 		getLogger().RawLogger(),
 		func() morpc.Message { return acquireRequest() },

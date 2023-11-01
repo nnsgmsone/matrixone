@@ -120,7 +120,7 @@ func (ui *UserInput) genSqlSourceType(ses *Session) {
 }
 
 func (ui *UserInput) getSqlSourceType(i int) string {
-	sqlType := constant.ExternSql
+	sqlType := ui.sqlSourceType[0]
 	if i < len(ui.sqlSourceType) {
 		sqlType = ui.sqlSourceType[i]
 	}

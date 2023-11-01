@@ -284,7 +284,7 @@ func (s *service) waitSystemInitCompleted(ctx context.Context) {
 		}
 		wait()
 		if time.Since(startAt) > defaultSystemInitTimeout {
-			panic("wait system init timeout")
+			//panic("wait system init timeout")
 		}
 	}
 }
