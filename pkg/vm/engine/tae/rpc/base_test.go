@@ -68,7 +68,7 @@ func (h *mockHandle) HandleClose(ctx context.Context) error {
 
 func (h *mockHandle) HandleCommit(ctx context.Context, meta *txn.TxnMeta) (timestamp.Timestamp, error) {
 	//2PC
-	if len(meta.DNShards) > 1 && meta.CommitTS.IsEmpty() {
+	if len(meta.TNShards) > 1 && meta.CommitTS.IsEmpty() {
 		meta.CommitTS = meta.PreparedTS.Next()
 	}
 	return h.Handle.HandleCommit(ctx, *meta)
@@ -143,15 +143,15 @@ func (h *mockHandle) handleCmds(
 	return
 }
 
-func initDB(t *testing.T, opts *options.Options) *db.DB {
+func initDB(ctx context.Context, t *testing.T, opts *options.Options) *db.DB {
 	dir := testutils.InitTestEnv(ModuleName, t)
-	db, _ := db.Open(dir, opts)
+	db, _ := db.Open(ctx, dir, opts)
 	return db
 }
 
-func mockTAEHandle(t *testing.T, opts *options.Options) *mockHandle {
+func mockTAEHandle(ctx context.Context, t *testing.T, opts *options.Options) *mockHandle {
 	blockio.Start()
-	tae := initDB(t, opts)
+	tae := initDB(ctx, t, opts)
 	mh := &mockHandle{
 		m: mpool.MustNewZero(),
 	}
@@ -170,9 +170,9 @@ func mock1PCTxn(db *db.DB) *txn.TxnMeta {
 	return txnMeta
 }
 
-func mockDNShard(id uint64) metadata.DNShard {
-	return metadata.DNShard{
-		DNShardRecord: metadata.DNShardRecord{
+func mockTNShard(id uint64) metadata.TNShard {
+	return metadata.TNShard{
+		TNShardRecord: metadata.TNShardRecord{
 			ShardID:    id,
 			LogShardID: id,
 		},
@@ -185,8 +185,8 @@ func mock2PCTxn(db *db.DB) *txn.TxnMeta {
 	txnMeta := &txn.TxnMeta{}
 	txnMeta.ID = db.TxnMgr.IdAlloc.Alloc()
 	txnMeta.SnapshotTS = db.TxnMgr.TsAlloc.Alloc().ToTimestamp()
-	txnMeta.DNShards = append(txnMeta.DNShards, mockDNShard(1))
-	txnMeta.DNShards = append(txnMeta.DNShards, mockDNShard(2))
+	txnMeta.TNShards = append(txnMeta.TNShards, mockTNShard(1))
+	txnMeta.TNShards = append(txnMeta.TNShards, mockTNShard(2))
 	return txnMeta
 }
 
@@ -235,6 +235,7 @@ type column struct {
 	hasUpdate       int8
 	updateExpr      []byte
 	clusterBy       int8
+	enumValues      string
 }
 
 func genColumns(accountId uint32, tableName, databaseName string,
@@ -280,6 +281,7 @@ func genColumns(accountId uint32, tableName, databaseName string,
 			databaseName: databaseName,
 			num:          int32(num),
 			comment:      attrDef.Attr.Comment,
+			enumValues:   attrDef.Attr.EnumVlaues,
 		}
 		col.hasDef = 0
 		if attrDef.Attr.Default != nil {
@@ -416,7 +418,7 @@ func genCreateColumnTuple(
 ) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoColumnsSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
-	bat.SetZs(1, m)
+	bat.SetRowCount(1)
 	{
 		idx := catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoColumnsTypes[idx]) // att_uniq_name
@@ -537,6 +539,11 @@ func genCreateColumnTuple(
 		if err := vector.AppendFixed(bat.Vecs[idx], uint16(0) /*just create*/, false, m); err != nil {
 			return nil, err
 		}
+		idx = catalog.MO_COLUMNS_ATT_ENUM_IDX
+		bat.Vecs[idx] = vector.NewVec(catalog.MoColumnsTypes[idx]) // att_enum
+		if err := vector.AppendBytes(bat.Vecs[idx], []byte(col.enumValues), false, m); err != nil {
+			return nil, err
+		}
 
 	}
 	return bat, nil
@@ -646,7 +653,7 @@ func genCreateTableTuple(
 	m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoTablesSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema...)
-	bat.SetZs(1, m)
+	bat.SetRowCount(1)
 	{
 		idx := catalog.MO_TABLES_REL_ID_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // rel_id
@@ -730,6 +737,11 @@ func genCreateTableTuple(
 		}
 		idx = catalog.MO_TABLES_VERSION_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // version
+		if err := vector.AppendFixed(bat.Vecs[idx], uint32(0), false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_TABLES_CATALOG_VERSION_IDX
+		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // catalog version
 		if err := vector.AppendFixed(bat.Vecs[idx], uint32(0), false, m); err != nil {
 			return nil, err
 		}

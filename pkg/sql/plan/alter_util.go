@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -32,10 +33,11 @@ func checkDropColumnWithPrimaryKey(colName string, pkey *plan.PrimaryKeyDef, ctx
 
 func checkDropColumnWithIndex(colName string, indexes []*plan.IndexDef, ctx CompilerContext) error {
 	for _, indexInfo := range indexes {
-		if indexInfo.Unique {
+		if indexInfo.TableExist {
 			for _, column := range indexInfo.Parts {
+				column = catalog.ResolveAlias(column)
 				if column == colName {
-					return moerr.NewInvalidInput(ctx.GetContext(), "can't drop column %s with unique index covered now", colName)
+					return moerr.NewInvalidInput(ctx.GetContext(), "can't drop column %s with index covered now", colName)
 				}
 			}
 		}
@@ -59,10 +61,10 @@ func checkAlterColumnWithPartitionKeys(colName string, tblInfo *TableDef, ctx Co
 }
 
 func checkDropColumnWithCluster(colName string, tblInfo *TableDef, ctx CompilerContext) error {
-	if tblInfo.ClusterBy != nil {
-		// We do not support drop column that dependent foreign keys constraints
-		return moerr.NewInvalidInput(ctx.GetContext(), "can't add/drop column for cluster table now")
-	}
+	//if tblInfo.ClusterBy != nil {
+	//	// We do not support drop column that dependent foreign keys constraints
+	//	return moerr.NewInvalidInput(ctx.GetContext(), "can't add/drop column for cluster table now")
+	//}
 	return nil
 }
 
@@ -154,6 +156,16 @@ func checkIsAddableColumn(tableDef *TableDef, colName string, colType *plan.Type
 func FindColumn(cols []*ColDef, name string) *ColDef {
 	for _, col := range cols {
 		if strings.EqualFold(col.Name, name) {
+			return col
+		}
+	}
+	return nil
+}
+
+// FindColumn finds column in cols by colId
+func FindColumnByColId(cols []*ColDef, colId uint64) *ColDef {
+	for _, col := range cols {
+		if col.ColId == colId {
 			return col
 		}
 	}

@@ -96,11 +96,29 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
+	for i := range node.OrderBy {
+		node.OrderBy[i].Expr, err = rule.ApplyExpr(node.OrderBy[i].Expr)
+		if err != nil {
+			return err
+		}
+	}
+
 	for i := range node.BlockFilterList {
 		node.BlockFilterList[i], err = rule.ApplyExpr(node.BlockFilterList[i])
 		if err != nil {
 			return err
 		}
+	}
+
+	typ := types.New(types.T_varchar, 65000, 0)
+	toTyp := makePlan2Type(&typ)
+	targetTyp := &plan.Expr{
+		Typ: toTyp,
+		Expr: &plan.Expr_T{
+			T: &plan.TargetType{
+				Typ: toTyp,
+			},
+		},
 	}
 
 	applyAndResetType := func(e *Expr) (*Expr, error) {
@@ -110,8 +128,7 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 			return nil, err
 		}
 		if (oldType.Id == int32(types.T_float32) || oldType.Id == int32(types.T_float64)) && (e.Typ.Id == int32(types.T_decimal64) || e.Typ.Id == int32(types.T_decimal128)) {
-			toTyp := types.New(types.T_varchar, 65000, 0)
-			e, err = forceCastExpr(ctx, e, makePlan2Type(&toTyp))
+			e, err = forceCastExpr2(ctx, e, typ, targetTyp)
 			if err != nil {
 				return nil, err
 			}
@@ -122,7 +139,7 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 	if node.RowsetData != nil {
 		for i := range node.RowsetData.Cols {
 			for j := range node.RowsetData.Cols[i].Data {
-				node.RowsetData.Cols[i].Data[j], err = applyAndResetType(node.RowsetData.Cols[i].Data[j])
+				node.RowsetData.Cols[i].Data[j].Expr, err = applyAndResetType(node.RowsetData.Cols[i].Data[j].Expr)
 				if err != nil {
 					return err
 				}

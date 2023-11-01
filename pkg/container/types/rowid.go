@@ -16,6 +16,7 @@ package types
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
 	"unsafe"
 
@@ -50,12 +51,12 @@ func BuildTestBlockid(a, b int64) (ret Blockid) {
 	return
 }
 
-func CompareRowidRowidAligned(a, b Rowid) int64 {
-	return int64(bytes.Compare(a[:], b[:]))
+func CompareRowidRowidAligned(a, b Rowid) int {
+	return bytes.Compare(a[:], b[:])
 }
 
-func CompareBlockidBlockidAligned(a, b Blockid) int64 {
-	return int64(bytes.Compare(a[:], b[:]))
+func CompareBlockidBlockidAligned(a, b Blockid) int {
+	return bytes.Compare(a[:], b[:])
 }
 
 func (r Rowid) Less(than Rowid) bool {
@@ -167,6 +168,13 @@ func (b *Blockid) ShortString() string {
 	return fmt.Sprintf("%d-%d", filen, blkn)
 }
 
+func (b *Blockid) ShortStringEx() string {
+	var shortuuid [8]byte
+	hex.Encode(shortuuid[:], b[:4])
+	filen, blkn := b.Offsets()
+	return fmt.Sprintf("%s-%d-%d", string(shortuuid[:]), filen, blkn)
+}
+
 func (b *Blockid) Offsets() (uint16, uint16) {
 	filen := DecodeUint16(b[UuidSize:ObjectBytesSize])
 	blkn := DecodeUint16(b[ObjectBytesSize:BlockidSize])
@@ -179,10 +187,4 @@ func (b *Blockid) Segment() *Segmentid {
 
 func (b *Blockid) Sequence() uint16 {
 	return DecodeUint16(b[ObjectBytesSize:BlockidSize])
-}
-
-func (b *Blockid) ObjectString() string {
-	uuid := (*uuid.UUID)(b[:UuidSize])
-	filen, _ := b.Offsets()
-	return fmt.Sprintf("%s-%d", uuid.String(), filen)
 }

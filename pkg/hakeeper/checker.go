@@ -15,15 +15,12 @@
 package hakeeper
 
 import (
-	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/task"
 )
 
 type IDAllocator interface {
-	// Next returns a new ID that can be used as the replica ID of a DN shard or
+	// Next returns a new ID that can be used as the replica ID of a TN shard or
 	// Log shard. When the return boolean value is false, it means no more ID
 	// can be allocated at this time.
 	Next() (uint64, bool)
@@ -45,18 +42,13 @@ type Checker interface {
 // BootstrapManager is the interface suppose to be implemented by HAKeeper's
 // bootstrap manager.
 type BootstrapManager interface {
-	Bootstrap(util.IDAllocator, pb.DNState, pb.LogState) ([]pb.ScheduleCommand, error)
+	Bootstrap(util.IDAllocator, pb.TNState, pb.LogState) ([]pb.ScheduleCommand, error)
 
 	CheckBootstrap(pb.LogState) bool
 }
 
 type TaskScheduler interface {
 	Schedule(cnState pb.CNState, currentTick uint64)
-
-	// Create an asynchronous task that executes a single time, this method is idempotent, the
-	// same task is not created repeatedly based on multiple calls.
-	Create(context.Context, []task.TaskMetadata) error
-
 	// StartScheduleCronTask start schedule cron tasks. A timer will be started to pull the latest CronTask
 	// from the TaskStore at regular intervals, and a timer will be maintained in memory for all Cron's to be
 	// triggered at regular intervals.

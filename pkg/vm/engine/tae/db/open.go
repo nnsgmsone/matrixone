@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -45,7 +46,7 @@ const (
 	WALDir = "wal"
 )
 
-func Open(dirname string, opts *options.Options) (db *DB, err error) {
+func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, err error) {
 	dbLocker, err := createDBLock(dirname)
 
 	logutil.Info("open-tae", common.OperationField("Start"),
@@ -67,22 +68,20 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 
 	opts = opts.FillDefaults(dirname)
 
-	indexCache := model.NewSimpleLRU(int64(opts.CacheCfg.IndexCapacity))
-
 	serviceDir := path.Join(dirname, "data")
 	if opts.Fs == nil {
 		// TODO:fileservice needs to be passed in as a parameter
-		opts.Fs = objectio.TmpNewFileservice(path.Join(dirname, "data"))
+		opts.Fs = objectio.TmpNewFileservice(ctx, path.Join(dirname, "data"))
 	}
-	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
 
 	db = &DB{
-		Dir:        dirname,
-		Opts:       opts,
-		IndexCache: indexCache,
-		Fs:         fs,
-		Closed:     new(atomic.Value),
+		Dir:    dirname,
+		Opts:   opts,
+		Closed: new(atomic.Value),
 	}
+	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
+	transferTable := model.NewTransferTable[*model.TransferHashPage](db.Opts.TransferTableTTL)
+	indexCache := model.NewSimpleLRU(int64(opts.CacheCfg.IndexCapacity))
 
 	switch opts.LogStoreT {
 	case options.LogstoreBatchStore:
@@ -90,47 +89,61 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	case options.LogstoreLogservice:
 		db.Wal = wal.NewDriverWithLogservice(opts.Ctx, opts.Lc)
 	}
-	db.Scheduler = newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
+	scheduler := newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
+	db.Runtime = dbutils.NewRuntime(
+		dbutils.WithRuntimeTransferTable(transferTable),
+		dbutils.WithRuntimeFilterIndexCache(indexCache),
+		dbutils.WithRuntimeObjectFS(fs),
+		dbutils.WithRuntimeSmallPool(dbutils.MakeDefaultSmallPool("small-vector-pool")),
+		dbutils.WithRuntimeTransientPool(dbutils.MakeDefaultTransientPool("trasient-vector-pool")),
+		dbutils.WithRuntimeScheduler(scheduler),
+		dbutils.WithRuntimeOptions(db.Opts),
+	)
+
 	dataFactory := tables.NewDataFactory(
-		db.Fs, indexCache, db.Scheduler, db.Dir)
-	if db.Opts.Catalog, err = catalog.OpenCatalog(db.Scheduler, dataFactory); err != nil {
+		db.Runtime, db.Dir,
+	)
+	if db.Catalog, err = catalog.OpenCatalog(); err != nil {
 		return
 	}
-	db.Catalog = db.Opts.Catalog
 	// Init and start txn manager
-	db.TransferTable = model.NewTransferTable[*model.TransferHashPage](db.Opts.TransferTableTTL)
 	txnStoreFactory := txnimpl.TxnStoreFactory(
 		opts.Ctx,
-		db.Opts.Catalog,
+		db.Catalog,
 		db.Wal,
-		db.TransferTable,
-		indexCache,
-		dataFactory)
-	txnFactory := txnimpl.TxnFactory(db.Opts.Catalog)
+		db.Runtime,
+		dataFactory,
+		opts.MaxMessageSize,
+	)
+	txnFactory := txnimpl.TxnFactory(db.Catalog)
 	db.TxnMgr = txnbase.NewTxnManager(txnStoreFactory, txnFactory, db.Opts.Clock)
 	db.LogtailMgr = logtail.NewManager(
+		db.Runtime,
 		int(db.Opts.LogtailCfg.PageSize),
 		db.TxnMgr.Now,
 	)
+	db.Runtime.Now = db.TxnMgr.Now
 	db.TxnMgr.CommitListener.AddTxnCommitListener(db.LogtailMgr)
-	db.TxnMgr.Start()
+	db.TxnMgr.Start(opts.Ctx)
 	db.LogtailMgr.Start()
 	db.BGCheckpointRunner = checkpoint.NewRunner(
 		opts.Ctx,
-		db.Fs,
+		db.Runtime,
 		db.Catalog,
-		db.Scheduler,
 		logtail.NewDirtyCollector(db.LogtailMgr, db.Opts.Clock, db.Catalog, new(catalog.LoopProcessor)),
 		db.Wal,
 		checkpoint.WithFlushInterval(opts.CheckpointCfg.FlushInterval),
 		checkpoint.WithCollectInterval(opts.CheckpointCfg.ScanInterval),
 		checkpoint.WithMinCount(int(opts.CheckpointCfg.MinCount)),
+		checkpoint.WithCheckpointBlockRows(opts.CheckpointCfg.BlockRows),
+		checkpoint.WithCheckpointSize(opts.CheckpointCfg.Size),
 		checkpoint.WithMinIncrementalInterval(opts.CheckpointCfg.IncrementalInterval),
 		checkpoint.WithGlobalMinCount(int(opts.CheckpointCfg.GlobalMinCount)),
-		checkpoint.WithGlobalVersionInterval(opts.CheckpointCfg.GlobalVersionInterval))
+		checkpoint.WithGlobalVersionInterval(opts.CheckpointCfg.GlobalVersionInterval),
+		checkpoint.WithReserveWALEntryCount(opts.CheckpointCfg.ReservedWALEntryCount))
 
 	now := time.Now()
-	checkpointed, err := db.BGCheckpointRunner.Replay(dataFactory)
+	checkpointed, ckpLSN, valid, err := db.BGCheckpointRunner.Replay(dataFactory)
 	if err != nil {
 		panic(err)
 	}
@@ -140,7 +153,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		common.AnyField("checkpointed", checkpointed.ToString()))
 
 	now = time.Now()
-	db.Replay(dataFactory, checkpointed)
+	db.Replay(dataFactory, checkpointed, ckpLSN, valid)
 	db.Catalog.ReplayTableRows()
 	logutil.Info("open-tae", common.OperationField("replay"),
 		common.OperandField("wal"),
@@ -150,8 +163,8 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 
 	// Init timed scanner
 	scanner := NewDBScanner(db, nil)
-	mergeOp := newMergeTaskBuiler(db)
-	scanner.RegisterOp(mergeOp)
+	db.MergeHandle = newMergeTaskBuiler(db)
+	scanner.RegisterOp(db.MergeHandle)
 	db.Wal.Start()
 	db.BGCheckpointRunner.Start()
 
@@ -160,7 +173,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		scanner)
 	db.BGScanner.Start()
 	// TODO: WithGCInterval requires configuration parameters
-	db.DiskCleaner = gc2.NewDiskCleaner(opts.Ctx, db.Fs, db.BGCheckpointRunner, db.Catalog)
+	db.DiskCleaner = gc2.NewDiskCleaner(opts.Ctx, fs, db.BGCheckpointRunner, db.Catalog)
 	db.DiskCleaner.Start()
 	db.DiskCleaner.AddChecker(
 		func(item any) bool {
@@ -175,7 +188,9 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 			"clean-transfer-table",
 			opts.CheckpointCfg.FlushInterval,
 			func(_ context.Context) (err error) {
-				db.TransferTable.RunTTL(time.Now())
+				db.Runtime.PrintVectorPoolUsage()
+				db.Runtime.TransferDelsMap.Prune(opts.TransferTableTTL)
+				transferTable.RunTTL(time.Now())
 				return
 			}),
 
@@ -217,9 +232,12 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 			"logtail-gc",
 			opts.CheckpointCfg.GCCheckpointInterval,
 			func(ctx context.Context) error {
+				logutil.Info(db.Runtime.ExportLogtailStats())
 				ckp := db.BGCheckpointRunner.MaxCheckpoint()
-				if ckp != nil && ckp.IsCommitted() {
-					db.LogtailMgr.GCByTS(ctx, ckp.GetEnd())
+				if ckp != nil {
+					// use previous end to gc logtail
+					ts := types.BuildTS(ckp.GetStart().Physical(), 0) // GetStart is previous + 1, reset it here
+					db.LogtailMgr.GCByTS(ctx, ts)
 				}
 				return nil
 			},

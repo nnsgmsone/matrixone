@@ -68,6 +68,8 @@ type Attribute struct {
 	AutoIncrement bool
 	// Seqnum, do not change during the whole lifetime of the table
 	Seqnum uint16
+	// EnumValues is for enum type
+	EnumVlaues string
 }
 
 type PropertiesDef struct {
@@ -84,7 +86,7 @@ type ClusterByDef struct {
 }
 
 type Statistics interface {
-	Stats(ctx context.Context, statsInfoMap any) bool
+	Stats(ctx context.Context, partitionTables []any, statsInfoMap any) bool
 	Rows(ctx context.Context) (int64, error)
 	Size(ctx context.Context, columnName string) (int64, error)
 }
@@ -149,6 +151,10 @@ type PrimaryKeyDef struct {
 
 type RefChildTableDef struct {
 	Tables []uint64
+}
+
+type StreamConfigsDef struct {
+	Configs []*plan.Property
 }
 
 type TableDef interface {
@@ -286,6 +292,7 @@ const (
 	RefChildTable
 	ForeignKey
 	PrimaryKey
+	StreamConfig
 )
 
 type EngineType int8
@@ -361,6 +368,23 @@ func (def *ConstraintDef) MarshalBinary() (data []byte, err error) {
 				return nil, err
 			}
 			buf.Write(bytes)
+		case *StreamConfigsDef:
+			if err := binary.Write(buf, binary.BigEndian, StreamConfig); err != nil {
+				return nil, err
+			}
+			if err := binary.Write(buf, binary.BigEndian, uint64(len(def.Configs))); err != nil {
+				return nil, err
+			}
+			for _, c := range def.Configs {
+				bytes, err := c.Marshal()
+				if err != nil {
+					return nil, err
+				}
+				if err := binary.Write(buf, binary.BigEndian, uint64(len(bytes))); err != nil {
+					return nil, err
+				}
+				buf.Write(bytes)
+			}
 		}
 	}
 	return buf.Bytes(), nil
@@ -429,6 +453,23 @@ func (def *ConstraintDef) UnmarshalBinary(data []byte) error {
 			}
 			l += int(length)
 			def.Cts = append(def.Cts, &PrimaryKeyDef{pkey})
+		case StreamConfig:
+			length = binary.BigEndian.Uint64(data[l : l+8])
+			l += 8
+			configs := make([]*plan.Property, length)
+
+			for i := 0; i < int(length); i++ {
+				dataLength := binary.BigEndian.Uint64(data[l : l+8])
+				l += 8
+				config := &plan.Property{}
+				err := config.Unmarshal(data[l : l+int(dataLength)])
+				if err != nil {
+					return err
+				}
+				l += int(dataLength)
+				configs[i] = config
+			}
+			def.Cts = append(def.Cts, &StreamConfigsDef{configs})
 		}
 	}
 	return nil
@@ -457,6 +498,9 @@ func (def *ConstraintPB) FromPBVersion() Constraint {
 	if r := def.GetIndexDef(); r != nil {
 		return r
 	}
+	if r := def.GetStreamConfigsDef(); r != nil {
+		return r
+	}
 	panic("no corresponding type")
 }
 
@@ -482,6 +526,7 @@ func (*ForeignKeyDef) constraint()    {}
 func (*PrimaryKeyDef) constraint()    {}
 func (*RefChildTableDef) constraint() {}
 func (*IndexDef) constraint()         {}
+func (*StreamConfigsDef) constraint() {}
 
 func (def *ForeignKeyDef) ToPBVersion() ConstraintPB {
 	return ConstraintPB{
@@ -512,10 +557,20 @@ func (def *IndexDef) ToPBVersion() ConstraintPB {
 	}
 }
 
+func (def *StreamConfigsDef) ToPBVersion() ConstraintPB {
+	return ConstraintPB{
+		Ct: &ConstraintPB_StreamConfigsDef{
+			StreamConfigsDef: def,
+		},
+	}
+}
+
 type Relation interface {
 	Statistics
 
-	Ranges(context.Context, ...*plan.Expr) ([][]byte, error)
+	UpdateBlockInfos(context.Context) error
+
+	Ranges(context.Context, []*plan.Expr) ([][]byte, error)
 
 	TableDefs(context.Context) ([]TableDef, error)
 
@@ -540,6 +595,9 @@ type Relation interface {
 
 	GetTableID(context.Context) uint64
 
+	// GetTableName returns the name of the table.
+	GetTableName() string
+
 	GetDBID(context.Context) uint64
 
 	// second argument is the number of reader, third argument is the filter extend, foruth parameter is the payload required by the engine
@@ -552,7 +610,12 @@ type Relation interface {
 
 	GetEngineType() EngineType
 
-	GetMetadataScanInfoBytes(ctx context.Context, name string) ([][]byte, error)
+	GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error)
+
+	// PrimaryKeysMayBeModified reports whether any rows with any primary keys in keyVector was modified during `from` to `to`
+	// If not sure, returns true
+	// Initially added for implementing locking rows by primary keys
+	PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error)
 }
 
 type Reader interface {
@@ -562,7 +625,7 @@ type Reader interface {
 
 type Database interface {
 	Relations(context.Context) ([]string, error)
-	Relation(context.Context, string) (Relation, error)
+	Relation(context.Context, string, any) (Relation, error)
 
 	Delete(context.Context, string) error
 	Create(context.Context, string, []TableDef) error // Create Table - (name, table define)
@@ -575,8 +638,6 @@ type Database interface {
 type Engine interface {
 	// transaction interface
 	New(ctx context.Context, op client.TxnOperator) error
-	Commit(ctx context.Context, op client.TxnOperator) error
-	Rollback(ctx context.Context, op client.TxnOperator) error
 
 	// Delete deletes a database
 	Delete(ctx context.Context, databaseName string, op client.TxnOperator) error
@@ -600,7 +661,7 @@ type Engine interface {
 	Hints() Hints
 
 	NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
-		expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef) ([]Reader, error)
+		expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef, proc any) ([]Reader, error)
 
 	// Get database name & table name by table id
 	GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error)

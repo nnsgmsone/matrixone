@@ -103,6 +103,25 @@ func BuildJsonPlan(ctx context.Context, uuid uuid.UUID, options *ExplainOptions,
 	return expdata
 }
 
+func DebugPlan(pl *plan.Plan) string {
+	if qry, ok := pl.Plan.(*plan.Plan_Query); ok {
+		impl := NewExplainQueryImpl(qry.Query)
+		buffer := NewExplainDataBuffer()
+		opt := &ExplainOptions{
+			Verbose: false,
+			Analyze: false,
+			Format:  EXPLAIN_FORMAT_TEXT,
+		}
+		err := impl.ExplainPlan(context.TODO(), buffer, opt)
+		if err != nil {
+			return fmt.Sprintf("debug plan error %s", err.Error())
+		}
+		return buffer.ToString()
+	} else {
+		return "only support to debug query plan"
+	}
+}
+
 func explainStep(ctx context.Context, step *plan.Node, settings *FormatSettings, options *ExplainOptions) error {
 	nodedescImpl := NewNodeDescriptionImpl(step)
 
@@ -114,7 +133,35 @@ func explainStep(ctx context.Context, step *plan.Node, settings *FormatSettings,
 		settings.buffer.PushNewLine(basicNodeInfo, true, settings.level)
 
 		if nodedescImpl.Node.NodeType == plan.Node_SINK_SCAN {
-			msg := "DataSource: " + fmt.Sprintf("Plan %v", nodedescImpl.Node.SourceStep)
+			msg := "DataSource: "
+			for i, s := range nodedescImpl.Node.SourceStep {
+				if i > 0 {
+					msg += ", "
+				}
+				msg += fmt.Sprintf("Plan %v", s)
+			}
+			settings.buffer.PushNewLine(msg, false, settings.level)
+		}
+
+		if nodedescImpl.Node.NodeType == plan.Node_RECURSIVE_SCAN {
+			msg := "DataSource: "
+			for i, s := range nodedescImpl.Node.SourceStep {
+				if i > 0 {
+					msg += ", "
+				}
+				msg += fmt.Sprintf("Plan %v", s)
+			}
+			settings.buffer.PushNewLine(msg, false, settings.level)
+		}
+
+		if nodedescImpl.Node.NodeType == plan.Node_RECURSIVE_CTE {
+			msg := "DataSource: "
+			for i, s := range nodedescImpl.Node.SourceStep {
+				if i > 0 {
+					msg += ", "
+				}
+				msg += fmt.Sprintf("Plan %v", s)
+			}
 			settings.buffer.PushNewLine(msg, false, settings.level)
 		}
 
@@ -245,6 +292,8 @@ func PreOrderPlan(ctx context.Context, node *plan.Node, Nodes []*plan.Node, grap
 }
 
 // StatisticsRead statistics read rows, size in ExplainData
+//
+// Deprecated: please use explain.GetInputRowsAndInputSize instead.
 func (d *ExplainData) StatisticsRead() (rows int64, size int64) {
 	for _, step := range d.Steps {
 		for _, node := range step.GraphData.Nodes {

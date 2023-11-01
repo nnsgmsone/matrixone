@@ -37,27 +37,32 @@ import (
 var clientBaseConnID uint32 = 1000
 
 // parse parses the account information from whole username.
+// The whole username parameter is like: tenant1:user1:role1?key1:value1,key2:value2
 func (c *clientInfo) parse(full string) error {
-	var delimiter byte = ':'
-	if strings.IndexByte(full, '#') >= 0 {
-		delimiter = '#'
+	var labelPart string
+	labelDelPos := strings.IndexByte(full, '?')
+	userPart := full[:]
+	if labelDelPos >= 0 {
+		userPart = full[:labelDelPos]
+		if len(full) > labelDelPos+1 {
+			labelPart = full[labelDelPos+1:]
+		}
 	}
-	var tenant, username string
-	pos := strings.IndexByte(full, delimiter)
-	if pos >= 0 {
-		tenant = strings.TrimSpace(full[:pos])
-		username = strings.TrimSpace(full[pos+1:])
-	} else {
-		username = strings.TrimSpace(full[:])
+	tenant, err := frontend.GetTenantInfo(context.Background(), userPart)
+	if err != nil {
+		return err
 	}
-	if len(username) == 0 {
-		return moerr.NewInternalErrorNoCtx("invalid username '%s'", full)
+	c.labelInfo.Tenant = Tenant(tenant.Tenant)
+	c.username = tenant.GetUser()
+
+	// For label part.
+	if len(labelPart) > 0 {
+		labels, err := frontend.ParseLabel(strings.TrimSpace(labelPart))
+		if err != nil {
+			return err
+		}
+		c.labelInfo.Labels = labels
 	}
-	if tenant == "" {
-		tenant = superTenant
-	}
-	c.labelInfo.Tenant = Tenant(tenant)
-	c.username = username
 	return nil
 }
 
@@ -121,8 +126,13 @@ type clientConn struct {
 	// setVarStmts keeps all set user variable statements. When connection
 	// is transferred, set all these variables first.
 	setVarStmts []string
+	// prepareStmts keeps all prepare statements. When connection
+	// is transferred, execute all these prepare statements first.
+	prepareStmts []string
 	// tlsConfig is the config of TLS.
 	tlsConfig *tls.Config
+	// ipNetList is the list of ip net, which is parsed from CIDRs.
+	ipNetList []*net.IPNet
 	// testHelper is used for testing.
 	testHelper struct {
 		connectToBackend func() (ServerConn, error)
@@ -142,6 +152,7 @@ func newClientConn(
 	mc clusterservice.MOCluster,
 	router Router,
 	tun *tunnel,
+	ipNetList []*net.IPNet,
 ) (ClientConn, error) {
 	var originIP net.IP
 	host, _, err := net.SplitHostPort(conn.RemoteAddress())
@@ -160,6 +171,7 @@ func newClientConn(
 		clientInfo: clientInfo{
 			originIP: originIP,
 		},
+		ipNetList: ipNetList,
 	}
 	c.connID, err = c.genConnID()
 	if err != nil {
@@ -252,10 +264,8 @@ func (c *clientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []by
 		return c.handleKillQuery(ev, resp)
 	case *setVarEvent:
 		return c.handleSetVar(ev)
-	case *suspendAccountEvent:
-		return c.handleSuspendAccount(ev)
-	case *dropAccountEvent:
-		return c.handleDropAccount(ev)
+	case *prepareEvent:
+		return c.handlePrepare(ev)
 	default:
 	}
 	return nil
@@ -341,48 +351,10 @@ func (c *clientConn) handleSetVar(e *setVarEvent) error {
 	return nil
 }
 
-// handleSuspendAccountEvent handles the suspend account event.
-func (c *clientConn) handleSuspendAccount(e *suspendAccountEvent) error {
-	// Ignore the sys tenant.
-	if strings.ToLower(string(e.account)) == superTenant {
-		return nil
-	}
-	// handle kill connection.
-	cns, err := c.router.SelectByTenant(e.account)
-	if err != nil {
-		return err
-	}
-	if len(cns) == 0 {
-		return nil
-	}
-	for _, cn := range cns {
-		// Before connect to backend server, update the salt.
-		cn.salt = c.mysqlProto.GetSalt()
-
-		go func(s *CNServer) {
-			query := fmt.Sprintf("kill connection %d", s.backendConnID)
-			// No client to receive the result, so pass nil as the third
-			// parameter to ignore the result.
-			if err := c.connAndExec(s, query, nil); err != nil {
-				c.log.Error("failed to send query to server",
-					zap.String("query", query), zap.Error(err))
-				return
-			}
-			c.log.Info("kill connection on server succeeded",
-				zap.String("query", query), zap.String("server", s.addr))
-		}(cn)
-	}
+// handleSetVar handles the prepare event.
+func (c *clientConn) handlePrepare(e *prepareEvent) error {
+	c.prepareStmts = append(c.prepareStmts, e.stmt)
 	return nil
-}
-
-// handleDropAccountEvent handles the drop account event.
-func (c *clientConn) handleDropAccount(e *dropAccountEvent) error {
-	se := &suspendAccountEvent{
-		baseEvent: e.baseEvent,
-		stmt:      e.stmt,
-		account:   e.account,
-	}
-	return c.handleSuspendAccount(se)
 }
 
 // Close implements the ClientConn interface.
@@ -427,6 +399,9 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 		// Set the salt value of cn server.
 		cn.salt = c.mysqlProto.GetSalt()
 
+		// Update the internal connection.
+		cn.internalConn = containIP(c.ipNetList, c.clientInfo.originIP)
+
 		// After select a CN server, we try to connect to it. If connect
 		// fails, and it is a retryable error, we reselect another CN server.
 		sc, r, err = c.router.Connect(cn, c.handshakePack, c.tun)
@@ -459,6 +434,13 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 
 	// Set the use defined variables, including session variables and user variables.
 	for _, stmt := range c.setVarStmts {
+		if _, err := sc.ExecStmt(stmt, nil); err != nil {
+			return nil, err
+		}
+	}
+
+	// Execute the prepare statements.
+	for _, stmt := range c.prepareStmts {
 		if _, err := sc.ExecStmt(stmt, nil); err != nil {
 			return nil, err
 		}

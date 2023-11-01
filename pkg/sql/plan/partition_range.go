@@ -45,18 +45,15 @@ func (rpb *rangePartitionBuilder) build(ctx context.Context, partitionBinder *Pa
 	// RANGE Partitioning
 	if len(partitionType.ColumnList) == 0 {
 		partitionInfo.Type = plan.PartitionType_RANGE
-		planExpr, err := partitionBinder.BindExpr(partitionType.Expr, 0, true)
+		err := buildPartitionExpr(ctx, tableDef, partitionBinder, partitionInfo, partitionType.Expr)
 		if err != nil {
 			return err
 		}
-		partitionInfo.PartitionExpr = &plan.PartitionExpr{
-			Expr:    planExpr,
-			ExprStr: tree.String(partitionType.Expr, dialect.MYSQL),
-		}
+
 	} else {
 		// RANGE COLUMNS partitioning
 		partitionInfo.Type = plan.PartitionType_RANGE_COLUMNS
-		err := buildPartitionColumns(ctx, partitionBinder, partitionInfo, partitionType.ColumnList)
+		err := buildPartitionColumns(ctx, tableDef, partitionBinder, partitionInfo, partitionType.ColumnList)
 		if err != nil {
 			return err
 		}
@@ -78,7 +75,7 @@ func (rpb *rangePartitionBuilder) build(ctx context.Context, partitionBinder *Pa
 	}
 
 	partitionInfo.PartitionMsg = tree.String(partitionOp, dialect.MYSQL)
-	//tableDef.Partition = partitionInfo
+	tableDef.Partition = partitionInfo
 	return nil
 }
 
@@ -123,7 +120,7 @@ func (rpb *rangePartitionBuilder) checkPartitionIntegrity(ctx context.Context, p
 	if err := checkPartitionExprType(ctx, partitionBinder, tableDef, partitionDef); err != nil {
 		return err
 	}
-	if err := checkPartitionDefs(ctx, partitionBinder, partitionDef, tableDef); err != nil {
+	if err := checkPartitionDefines(ctx, partitionBinder, partitionDef, tableDef); err != nil {
 		return err
 	}
 	if err := checkPartitionKeys(ctx, partitionBinder.builder.nameByColRef, tableDef, partitionDef); err != nil {

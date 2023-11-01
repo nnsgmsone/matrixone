@@ -43,10 +43,10 @@ func newTxnTableForTest(
 			},
 		),
 	}
-	var dnStore DNStore
+	var tnStore DNStore
 	txn := &Transaction{
 		engine:   engine,
-		dnStores: []DNStore{dnStore},
+		tnStores: []DNStore{tnStore},
 	}
 	db := &txnDatabase{
 		txn: txn,
@@ -68,7 +68,7 @@ func makeBatchForTest(
 		vector.AppendFixed(vec, n, false, mp)
 	}
 	bat.SetVector(0, vec)
-	bat.SetZs(len(ints), mp)
+	bat.SetRowCount(len(ints))
 	return bat
 }
 

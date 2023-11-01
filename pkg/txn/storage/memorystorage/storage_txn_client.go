@@ -61,7 +61,15 @@ func (s *StorageTxnClient) New(
 	}, nil
 }
 
+func (s *StorageTxnClient) IterTxns(func(client.TxnOverview) bool) {
+	panic("unimplemented")
+}
+
 func (*StorageTxnClient) NewWithSnapshot(snapshot []byte) (client.TxnOperator, error) {
+	panic("unimplemented")
+}
+
+func (*StorageTxnClient) AbortAllRunningTxn() {
 	panic("unimplemented")
 }
 
@@ -72,6 +80,20 @@ func (*StorageTxnClient) Close() error {
 func (*StorageTxnClient) MinTimestamp() timestamp.Timestamp {
 	return timestamp.Timestamp{}
 }
+
+func (*StorageTxnClient) WaitLogTailAppliedAt(
+	ctx context.Context,
+	ts timestamp.Timestamp) (timestamp.Timestamp, error) {
+	return timestamp.Timestamp{}, nil
+}
+
+func (*StorageTxnClient) GetLatestCommitTS() timestamp.Timestamp { panic("unimplemented") }
+func (*StorageTxnClient) SyncLatestCommitTS(timestamp.Timestamp) { panic("unimplemented") }
+func (*StorageTxnClient) GetSyncLatestCommitTSTimes() uint64     { panic("unimplemented") }
+func (*StorageTxnClient) Pause()                                 { panic("unimplemented") }
+func (*StorageTxnClient) Resume()                                { panic("unimplemented") }
+func (*StorageTxnClient) RefreshExpressionEnabled() bool         { panic("unimplemented") }
+func (*StorageTxnClient) CNBasedConsistencyEnabled() bool        { panic("unimplemented") }
 
 type StorageTxnOperator struct {
 	storages map[string]*Storage
@@ -89,6 +111,22 @@ func (s *StorageTxnOperator) GetWorkspace() client.Workspace {
 }
 
 func (s *StorageTxnOperator) ApplySnapshot(data []byte) error {
+	panic("unimplemented")
+}
+
+func (s *StorageTxnOperator) ResetRetry(retry bool) {
+	panic("unimplemented")
+}
+
+func (s *StorageTxnOperator) IsRetry() bool {
+	panic("unimplemented")
+}
+
+func (s *StorageTxnOperator) AppendEventCallback(event client.EventType, callbacks ...func(txn.TxnMeta)) {
+	panic("unimplemented")
+}
+
+func (s *StorageTxnOperator) Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
 	panic("unimplemented")
 }
 
@@ -157,6 +195,14 @@ func (*StorageTxnOperator) Snapshot() ([]byte, error) {
 
 func (s *StorageTxnOperator) Txn() txn.TxnMeta {
 	return s.meta
+}
+
+func (s *StorageTxnOperator) SnapshotTS() timestamp.Timestamp {
+	panic("unimplemented")
+}
+
+func (s *StorageTxnOperator) Status() txn.TxnStatus {
+	panic("unimplemented")
 }
 
 func (s *StorageTxnOperator) TxnRef() *txn.TxnMeta {
@@ -231,5 +277,17 @@ func (s *StorageTxnOperator) AddLockTable(lock.LockTable) error {
 }
 
 func (s *StorageTxnOperator) UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error {
+	panic("should not call")
+}
+
+func (s *StorageTxnOperator) AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64 {
+	panic("should not call")
+}
+
+func (s *StorageTxnOperator) RemoveWaitLock(key uint64) {
+	panic("should not call")
+}
+
+func (s *StorageTxnOperator) GetOverview() client.TxnOverview {
 	panic("should not call")
 }

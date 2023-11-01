@@ -15,6 +15,7 @@
 package logtailreplay
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/tidwall/btree"
 )
@@ -31,13 +32,16 @@ type blocksIter struct {
 	firstCalled bool
 }
 
-func (p *PartitionState) NewBlocksIter(ts types.TS) *blocksIter {
+func (p *PartitionState) NewBlocksIter(ts types.TS) (*blocksIter, error) {
+	if ts.Less(p.minTS) {
+		return nil, moerr.NewTxnStaleNoCtx()
+	}
 	iter := p.blocks.Copy().Iter()
 	ret := &blocksIter{
 		ts:   ts,
 		iter: iter,
 	}
-	return ret
+	return ret, nil
 }
 
 var _ BlocksIter = new(blocksIter)
@@ -109,4 +113,38 @@ func (b *dirtyBlocksIter) Entry() BlockEntry {
 func (b *dirtyBlocksIter) Close() error {
 	b.iter.Release()
 	return nil
+}
+
+// GetChangedBlocksBetween get changed blocks between two timestamps
+func (p *PartitionState) GetChangedBlocksBetween(
+	begin types.TS,
+	end types.TS,
+) (
+	deleted []types.Blockid,
+	inserted []types.Blockid,
+) {
+
+	iter := p.blockIndexByTS.Copy().Iter()
+	defer iter.Release()
+
+	for ok := iter.Seek(BlockIndexByTSEntry{
+		Time: begin,
+	}); ok; ok = iter.Next() {
+		entry := iter.Item()
+
+		if entry.Time.Greater(end) {
+			break
+		}
+
+		if entry.IsDelete {
+			deleted = append(deleted, entry.BlockID)
+		} else {
+			if !entry.IsAppendable {
+				inserted = append(inserted, entry.BlockID)
+			}
+		}
+
+	}
+
+	return
 }

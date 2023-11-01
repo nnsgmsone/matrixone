@@ -17,13 +17,13 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/fagongzi/util/hack"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
-	"go.uber.org/multierr"
 	"go.uber.org/zap"
 )
 
@@ -39,7 +38,7 @@ var _ TxnService = (*service)(nil)
 
 type service struct {
 	logger    *log.MOLogger
-	shard     metadata.DNShard
+	shard     metadata.TNShard
 	storage   storage.TxnStorage
 	sender    rpc.TxnSender
 	stopper   *stopper.Stopper
@@ -67,8 +66,7 @@ type service struct {
 
 // NewTxnService create TxnService
 func NewTxnService(
-	rt runtime.Runtime,
-	shard metadata.DNShard,
+	shard metadata.TNShard,
 	storage storage.TxnStorage,
 	sender rpc.TxnSender,
 	zombieTimeout time.Duration,
@@ -98,7 +96,7 @@ func NewTxnService(
 	return s
 }
 
-func (s *service) Shard() metadata.DNShard {
+func (s *service) Shard() metadata.TNShard {
 	return s.shard
 }
 
@@ -118,10 +116,7 @@ func (s *service) Close(destroy bool) error {
 		closer = s.storage.Destroy
 	}
 	// FIXME: all context.TODO() need to use tracing context
-	if err := closer(context.TODO()); err != nil {
-		return multierr.Append(err, s.sender.Close())
-	}
-	return s.sender.Close()
+	return errors.Join(closer(context.TODO()), s.sender.Close())
 }
 
 func (s *service) gcZombieTxn(ctx context.Context) {
@@ -141,8 +136,8 @@ func (s *service) gcZombieTxn(ctx context.Context) {
 				txnCtx := value.(*txnContext)
 				txnMeta := txnCtx.getTxn()
 				// if a txn is not a distributed txn coordinator, wait coordinator dnshard.
-				if len(txnMeta.DNShards) == 0 ||
-					(len(txnMeta.DNShards) > 0 && s.shard.ShardID != txnMeta.DNShards[0].ShardID) {
+				if len(txnMeta.TNShards) == 0 ||
+					(len(txnMeta.TNShards) > 0 && s.shard.ShardID != txnMeta.TNShards[0].ShardID) {
 					return true
 				}
 
@@ -189,7 +184,7 @@ func (s *service) maybeAddTxn(meta txn.TxnMeta) (*txnContext, bool) {
 	}
 
 	// 1. first transaction write request at current DNShard
-	// 2. transaction already committed or aborted, the transcation context will removed by gcZombieTxn.
+	// 2. transaction already committed or aborted, the transaction context will be removed by gcZombieTxn.
 	txnCtx.init(meta, acquireNotifier())
 	util.LogTxnCreateOn(meta, s.shard)
 	return txnCtx, true
@@ -208,11 +203,11 @@ func (s *service) getTxnContext(txnID []byte) *txnContext {
 	return v.(*txnContext)
 }
 
-func (s *service) validDNShard(dn metadata.DNShard) bool {
-	if !s.shard.Equal(dn) {
+func (s *service) validTNShard(tn metadata.TNShard) bool {
+	if !s.shard.Equal(tn) {
 		// DNShard not match, so cn need to fetch latest DNShards from hakeeper.
 		s.logger.Error("DN metadata not match",
-			zap.String("request-dn", dn.DebugString()),
+			zap.String("request-dn", tn.DebugString()),
 			zap.String("local-dn", s.shard.DebugString()))
 		return false
 	}
@@ -230,7 +225,6 @@ func (s *service) releaseTxnContext(txnCtx *txnContext) {
 
 func (s *service) parallelSendWithRetry(
 	ctx context.Context,
-	txnMeta txn.TxnMeta,
 	requests []txn.TxnRequest,
 	ignoreTxnErrorCodes map[uint16]struct{}) *rpc.SendResult {
 	for {

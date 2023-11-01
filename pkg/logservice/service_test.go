@@ -17,7 +17,6 @@ package logservice
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"runtime/debug"
 	"sync"
 	"testing"
@@ -31,11 +30,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	hapkg "github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 const (
+	testServicePort        = 9000
+	testGossipPort         = 9010
 	testServiceAddress     = "127.0.0.1:9000"
 	testGossipAddress      = "127.0.0.1:9010"
 	dummyGossipSeedAddress = "127.0.0.1:9100"
@@ -43,21 +45,17 @@ const (
 )
 
 func getServiceTestConfig() Config {
-	c := Config{
-		UUID:                 uuid.New().String(),
-		RTTMillisecond:       10,
-		GossipAddress:        testGossipAddress,
-		GossipListenAddress:  testGossipAddress,
-		GossipSeedAddresses:  []string{testGossipAddress, dummyGossipSeedAddress},
-		DeploymentID:         1,
-		FS:                   vfs.NewStrictMem(),
-		ServiceListenAddress: testServiceAddress,
-		ServiceAddress:       testServiceAddress,
-		DisableWorkers:       true,
-		UseTeeLogDB:          true,
-	}
+	c := DefaultConfig()
+	c.UUID = uuid.New().String()
+	c.RTTMillisecond = 10
+	c.GossipPort = testGossipPort
+	c.GossipSeedAddresses = []string{testGossipAddress, dummyGossipSeedAddress}
+	c.DeploymentID = 1
+	c.FS = vfs.NewStrictMem()
+	c.LogServicePort = testServicePort
+	c.DisableWorkers = true
+	c.UseTeeLogDB = true
 	c.RPC.MaxMessageSize = testServerMaxMsgSize
-	c.Fill()
 	return c
 }
 
@@ -68,6 +66,7 @@ func runServiceTest(t *testing.T,
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	service, err := NewService(cfg,
 		newFS(),
+		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -111,12 +110,27 @@ func TestNewService(t *testing.T) {
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	service, err := NewService(cfg,
 		newFS(),
+		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
 	)
 	require.NoError(t, err)
 	assert.NoError(t, service.Close())
+}
+
+func TestNotSupportCmd(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		req := pb.Request{
+			Method: 999,
+		}
+		resp, _ := s.handle(ctx, req, nil)
+		assert.Equal(t, uint32(moerr.ErrNotSupported), resp.ErrorCode)
+	}
+	runServiceTest(t, false, true, fn)
 }
 
 func TestServiceConnect(t *testing.T) {
@@ -128,7 +142,7 @@ func TestServiceConnect(t *testing.T) {
 			Method: pb.CONNECT,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
-				DNID:    100,
+				TNID:    100,
 			},
 		}
 		resp := s.handleConnect(ctx, req)
@@ -146,7 +160,7 @@ func TestServiceConnectTimeout(t *testing.T) {
 			Method: pb.CONNECT,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
-				DNID:    100,
+				TNID:    100,
 			},
 		}
 		resp := s.handleConnect(ctx, req)
@@ -164,7 +178,7 @@ func TestServiceConnectRO(t *testing.T) {
 			Method: pb.CONNECT_RO,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
-				DNID:    100,
+				TNID:    100,
 			},
 		}
 		resp := s.handleConnect(ctx, req)
@@ -242,14 +256,14 @@ func TestServiceHandleCNHeartbeat(t *testing.T) {
 	runServiceTest(t, true, true, fn)
 }
 
-func TestServiceHandleDNHeartbeat(t *testing.T) {
+func TestServiceHandleTNHeartbeat(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 
 		req := pb.Request{
-			Method: pb.DN_HEARTBEAT,
-			DNHeartbeat: &pb.DNStoreHeartbeat{
+			Method: pb.TN_HEARTBEAT,
+			TNHeartbeat: &pb.TNStoreHeartbeat{
 				UUID: "uuid1",
 			},
 		}
@@ -279,7 +293,7 @@ func TestServiceHandleDNHeartbeat(t *testing.T) {
 		}
 		require.NoError(t,
 			s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{sc1, sc2, sc3}))
-		resp := s.handleDNHeartbeat(ctx, req)
+		resp := s.handleTNHeartbeat(ctx, req)
 		require.Equal(t, []pb.ScheduleCommand{sc1, sc3}, resp.CommandBatch.Commands)
 	}
 	runServiceTest(t, true, true, fn)
@@ -294,14 +308,14 @@ func TestServiceHandleAppend(t *testing.T) {
 			Method: pb.CONNECT_RO,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
-				DNID:    100,
+				TNID:    100,
 			},
 		}
 		resp := s.handleConnect(ctx, req)
 		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 
 		data := make([]byte, 8)
-		cmd := getTestAppendCmd(req.LogRequest.DNID, data)
+		cmd := getTestAppendCmd(req.LogRequest.TNID, data)
 		req = pb.Request{
 			Method: pb.APPEND,
 			LogRequest: pb.LogRequest{
@@ -324,14 +338,14 @@ func TestServiceHandleAppendWhenNotBeingTheLeaseHolder(t *testing.T) {
 			Method: pb.CONNECT_RO,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
-				DNID:    100,
+				TNID:    100,
 			},
 		}
 		resp := s.handleConnect(ctx, req)
 		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 
 		data := make([]byte, 8)
-		cmd := getTestAppendCmd(req.LogRequest.DNID+1, data)
+		cmd := getTestAppendCmd(req.LogRequest.TNID+1, data)
 		req = pb.Request{
 			Method: pb.APPEND,
 			LogRequest: pb.LogRequest{
@@ -354,14 +368,14 @@ func TestServiceHandleRead(t *testing.T) {
 			Method: pb.CONNECT_RO,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
-				DNID:    100,
+				TNID:    100,
 			},
 		}
 		resp := s.handleConnect(ctx, req)
 		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 
 		data := make([]byte, 8)
-		cmd := getTestAppendCmd(req.LogRequest.DNID, data)
+		cmd := getTestAppendCmd(req.LogRequest.TNID, data)
 		req = pb.Request{
 			Method: pb.APPEND,
 			LogRequest: pb.LogRequest{
@@ -402,14 +416,14 @@ func TestServiceTruncate(t *testing.T) {
 			Method: pb.CONNECT_RO,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
-				DNID:    100,
+				TNID:    100,
 			},
 		}
 		resp := s.handleConnect(ctx, req)
 		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 
 		data := make([]byte, 8)
-		cmd := getTestAppendCmd(req.LogRequest.DNID, data)
+		cmd := getTestAppendCmd(req.LogRequest.TNID, data)
 		req = pb.Request{
 			Method: pb.APPEND,
 			LogRequest: pb.LogRequest{
@@ -514,33 +528,31 @@ func TestServiceCheckHAKeeper(t *testing.T) {
 
 func TestShardInfoCanBeQueried(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	cfg1 := Config{
-		UUID:                uuid.New().String(),
-		FS:                  vfs.NewStrictMem(),
-		DeploymentID:        1,
-		RTTMillisecond:      5,
-		DataDir:             "data-1",
-		ServiceAddress:      "127.0.0.1:9002",
-		RaftAddress:         "127.0.0.1:9000",
-		GossipAddress:       "127.0.0.1:9001",
-		GossipSeedAddresses: []string{"127.0.0.1:9011"},
-		DisableWorkers:      true,
-	}
-	cfg2 := Config{
-		UUID:                uuid.New().String(),
-		FS:                  vfs.NewStrictMem(),
-		DeploymentID:        1,
-		RTTMillisecond:      5,
-		DataDir:             "data-2",
-		ServiceAddress:      "127.0.0.1:9012",
-		RaftAddress:         "127.0.0.1:9010",
-		GossipAddress:       "127.0.0.1:9011",
-		GossipSeedAddresses: []string{"127.0.0.1:9001"},
-		DisableWorkers:      true,
-	}
-	cfg1.Fill()
+	cfg1 := DefaultConfig()
+	cfg1.UUID = uuid.New().String()
+	cfg1.FS = vfs.NewStrictMem()
+	cfg1.DeploymentID = 1
+	cfg1.RTTMillisecond = 5
+	cfg1.DataDir = "data-1"
+	cfg1.LogServicePort = 9002
+	cfg1.RaftPort = 9000
+	cfg1.GossipPort = 9001
+	cfg1.GossipSeedAddresses = []string{"127.0.0.1:9011"}
+	cfg1.DisableWorkers = true
+	cfg2 := DefaultConfig()
+	cfg2.UUID = uuid.New().String()
+	cfg2.FS = vfs.NewStrictMem()
+	cfg2.DeploymentID = 1
+	cfg2.RTTMillisecond = 5
+	cfg2.DataDir = "data-2"
+	cfg2.LogServicePort = 9012
+	cfg2.RaftPort = 9010
+	cfg2.GossipPort = 9011
+	cfg2.GossipSeedAddresses = []string{"127.0.0.1:9001"}
+	cfg2.DisableWorkers = true
 	service1, err := NewService(cfg1,
 		newFS(),
+		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -552,9 +564,9 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 	peers1 := make(map[uint64]dragonboat.Target)
 	peers1[1] = service1.ID()
 	assert.NoError(t, service1.store.startReplica(1, 1, peers1, false))
-	cfg2.Fill()
 	service2, err := NewService(cfg2,
 		newFS(),
+		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -588,7 +600,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 		ri, ok := si1.Replicas[1]
 		assert.True(t, ok)
 		assert.Equal(t, nhID1, ri.UUID)
-		assert.Equal(t, cfg1.ServiceAddress, ri.ServiceAddress)
+		assert.Equal(t, cfg1.LogServiceServiceAddr(), ri.ServiceAddress)
 
 		si2, ok := service1.getShardInfo(2)
 		if !ok || si2.LeaderID != 1 {
@@ -601,7 +613,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 		ri, ok = si2.Replicas[1]
 		assert.True(t, ok)
 		assert.Equal(t, nhID2, ri.UUID)
-		assert.Equal(t, cfg2.ServiceAddress, ri.ServiceAddress)
+		assert.Equal(t, cfg2.LogServiceServiceAddr(), ri.ServiceAddress)
 
 		si1, ok = service2.getShardInfo(1)
 		if !ok || si1.LeaderID != 1 {
@@ -614,7 +626,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 		ri, ok = si1.Replicas[1]
 		assert.True(t, ok)
 		assert.Equal(t, nhID1, ri.UUID)
-		assert.Equal(t, cfg1.ServiceAddress, ri.ServiceAddress)
+		assert.Equal(t, cfg1.LogServiceServiceAddr(), ri.ServiceAddress)
 
 		si2, ok = service2.getShardInfo(2)
 		if !ok || si2.LeaderID != 1 {
@@ -627,7 +639,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 		ri, ok = si2.Replicas[1]
 		assert.True(t, ok)
 		assert.Equal(t, nhID2, ri.UUID)
-		assert.Equal(t, cfg2.ServiceAddress, ri.ServiceAddress)
+		assert.Equal(t, cfg2.LogServiceServiceAddr(), ri.ServiceAddress)
 
 		done = true
 		break
@@ -644,34 +656,34 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 	configs := make([]Config, 0)
 	services := make([]*Service, 0)
 	for i := 0; i < nodeCount; i++ {
-		cfg := Config{
-			FS:             vfs.NewStrictMem(),
-			UUID:           uuid.New().String(),
-			DeploymentID:   1,
-			RTTMillisecond: 200,
-			DataDir:        fmt.Sprintf("data-%d", i),
-			ServiceAddress: fmt.Sprintf("127.0.0.1:%d", 26000+10*i),
-			RaftAddress:    fmt.Sprintf("127.0.0.1:%d", 26000+10*i+1),
-			GossipAddress:  fmt.Sprintf("127.0.0.1:%d", 26000+10*i+2),
-			GossipSeedAddresses: []string{
-				"127.0.0.1:26002",
-				"127.0.0.1:26012",
-				"127.0.0.1:26022",
-				"127.0.0.1:26032",
-				"127.0.0.1:26042",
-				"127.0.0.1:26052",
-				"127.0.0.1:26062",
-				"127.0.0.1:26072",
-				"127.0.0.1:26082",
-				"127.0.0.1:26092",
-			},
-			DisableWorkers:  true,
-			LogDBBufferSize: 1024 * 16,
+		cfg := DefaultConfig()
+		cfg.FS = vfs.NewStrictMem()
+		cfg.UUID = uuid.New().String()
+		cfg.DeploymentID = 1
+		cfg.RTTMillisecond = 200
+		cfg.DataDir = fmt.Sprintf("data-%d", i)
+		cfg.LogServicePort = 26000 + 10*i
+		cfg.RaftPort = 26000 + 10*i + 1
+		cfg.GossipPort = 26000 + 10*i + 2
+		cfg.GossipSeedAddresses = []string{
+			"127.0.0.1:26002",
+			"127.0.0.1:26012",
+			"127.0.0.1:26022",
+			"127.0.0.1:26032",
+			"127.0.0.1:26042",
+			"127.0.0.1:26052",
+			"127.0.0.1:26062",
+			"127.0.0.1:26072",
+			"127.0.0.1:26082",
+			"127.0.0.1:26092",
 		}
+		cfg.DisableWorkers = true
+		cfg.LogDBBufferSize = 1024 * 16
 		cfg.GossipProbeInterval.Duration = 350 * time.Millisecond
 		configs = append(configs, cfg)
 		service, err := NewService(cfg,
 			newFS(),
+			nil,
 			WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 				return true
 			}),
@@ -785,6 +797,7 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 	time.Sleep(2 * time.Second)
 	service, err := NewService(configs[12],
 		newFS(),
+		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -902,6 +915,252 @@ func TestServiceHandleCNUpdateLabel(t *testing.T) {
 		labels3, ok6 := info.Labels["role"]
 		assert.True(t, ok6)
 		assert.Equal(t, labels3.Labels, []string{"1", "2"})
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestServiceHandleCNUpdateWorkState(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		uuid := "uuid1"
+		ctx0, cancel0 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel0()
+		req := pb.Request{
+			Method: pb.UPDATE_CN_WORK_STATE,
+			CNWorkState: &pb.CNWorkState{
+				UUID:  uuid,
+				State: metadata.WorkState_Working,
+			},
+		}
+		resp := s.handleUpdateCNWorkState(ctx0, req)
+		assert.Equal(t, uint32(20101), resp.ErrorCode)
+		assert.Equal(t, fmt.Sprintf("internal error: CN [%s] does not exist", uuid), resp.ErrorMessage)
+
+		ctx1, cancel1 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel1()
+		req = pb.Request{
+			Method: pb.CN_HEARTBEAT,
+			CNHeartbeat: &pb.CNStoreHeartbeat{
+				UUID: uuid,
+			},
+		}
+		resp = s.handleCNHeartbeat(ctx1, req)
+		assert.Equal(t, &pb.CommandBatch{}, resp.CommandBatch)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		ctx2, cancel2 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel2()
+		req = pb.Request{
+			Method: pb.UPDATE_CN_WORK_STATE,
+			CNWorkState: &pb.CNWorkState{
+				UUID:  uuid,
+				State: metadata.WorkState_Working,
+			},
+		}
+		resp = s.handleUpdateCNWorkState(ctx2, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		ctx3, cancel3 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel3()
+		req = pb.Request{
+			Method: pb.GET_CLUSTER_STATE,
+		}
+		resp = s.handleGetCheckerState(ctx3, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.NotEmpty(t, resp.CheckerState)
+		info, ok1 := resp.CheckerState.CNState.Stores[uuid]
+		assert.True(t, ok1)
+		assert.Equal(t, metadata.WorkState_Working, info.WorkState)
+
+		ctx4, cancel4 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel4()
+		req = pb.Request{
+			Method: pb.UPDATE_CN_WORK_STATE,
+			CNWorkState: &pb.CNWorkState{
+				UUID:  uuid,
+				State: metadata.WorkState_Unknown,
+			},
+		}
+		resp = s.handleUpdateCNWorkState(ctx4, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		ctx5, cancel5 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel5()
+		req = pb.Request{
+			Method: pb.GET_CLUSTER_STATE,
+		}
+		resp = s.handleGetCheckerState(ctx5, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.NotEmpty(t, resp.CheckerState)
+		info, ok1 = resp.CheckerState.CNState.Stores[uuid]
+		assert.True(t, ok1)
+		assert.Equal(t, metadata.WorkState_Working, info.WorkState)
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestServiceHandleCNPatchStore(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		uuid := "uuid1"
+		ctx0, cancel0 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel0()
+		req := pb.Request{
+			Method: pb.PATCH_CN_STORE,
+			CNStateLabel: &pb.CNStateLabel{
+				UUID:  uuid,
+				State: metadata.WorkState_Working,
+				Labels: map[string]metadata.LabelList{
+					"account": {Labels: []string{"a", "b"}},
+					"role":    {Labels: []string{"1", "2"}},
+				},
+			},
+		}
+		resp := s.handlePatchCNStore(ctx0, req)
+		assert.Equal(t, uint32(20101), resp.ErrorCode)
+		assert.Equal(t, fmt.Sprintf("internal error: CN [%s] does not exist", uuid), resp.ErrorMessage)
+
+		ctx1, cancel1 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel1()
+		req = pb.Request{
+			Method: pb.CN_HEARTBEAT,
+			CNHeartbeat: &pb.CNStoreHeartbeat{
+				UUID: uuid,
+			},
+		}
+		resp = s.handleCNHeartbeat(ctx1, req)
+		assert.Equal(t, &pb.CommandBatch{}, resp.CommandBatch)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		ctx2, cancel2 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel2()
+		req = pb.Request{
+			Method: pb.PATCH_CN_STORE,
+			CNStateLabel: &pb.CNStateLabel{
+				UUID:  uuid,
+				State: metadata.WorkState_Working,
+				Labels: map[string]metadata.LabelList{
+					"account": {Labels: []string{"a", "b"}},
+					"role":    {Labels: []string{"1", "2"}},
+				},
+			},
+		}
+		resp = s.handlePatchCNStore(ctx2, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		ctx3, cancel3 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel3()
+		req = pb.Request{
+			Method: pb.GET_CLUSTER_STATE,
+		}
+		resp = s.handleGetCheckerState(ctx3, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.NotEmpty(t, resp.CheckerState)
+		info, ok1 := resp.CheckerState.CNState.Stores[uuid]
+		assert.True(t, ok1)
+		assert.Equal(t, metadata.WorkState_Working, info.WorkState)
+		labels1, ok2 := info.Labels["account"]
+		assert.True(t, ok2)
+		assert.Equal(t, labels1.Labels, []string{"a", "b"})
+		labels2, ok3 := info.Labels["role"]
+		assert.True(t, ok3)
+		assert.Equal(t, labels2.Labels, []string{"1", "2"})
+
+		ctx4, cancel4 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel4()
+		req = pb.Request{
+			Method: pb.PATCH_CN_STORE,
+			CNStateLabel: &pb.CNStateLabel{
+				UUID:  uuid,
+				State: metadata.WorkState_Draining,
+			},
+		}
+		resp = s.handlePatchCNStore(ctx4, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		ctx5, cancel5 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel5()
+		req = pb.Request{
+			Method: pb.GET_CLUSTER_STATE,
+		}
+		resp = s.handleGetCheckerState(ctx5, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.NotEmpty(t, resp.CheckerState)
+		info, ok1 = resp.CheckerState.CNState.Stores[uuid]
+		assert.True(t, ok1)
+		assert.Equal(t, metadata.WorkState_Draining, info.WorkState)
+		labels1, ok2 = info.Labels["account"]
+		assert.True(t, ok2)
+		assert.Equal(t, labels1.Labels, []string{"a", "b"})
+		labels2, ok3 = info.Labels["role"]
+		assert.True(t, ok3)
+		assert.Equal(t, labels2.Labels, []string{"1", "2"})
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestServiceHandleCNDeleteStore(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		uuid := "uuid1"
+		ctx0, cancel0 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel0()
+		req := pb.Request{
+			Method: pb.CN_HEARTBEAT,
+			CNHeartbeat: &pb.CNStoreHeartbeat{
+				UUID: uuid,
+			},
+		}
+		resp := s.handleCNHeartbeat(ctx0, req)
+		assert.Equal(t, &pb.CommandBatch{}, resp.CommandBatch)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		ctx1, cancel1 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel1()
+		req = pb.Request{
+			Method: pb.GET_CLUSTER_STATE,
+		}
+		resp = s.handleGetCheckerState(ctx1, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.NotEmpty(t, resp.CheckerState)
+		_, ok := resp.CheckerState.CNState.Stores[uuid]
+		assert.True(t, ok)
+
+		ctx2, cancel2 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel2()
+		req = pb.Request{
+			Method: pb.DELETE_CN_STORE,
+			DeleteCNStore: &pb.DeleteCNStore{
+				StoreID: uuid,
+			},
+		}
+		resp = s.handleDeleteCNStore(ctx2, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		ctx3, cancel3 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel3()
+		req = pb.Request{
+			Method: pb.GET_CLUSTER_STATE,
+		}
+		resp = s.handleGetCheckerState(ctx3, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.NotEmpty(t, resp.CheckerState)
+		_, ok = resp.CheckerState.CNState.Stores[uuid]
+		assert.False(t, ok)
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestServiceHandleProxyHeartbeat(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		req := pb.Request{
+			Method: pb.PROXY_HEARTBEAT,
+			ProxyHeartbeat: &pb.ProxyHeartbeat{
+				UUID: "uuid1",
+			},
+		}
+		resp := s.handleProxyHeartbeat(ctx, req)
+		assert.Equal(t, &pb.CommandBatch{}, resp.CommandBatch)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 	}
 	runServiceTest(t, true, true, fn)
 }

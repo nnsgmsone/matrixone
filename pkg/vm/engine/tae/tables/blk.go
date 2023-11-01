@@ -16,6 +16,7 @@ package tables
 
 import (
 	"context"
+	"math/rand"
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
@@ -27,11 +28,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type block struct {
@@ -40,12 +40,10 @@ type block struct {
 
 func newBlock(
 	meta *catalog.BlockEntry,
-	fs *objectio.ObjectFS,
-	indexCache model.LRUCache,
-	scheduler tasks.TaskScheduler,
+	rt *dbutils.Runtime,
 ) *block {
 	blk := &block{}
-	blk.baseBlock = newBaseBlock(blk, meta, indexCache, fs, scheduler)
+	blk.baseBlock = newBaseBlock(blk, meta, rt)
 	blk.mvcc.SetDeletesListener(blk.OnApplyDelete)
 	pnode := newPersistedNode(blk.baseBlock)
 	node := NewNode(pnode)
@@ -60,7 +58,6 @@ func (blk *block) Init() (err error) {
 
 func (blk *block) OnApplyDelete(
 	deleted uint64,
-	gen common.RowGen,
 	ts types.TS) (err error) {
 	blk.meta.GetSegment().GetTable().RemoveRows(deleted)
 	return
@@ -80,20 +77,17 @@ func (blk *block) Pin() *common.PinnedItem[*block] {
 }
 
 func (blk *block) GetColumnDataByIds(
+	ctx context.Context,
 	txn txnif.AsyncTxn,
 	readSchema any,
 	colIdxes []int,
-) (view *model.BlockView, err error) {
+) (view *containers.BlockView, err error) {
 	node := blk.PinNode()
 	defer node.Unref()
 	schema := readSchema.(*catalog.Schema)
 	return blk.ResolvePersistedColumnDatas(
-		context.Background(),
-		node.MustPNode(),
-		txn,
-		schema,
-		colIdxes,
-		false)
+		ctx, txn, schema, colIdxes, false,
+	)
 }
 
 // GetColumnDataById Get the snapshot at txn's start timestamp of column data.
@@ -104,7 +98,7 @@ func (blk *block) GetColumnDataById(
 	txn txnif.AsyncTxn,
 	readSchema any,
 	col int,
-) (view *model.ColumnView, err error) {
+) (view *containers.ColumnView, err error) {
 	schema := readSchema.(*catalog.Schema)
 	return blk.ResolvePersistedColumnData(
 		ctx,
@@ -113,10 +107,10 @@ func (blk *block) GetColumnDataById(
 		col,
 		false)
 }
-func (blk *block) DataCommittedBefore(ts types.TS) bool {
+func (blk *block) CoarseCheckAllRowsCommittedBefore(ts types.TS) bool {
 	blk.meta.RLock()
 	defer blk.meta.RUnlock()
-	return blk.meta.GetCreatedAt().Less(ts)
+	return blk.meta.GetCreatedAtLocked().Less(ts)
 }
 
 func (blk *block) BatchDedup(
@@ -130,7 +124,7 @@ func (blk *block) BatchDedup(
 ) (err error) {
 	defer func() {
 		if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-			logutil.Infof("BatchDedup BLK-%s: %v", blk.meta.ID.String(), err)
+			logutil.Infof("BatchDedup %s (%v)BLK-%s: %v", blk.meta.GetSegment().GetTable().GetLastestSchema().Name, blk.IsAppendable(), blk.meta.ID.String(), err)
 		}
 	}()
 	return blk.PersistedBatchDedup(
@@ -154,13 +148,8 @@ func (blk *block) GetValue(
 	defer node.Unref()
 	schema := readSchema.(*catalog.Schema)
 	return blk.getPersistedValue(
-		ctx,
-		node.MustPNode(),
-		txn,
-		schema,
-		row,
-		col,
-		false)
+		ctx, txn, schema, row, col, false,
+	)
 }
 
 func (blk *block) RunCalibration() (score int) {
@@ -173,7 +162,7 @@ func (blk *block) estimateRawScore() (score int, dropped bool) {
 		dropped = true
 		return
 	}
-	if blk.mvcc.GetChangeNodeCnt() == 0 {
+	if blk.mvcc.GetChangeIntentionCnt() == 0 {
 		// No deletes found
 		score = 0
 	} else {
@@ -192,6 +181,7 @@ func (blk *block) estimateRawScore() (score int, dropped bool) {
 }
 
 func (blk *block) EstimateScore(ttl time.Duration, force bool) int {
+	ttl = time.Duration(float64(ttl) * float64(rand.Intn(5)+10) / float64(10))
 	return blk.adjustScore(blk.estimateRawScore, ttl, force)
 }
 
@@ -247,6 +237,14 @@ func (blk *block) getPersistedRowByFilter(
 		return
 	}
 	if deleted {
+		err = moerr.NewNotFoundNoCtx()
+		return
+	}
+	deletes, err := blk.persistedCollectDeleteMaskInRange(ctx, types.TS{}, txn.GetStartTS())
+	if err != nil {
+		return
+	}
+	if deletes.Contains(uint64(offset)) {
 		err = moerr.NewNotFoundNoCtx()
 	}
 	return

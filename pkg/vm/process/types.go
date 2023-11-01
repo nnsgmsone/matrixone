@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/buffer"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -31,8 +33,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+)
+
+const (
+	VectorLimit = 32
 )
 
 // Analyze analyzes information for operator
@@ -108,6 +117,7 @@ type SessionInfo struct {
 	SeqAddValues   map[uint64]string
 	SeqLastValue   []string
 	SqlHelper      sqlHelper
+	Buf            *buffer.Buffer
 }
 
 // AnalyzeInfo  analyze information for query
@@ -144,18 +154,141 @@ type AnalyzeInfo struct {
 	InsertTime int64
 }
 
+type ExecStatus int
+
+const (
+	ExecStop = iota
+	ExecNext
+	ExecHasMore
+)
+
+// StmtProfile will be clear for every statement
+type StmtProfile struct {
+	mu sync.Mutex
+	// sqlSourceType denotes where the sql
+	sqlSourceType string
+	txnId         uuid.UUID
+	stmtId        uuid.UUID
+	// stmtType
+	stmtType string
+	// queryType
+	queryType string
+	// queryStart is the time when the query starts.
+	queryStart time.Time
+	//the sql from user may have multiple statements
+	//sqlOfStmt is the text part of one statement in the sql
+	sqlOfStmt string
+}
+
+func (sp *StmtProfile) Clear() {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	sp.sqlSourceType = ""
+	sp.txnId = uuid.UUID{}
+	sp.stmtId = uuid.UUID{}
+	sp.stmtType = ""
+	sp.queryType = ""
+	sp.sqlOfStmt = ""
+}
+
+func (sp *StmtProfile) SetSqlOfStmt(sot string) {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	sp.sqlOfStmt = sot
+}
+
+func (sp *StmtProfile) GetSqlOfStmt() string {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	return sp.sqlOfStmt
+}
+
+func (sp *StmtProfile) SetQueryStart(t time.Time) {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	sp.queryStart = t
+}
+
+func (sp *StmtProfile) GetQueryStart() time.Time {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	return sp.queryStart
+}
+
+func (sp *StmtProfile) SetSqlSourceType(st string) {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	sp.sqlSourceType = st
+}
+
+func (sp *StmtProfile) GetSqlSourceType() string {
+	return sp.sqlSourceType
+}
+
+func (sp *StmtProfile) SetQueryType(qt string) {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	sp.queryType = qt
+}
+
+func (sp *StmtProfile) GetQueryType() string {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	return sp.queryType
+}
+
+func (sp *StmtProfile) SetStmtType(st string) {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	sp.stmtType = st
+}
+
+func (sp *StmtProfile) GetStmtType() string {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	return sp.stmtType
+}
+
+func (sp *StmtProfile) SetTxnId(id []byte) {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	copy(sp.txnId[:], id)
+}
+
+func (sp *StmtProfile) GetTxnId() uuid.UUID {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	return sp.txnId
+}
+
+func (sp *StmtProfile) SetStmtId(id uuid.UUID) {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	copy(sp.stmtId[:], id[:])
+}
+
+func (sp *StmtProfile) GetStmtId() uuid.UUID {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	return sp.stmtId
+}
+
 // Process contains context used in query execution
 // one or more pipeline will be generated for one query,
 // and one pipeline has one process instance.
 type Process struct {
+	StmtProfile *StmtProfile
 	// Id, query id.
 	Id  string
 	Reg Register
 	Lim Limitation
 
-	vp           *vectorPool
-	mp           *mpool.MPool
-	prepareBatch *batch.Batch
+	vp              *vectorPool
+	mp              *mpool.MPool
+	prepareBatch    *batch.Batch
+	prepareExprList any
+
+	valueScanBatch map[[16]byte]*batch.Batch
 
 	// unix timestamp
 	UnixTime int64
@@ -185,11 +318,23 @@ type Process struct {
 	DispatchNotifyCh chan WrapCs
 
 	Aicm *defines.AutoIncrCacheManager
+
+	resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	prepareParams       *vector.Vector
+
+	QueryService queryservice.QueryService
+
+	Hakeeper logservice.CNHAKeeperClient
+
+	UdfService udf.Service
 }
 
 type vectorPool struct {
 	sync.Mutex
 	vecs map[uint8][]*vector.Vector
+
+	// max vector count limit for each type in pool.
+	Limit int
 }
 
 type sqlHelper interface {
@@ -204,6 +349,17 @@ type WrapCs struct {
 	DoneCh chan struct{}
 }
 
+func (proc *Process) SetStmtProfile(sp *StmtProfile) {
+	proc.StmtProfile = sp
+}
+
+func (proc *Process) GetStmtProfile() *StmtProfile {
+	if proc.StmtProfile != nil {
+		return proc.StmtProfile
+	}
+	return &StmtProfile{}
+}
+
 func (proc *Process) InitSeq() {
 	proc.SessionInfo.SeqCurValues = make(map[uint64]string)
 	proc.SessionInfo.SeqLastValue = make([]string, 1)
@@ -212,10 +368,68 @@ func (proc *Process) InitSeq() {
 	proc.SessionInfo.SeqDeleteKeys = make([]uint64, 0)
 }
 
+func (proc *Process) SetValueScanBatch(key uuid.UUID, batch *batch.Batch) {
+	proc.valueScanBatch[key] = batch
+}
+
+func (proc *Process) GetValueScanBatch(key uuid.UUID) *batch.Batch {
+	bat, ok := proc.valueScanBatch[key]
+	if ok {
+		bat.SetCnt(1000) // make sure this batch wouldn't be cleaned
+		return bat
+		// delete(proc.valueScanBatch, key)
+	}
+	return bat
+}
+
+func (proc *Process) CleanValueScanBatchs() {
+	for k, bat := range proc.valueScanBatch {
+		bat.SetCnt(1)
+		bat.Clean(proc.Mp())
+		delete(proc.valueScanBatch, k)
+	}
+}
+
+func (proc *Process) GetValueScanBatchs() []*batch.Batch {
+	var bats []*batch.Batch
+
+	for k, bat := range proc.valueScanBatch {
+		if bat != nil {
+			bats = append(bats, bat)
+		}
+		delete(proc.valueScanBatch, k)
+	}
+	return bats
+}
+
+func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {
+	if i < 0 || i >= proc.prepareParams.Length() {
+		return nil, moerr.NewInternalError(proc.Ctx, "get prepare params error, index %d not exists", i)
+	}
+	if proc.prepareParams.IsNull(uint64(i)) {
+		return nil, nil
+	} else {
+		val := proc.prepareParams.GetRawBytesAt(i)
+		return val, nil
+	}
+}
+
+func (proc *Process) SetResolveVariableFunc(f func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)) {
+	proc.resolveVariableFunc = f
+}
+
+func (proc *Process) GetResolveVariableFunc() func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+	return proc.resolveVariableFunc
+}
+
 func (proc *Process) SetLastInsertID(num uint64) {
 	if proc.LastInsertID != nil {
 		atomic.StoreUint64(proc.LastInsertID, num)
 	}
+}
+
+func (proc *Process) GetSessionInfo() *SessionInfo {
+	return &proc.SessionInfo
 }
 
 func (proc *Process) GetLastInsertID() uint64 {
@@ -248,7 +462,8 @@ func (si *SessionInfo) GetHost() string {
 }
 
 func (si *SessionInfo) GetUserHost() string {
-	return si.User + "@" + si.Host
+	//currently, the host_name is 'localhost'
+	return si.User + "@localhost"
 }
 
 func (si *SessionInfo) GetRole() string {
@@ -273,4 +488,22 @@ func (si *SessionInfo) GetDatabase() string {
 
 func (si *SessionInfo) GetVersion() string {
 	return si.Version
+}
+
+func (a *AnalyzeInfo) Reset() {
+	a.NodeId = 0
+	a.InputRows = 0
+	a.OutputRows = 0
+	a.TimeConsumed = 0
+	a.WaitTimeConsumed = 0
+	a.InputSize = 0
+	a.OutputSize = 0
+	a.MemorySize = 0
+	a.DiskIO = 0
+	a.S3IOByte = 0
+	a.S3IOInputCount = 0
+	a.S3IOOutputCount = 0
+	a.NetworkIO = 0
+	a.ScanTime = 0
+	a.InsertTime = 0
 }

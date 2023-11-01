@@ -22,15 +22,24 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 const (
 	JoinSideNone       int8 = 0
-	JoinSideLeft            = 1 << iota
-	JoinSideRight           = 1 << iota
+	JoinSideLeft            = 1 << 1
+	JoinSideRight           = 1 << 2
 	JoinSideBoth            = JoinSideLeft | JoinSideRight
-	JoinSideMark            = 1 << iota
-	JoinSideCorrelated      = 1 << iota
+	JoinSideMark            = 1 << 3
+	JoinSideCorrelated      = 1 << 4
+)
+
+type ExpandAliasMode int8
+
+const (
+	NoAlias ExpandAliasMode = iota
+	AliasBeforeColumn
+	AliasAfterColumn
 )
 
 type TableDefType = plan.TableDef_DefType
@@ -76,7 +85,7 @@ type CompilerContext interface {
 	// get the list of the account id
 	ResolveAccountIds(accountNames []string) ([]uint32, error)
 	// get the relevant information of udf
-	ResolveUdf(name string, args []*Expr) (string, error)
+	ResolveUdf(name string, args []*Expr) (*function.Udf, error)
 	// get the definition of primary key
 	GetPrimaryKeyDef(dbName string, tableName string) []*ColDef
 	// get needed info for stats by table
@@ -153,23 +162,42 @@ type QueryBuilder struct {
 	ctxByNode    []*BindContext
 	nameByColRef map[[2]int32]string
 
+	tag2Table map[int32]*TableDef
+
 	nextTag int32
 
+	isPrepareStatement bool
 	mysqlCompatible    bool
 	haveOnDuplicateKey bool // if it's a plan contain onduplicate key node, we can not use some optmize rule
+	isForUpdate        bool // if it's a query plan for update
+
+	deleteNode map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
 }
 
 type CTERef struct {
 	defaultDatabase string
+	isRecursive     bool
 	ast             *tree.CTE
 	maskedCTEs      map[string]any
+}
+
+type aliasItem struct {
+	idx     int32
+	astExpr tree.Expr
 }
 
 type BindContext struct {
 	binder Binder
 
-	cteByName  map[string]*CTERef
-	maskedCTEs map[string]any
+	cteByName              map[string]*CTERef
+	maskedCTEs             map[string]any
+	normalCTE              bool
+	initSelect             bool
+	recSelect              bool
+	finalSelect            bool
+	unionSelect            bool
+	recRecursiveScanNodeId int32
+	isTryBindingCTE        bool
 
 	cteName  string
 	headings []string
@@ -178,20 +206,26 @@ type BindContext struct {
 	aggregateTag int32
 	projectTag   int32
 	resultTag    int32
+	sinkTag      int32
 	windowTag    int32
+	timeTag      int32
 
 	groups     []*plan.Expr
 	aggregates []*plan.Expr
 	projects   []*plan.Expr
 	results    []*plan.Expr
 	windows    []*plan.Expr
+	times      []*plan.Expr
 
 	groupByAst     map[string]int32
 	aggregateByAst map[string]int32
 	windowByAst    map[string]int32
 	projectByExpr  map[string]int32
+	timeByAst      map[string]int32
 
-	aliasMap map[string]int32
+	timeAsts []tree.Expr
+
+	aliasMap map[string]*aliasItem
 
 	bindings       []*Binding
 	bindingByTag   map[int32]*Binding //rel_pos
@@ -210,6 +244,8 @@ type BindContext struct {
 	rightChild *BindContext
 
 	defaultDatabase string
+
+	forceWindows bool
 }
 
 type NameTuple struct {
@@ -232,6 +268,7 @@ type Binder interface {
 	BindAggFunc(string, *tree.FuncExpr, int32, bool) (*plan.Expr, error)
 	BindWinFunc(string, *tree.FuncExpr, int32, bool) (*plan.Expr, error)
 	BindSubquery(*tree.Subquery, bool) (*plan.Expr, error)
+	BindTimeWindowFunc(string, *tree.FuncExpr, int32, bool) (*plan.Expr, error)
 	GetContext() context.Context
 }
 

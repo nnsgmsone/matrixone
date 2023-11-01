@@ -15,11 +15,11 @@
 package proxy
 
 import (
-	"fmt"
-	"io"
-	"regexp"
-	"strconv"
-	"sync"
+	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 // eventType alias uint8, which indicates the type of event.
@@ -32,10 +32,8 @@ func (t eventType) String() string {
 		return "KillQuery"
 	case TypeSetVar:
 		return "SetVar"
-	case TypeSuspendAccount:
-		return "SuspendAccount"
-	case TypeDropAccount:
-		return "DropAccount"
+	case TypePrepare:
+		return "Prepare"
 	}
 	return "Unknown"
 }
@@ -47,78 +45,9 @@ const (
 	TypeKillQuery eventType = 1
 	// TypeSetVar indicates the set variable statement.
 	TypeSetVar eventType = 2
-	// TypeSuspendAccount indicates the suspend account statement.
-	TypeSuspendAccount eventType = 3
-	// TypeDropAccount indicates the drop account statement.
-	TypeDropAccount eventType = 4
+	// TypePrepare indicates the prepare statement.
+	TypePrepare eventType = 5
 )
-
-var (
-	kill     = "[kK][iI][lL][lL]"
-	query    = "[qQ][uU][eE][rR][yY]"
-	set      = "[sS][eE][tT]"
-	session  = "[sS][eE][sS][sS][iI][oO][nN]"
-	local    = "[lL][oO][cC][aA][lL]"
-	alter    = "[aA][lL][tT][eE][rR]"
-	account  = "[aA][cC][cC][oO][uU][nN][tT]"
-	ifExists = "?:[iI][fF]\\s+[eE][xX][iI][sS][tT][sS]\\s+"
-	suspend  = "[sS][uU][sS][pP][eE][nN][dD]"
-	drop     = "[dD][rR][oO][pP]"
-
-	num              = "\\d+"
-	spaceAtLeastZero = "\\s*"
-	spaceAtLeastOne  = "\\s+"
-	varName          = "[a-zA-Z][a-zA-Z0-9_]*"
-	varValue         = "[0-9]+|'[\\s\\S]*'"
-	assign           = ":?="
-	at               = "@"
-	atAt             = "@@"
-	dot              = "\\."
-	end              = ";?"
-)
-
-// patterMap is a map eventType => pattern string
-var patternMap = map[eventType]string{
-	// Sample: kill query 10
-	TypeKillQuery: fmt.Sprintf(`^%s(%s)%s(%s)%s(%s)%s%s%s$`,
-		spaceAtLeastZero, kill, spaceAtLeastOne,
-		query, spaceAtLeastOne,
-		num, spaceAtLeastZero, end, spaceAtLeastZero),
-
-	// TypeSetVar matches set session variable:
-	//   - set session key=value;
-	//   - set local key=value;
-	//   - set @@session.key=value;
-	//   - set @@local.key=value;
-	//   - set @@key=value;
-	//   - set key=value;
-	// and set user variable:
-	//   - set @key=value;
-	TypeSetVar: fmt.Sprintf(`^%s(%s)%s(%s%s%s|%s%s%s|%s%s%s%s|%s%s%s%s|%s%s|%s|%s%s)%s(%s)%s(%s)%s%s%s$`,
-		spaceAtLeastZero, set, spaceAtLeastOne, // set
-		session, spaceAtLeastOne, varName, // session key
-		local, spaceAtLeastOne, varName, // local key
-		atAt, session, dot, varName, // @@session.key
-		atAt, local, dot, varName, // @@local.key
-		atAt, varName, // @@key
-		varName,     // key
-		at, varName, // @key
-		spaceAtLeastZero, assign, spaceAtLeastZero, // = or :=
-		varValue, spaceAtLeastZero, end, spaceAtLeastZero), // value
-
-	// Sample: alter account [if exists] acc1 suspend
-	TypeSuspendAccount: fmt.Sprintf(`^%s(%s)%s(%s)%s(%s)?(%s)%s(%s)%s%s%s$`,
-		spaceAtLeastZero, alter, spaceAtLeastOne,
-		account, spaceAtLeastOne, ifExists,
-		varName, spaceAtLeastOne,
-		suspend, spaceAtLeastZero, end, spaceAtLeastZero),
-
-	// Sample: drop account [if exists] acc1
-	TypeDropAccount: fmt.Sprintf(`^%s(%s)%s(%s)%s(%s)?(%s)%s%s%s$`,
-		spaceAtLeastZero, drop, spaceAtLeastOne,
-		account, spaceAtLeastOne, ifExists,
-		varName, spaceAtLeastZero, end, spaceAtLeastZero),
-}
 
 // IEvent is the event interface.
 type IEvent interface {
@@ -147,59 +76,36 @@ func sendResp(r []byte, c chan<- []byte) {
 	c <- r
 }
 
-// eventReq is used to make an event.
-type eventReq struct {
-	// msg is a MySQL packet bytes.
-	msg []byte
-	dst io.Writer
-}
-
-// eventReqPool is used to fetch event request from pool.
-var eventReqPool = sync.Pool{
-	New: func() interface{} {
-		return new(eventReq)
-	},
-}
-
 // makeEvent parses an event from message bytes. If we got no
 // supported event, just return nil. If the second return value
 // is true, means that the message has been consumed completely,
 // and do not need to send to dst anymore.
-func makeEvent(req *eventReq) (IEvent, bool) {
-	if req == nil || len(req.msg) < preRecvLen {
+func makeEvent(msg []byte) (IEvent, bool) {
+	if msg == nil || len(msg) < preRecvLen {
 		return nil, false
 	}
-	if req.msg[4] == byte(cmdQuery) {
-		stmt := getStatement(req.msg)
-		// Get the event type.
-		var typ eventType
-		var matched bool
-		for typ = range patternMap {
-			matched, _ = regexp.MatchString(patternMap[typ], stmt)
-			if matched {
-				break
-			}
-		}
-		if !matched {
+	if isCmdQuery(msg) {
+		sql := getStatement(msg)
+		stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, sql, 0)
+		if err != nil {
 			return nil, false
 		}
-		switch typ {
-		case TypeKillQuery:
-			return makeKillQueryEvent(stmt, regexp.MustCompile(patternMap[typ])), true
-		case TypeSetVar:
+		if len(stmts) != 1 {
+			return nil, false
+		}
+		switch s := stmts[0].(type) {
+		case *tree.Kill:
+			return makeKillQueryEvent(sql, s.ConnectionId), true
+		case *tree.SetVar:
 			// This event should be sent to dst, so return false,
-			return makeSetVarEvent(stmt), false
-		case TypeSuspendAccount:
-			// The suspend statement could be handled directly, and whatever its
-			// result is, trigger kill connection operation.
-			return makeSuspendAccountEvent(stmt, regexp.MustCompile(patternMap[typ])), false
-		case TypeDropAccount:
-			return makeDropAccountEvent(stmt, regexp.MustCompile(patternMap[typ])), false
+			return makeSetVarEvent(sql), false
+		case *tree.PrepareString:
+			return makePrepareEvent(sql), false
 		default:
-			return nil, true
+			return nil, false
 		}
 	}
-	return nil, true
+	return nil, false
 }
 
 // killQueryEvent is the event that "kill query" statement is captured.
@@ -214,16 +120,7 @@ type killQueryEvent struct {
 }
 
 // makeKillQueryEvent creates a event with TypeKillQuery type.
-func makeKillQueryEvent(stmt string, reg *regexp.Regexp) IEvent {
-	items := reg.FindStringSubmatch(stmt)
-	if len(items) != 4 {
-		return nil
-	}
-	connID, err := strconv.ParseUint(items[3], 10, 32)
-	if err != nil {
-		return nil
-	}
-
+func makeKillQueryEvent(stmt string, connID uint64) IEvent {
 	e := &killQueryEvent{
 		stmt:   stmt,
 		connID: uint32(connID),
@@ -260,60 +157,22 @@ func (e *setVarEvent) eventType() eventType {
 	return TypeSetVar
 }
 
-// suspendAccountEvent is the event that "alter account xxx suspend" statement
-// is captured. We need to send this alter statement to event and execute it,
-// and if the result is ok, then construct "kill connection" statement and send it
-// to CN servers which have connections with the account.
-type suspendAccountEvent struct {
+// prepareEvent is the event that execute a prepare statement.
+type prepareEvent struct {
 	baseEvent
-	// stmt is the statement that will be sent to server.
 	stmt string
-	// account is the tenant text value.
-	account Tenant
 }
 
-// makeSuspendAccountEvent creates a event with TypeSuspendAccount type.
-func makeSuspendAccountEvent(stmt string, reg *regexp.Regexp) IEvent {
-	items := reg.FindStringSubmatch(stmt)
-	if len(items) != 5 {
-		return nil
+// makePrepareEvent creates an event with TypePrepare type.
+func makePrepareEvent(stmt string) IEvent {
+	e := &prepareEvent{
+		stmt: stmt,
 	}
-	e := &suspendAccountEvent{
-		stmt:    stmt,
-		account: Tenant(items[3]),
-	}
-	e.typ = TypeSuspendAccount
+	e.typ = TypePrepare
 	return e
 }
 
-func (e *suspendAccountEvent) eventType() eventType {
-	return TypeSuspendAccount
-}
-
-// dropAccountEvent is the event that "drop account xxx" statement
-// is captured. The actions are the same as suspendAccountEvent.
-type dropAccountEvent struct {
-	baseEvent
-	// stmt is the statement that will be sent to server.
-	stmt string
-	// account is the tenant text value.
-	account Tenant
-}
-
-// makeDropAccountEvent creates a event with TypeDropAccount type.
-func makeDropAccountEvent(stmt string, reg *regexp.Regexp) IEvent {
-	items := reg.FindStringSubmatch(stmt)
-	if len(items) != 4 {
-		return nil
-	}
-	e := &dropAccountEvent{
-		stmt:    stmt,
-		account: Tenant(items[3]),
-	}
-	e.typ = TypeDropAccount
-	return e
-}
-
-func (e *dropAccountEvent) eventType() eventType {
-	return TypeDropAccount
+// eventType implements the IEvent interface.
+func (e *prepareEvent) eventType() eventType {
+	return TypePrepare
 }

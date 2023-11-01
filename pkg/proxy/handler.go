@@ -16,8 +16,6 @@ package proxy
 
 import (
 	"context"
-	"time"
-
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -26,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"go.uber.org/zap"
+	"net"
 )
 
 // handler is the proxy service handler.
@@ -42,7 +41,9 @@ type handler struct {
 	// counterSet counts the events in proxy.
 	counterSet *counterSet
 	// haKeeperClient is the client to communicate with HAKeeper.
-	haKeeperClient logservice.ClusterHAKeeperClient
+	haKeeperClient logservice.ProxyHAKeeperClient
+	// ipNetList is the list of ip net, which is parsed from CIDRs.
+	ipNetList []*net.IPNet
 }
 
 var ErrNoAvailableCNServers = moerr.NewInternalErrorNoCtx("no available CN servers")
@@ -54,22 +55,10 @@ func newProxyHandler(
 	cfg Config,
 	st *stopper.Stopper,
 	cs *counterSet,
-	testHAKeeperClient logservice.ClusterHAKeeperClient,
+	haKeeperClient logservice.ProxyHAKeeperClient,
 ) (*handler, error) {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-
-	var err error
-	c := testHAKeeperClient
-	if c == nil {
-		c, err = logservice.NewProxyHAKeeperClient(ctx, cfg.HAKeeper.ClientConfig)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	// Create the MO cluster.
-	mc := clusterservice.NewMOCluster(c, cfg.Cluster.RefreshInterval.Duration)
+	mc := clusterservice.NewMOCluster(haKeeperClient, cfg.Cluster.RefreshInterval.Duration)
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 
 	// Create the rebalancer.
@@ -96,20 +85,35 @@ func newProxyHandler(
 		}
 		ru = newPluginRouter(ru, p)
 	}
+
+	var ipNetList []*net.IPNet
+	for _, cidr := range cfg.InternalCIDRs {
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			rt.Logger().Error("failed to parse CIDR",
+				zap.String("CIDR", cidr),
+				zap.Error(err))
+		} else {
+			ipNetList = append(ipNetList, ipNet)
+		}
+	}
 	return &handler{
-		ctx:            context.Background(),
+		ctx:            ctx,
 		logger:         rt.Logger(),
 		config:         cfg,
 		stopper:        st,
 		moCluster:      mc,
 		counterSet:     cs,
 		router:         ru,
-		haKeeperClient: c,
+		haKeeperClient: haKeeperClient,
+		ipNetList:      ipNetList,
 	}, nil
 }
 
 // handle handles the incoming connection.
 func (h *handler) handle(c goetty.IOSession) error {
+	h.logger.Info("new connection comes", zap.Uint64("session ID", c.ID()))
+
 	h.counterSet.connAccepted.Add(1)
 	h.counterSet.connTotal.Add(1)
 	defer h.counterSet.connTotal.Add(-1)
@@ -121,31 +125,40 @@ func (h *handler) handle(c goetty.IOSession) error {
 	}()
 
 	cc, err := newClientConn(
-		h.ctx, &h.config, h.logger, h.counterSet, c, h.haKeeperClient, h.moCluster, h.router, t,
+		h.ctx,
+		&h.config,
+		h.logger,
+		h.counterSet,
+		c,
+		h.haKeeperClient,
+		h.moCluster,
+		h.router,
+		t,
+		h.ipNetList,
 	)
 	if err != nil {
+		h.logger.Error("failed to create client conn", zap.Error(err))
 		return err
 	}
+	h.logger.Info("client conn created")
 	defer func() { _ = cc.Close() }()
 
 	// client builds connections with a best CN server and returns
 	// the server connection.
 	sc, err := cc.BuildConnWithServer(true)
 	if err != nil {
+		h.logger.Error("failed to create server conn", zap.Error(err))
 		h.counterSet.updateWithErr(err)
 		cc.SendErrToClient(err.Error())
 		return err
 	}
+	h.logger.Info("server conn created")
 	defer func() { _ = sc.Close() }()
 
-	h.logger.Debug("build connection successfully",
+	h.logger.Info("build connection successfully",
 		zap.String("client", cc.RawConn().RemoteAddr().String()),
 		zap.String("server", sc.RawConn().RemoteAddr().String()),
 	)
-
-	if err := t.run(cc, sc); err != nil {
-		return err
-	}
 
 	st := stopper.NewStopper("proxy-conn-handle", stopper.WithLogger(h.logger.RawLogger()))
 	defer st.Stop()
@@ -170,7 +183,7 @@ func (h *handler) handle(c goetty.IOSession) error {
 					t.mu.Unlock()
 				}
 			case <-ctx.Done():
-				h.logger.Info("event handler stopped.")
+				h.logger.Debug("event handler stopped.")
 				return
 			}
 		}
@@ -178,13 +191,20 @@ func (h *handler) handle(c goetty.IOSession) error {
 		return err
 	}
 
+	if err := t.run(cc, sc); err != nil {
+		return err
+	}
+
 	select {
 	case <-h.ctx.Done():
 		return h.ctx.Err()
 	case err := <-t.errC:
-		h.counterSet.updateWithErr(err)
-		h.logger.Error("proxy handle error", zap.Error(err))
-		return err
+		if !isEOFErr(err) {
+			h.counterSet.updateWithErr(err)
+			h.logger.Error("proxy handle error", zap.Error(err))
+			return err
+		}
+		return nil
 	}
 }
 

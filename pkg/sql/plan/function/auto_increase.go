@@ -47,7 +47,7 @@ func builtInInternalAutoIncrement(parameters []*vector.Vector, result vector.Fun
 		if err != nil {
 			return moerr.NewInvalidInput(proc.Ctx, "Database '%s' does not exist", dbName)
 		}
-		relation, err := database.Relation(proc.Ctx, tableName)
+		relation, err := database.Relation(proc.Ctx, tableName, nil)
 		if err != nil {
 			return moerr.NewInvalidInput(proc.Ctx, "Table '%s' does not exist in database '%s'", tableName, dbName)
 		}
@@ -93,7 +93,7 @@ func getCurrentValue(
 	ctx context.Context,
 	tableID uint64,
 	col string) (uint64, error) {
-	return incrservice.GetAutoIncrementService().CurrentValue(
+	return incrservice.GetAutoIncrementService(ctx).CurrentValue(
 		ctx,
 		tableID,
 		col)

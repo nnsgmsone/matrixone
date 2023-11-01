@@ -38,6 +38,7 @@ type container struct {
 	desc      []bool
 	nullsLast []bool
 	orderVecs []evalVector
+	sels      []int64
 
 	ps      []int64 // index of partition by
 	os      []int64 // Sorted partitions
@@ -54,13 +55,14 @@ type Argument struct {
 	Aggs  []agg.Aggregate
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
 		mp := proc.Mp()
 		ctr.FreeMergeTypeOperator(pipelineFailed)
 		ctr.cleanBatch(mp)
 		ctr.cleanAggVectors(mp)
+		ctr.cleanOrderVectors(mp)
 	}
 }
 

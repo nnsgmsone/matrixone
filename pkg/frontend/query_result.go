@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -48,7 +49,10 @@ func openSaveQueryResult(ses *Session) bool {
 	if ses.ast == nil || ses.tStmt == nil {
 		return false
 	}
-	if ses.tStmt.SqlSourceType == "internal_sql" {
+	if ses.tStmt.SqlSourceType == constant.InternalSql {
+		return false
+	}
+	if ses.tStmt.StatementType == "Select" && ses.tStmt.SqlSourceType != constant.CloudUserSql {
 		return false
 	}
 	val, err := ses.GetGlobalVar("save_query_result")
@@ -125,6 +129,8 @@ func saveQueryResultMeta(ses *Session) error {
 	defer func() {
 		ses.ResetBlockIdx()
 		ses.p = nil
+		// TIPs: Session.SetTStmt() do reset the tStmt while query is DONE.
+		// Be careful, if you want to do async op.
 		ses.tStmt = nil
 		ses.curResultSize = 0
 	}()
@@ -303,7 +309,7 @@ func simpleAstMarshal(stmt tree.Statement) ([]byte, error) {
 		*tree.ShowGrants, *tree.ShowCollation, *tree.ShowIndex,
 		*tree.ShowTableNumber, *tree.ShowColumnNumber,
 		*tree.ShowTableValues, *tree.ShowNodeList,
-		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus:
+		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus, *tree.ShowConnectors:
 		s.Typ = int(astShowNone)
 	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
 		s.Typ = int(astExplain)
@@ -470,8 +476,8 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 	for i := 0; i < 1; i++ {
 		mrs.Data[i] = make([]interface{}, columnCount)
 	}
-	exportParam := &ExportParam{
-		ExportParam: eParam,
+	exportParam := &ExportConfig{
+		userConfig: eParam,
 	}
 	//prepare output queue
 	oq := NewOutputQueue(ctx, ses, columnCount, mrs, exportParam)
@@ -524,11 +530,10 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 				return err
 			}
 			tmpBatch = bat
-			tmpBatch.InitZsOne(tmpBatch.Vecs[0].Length())
 
 			//step2.1: converts it into the csv string
 			//step2.2: writes the csv string into the outfile
-			n := tmpBatch.Vecs[0].Length()
+			n := tmpBatch.RowCount()
 			for j := 0; j < n; j++ { //row index
 				select {
 				case <-ctx.Done():
@@ -540,10 +545,7 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 					break
 				}
 
-				if tmpBatch.Zs[j] <= 0 {
-					continue
-				}
-				_, err = extractRowFromEveryVector(ses, tmpBatch, j, oq)
+				_, err = extractRowFromEveryVector(ses, tmpBatch, j, oq, false)
 				if err != nil {
 					return err
 				}

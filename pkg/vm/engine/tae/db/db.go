@@ -20,11 +20,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 
-	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
+	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
@@ -34,10 +34,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	wb "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -53,25 +51,20 @@ type DB struct {
 
 	Catalog *catalog.Catalog
 
-	IndexCache model.LRUCache
-
-	TxnMgr        *txnbase.TxnManager
-	TransferTable *model.HashPageTable
+	TxnMgr *txnbase.TxnManager
 
 	LogtailMgr *logtail.Manager
 	Wal        wal.Driver
-
-	Scheduler tasks.TaskScheduler
 
 	GCManager *gc.Manager
 
 	BGScanner          wb.IHeartbeater
 	BGCheckpointRunner checkpoint.Runner
+	MergeHandle        *MergeTaskBuilder
 
 	DiskCleaner *gc2.DiskCleaner
-	Pipeline    *blockio.IoPipeline
 
-	Fs *objectio.ObjectFS
+	Runtime *dbutils.Runtime
 
 	DBLocker io.Closer
 
@@ -101,11 +94,9 @@ func (db *DB) ForceCheckpoint(
 	if err != nil {
 		return err
 	}
-	if err = db.BGCheckpointRunner.ForceIncrementalCheckpoint(ts); err != nil {
+	if err = db.BGCheckpointRunner.ForceIncrementalCheckpoint(ts, true); err != nil {
 		return err
 	}
-	lsn := db.BGCheckpointRunner.MaxLSNInRange(ts)
-	_, err = db.Wal.RangeCheckpoint(1, lsn)
 	logutil.Debugf("[Force Checkpoint] takes %v", time.Since(t0))
 	return err
 }
@@ -119,7 +110,7 @@ func (db *DB) StartTxnWithLatestTS(info []byte) (txnif.AsyncTxn, error) {
 }
 
 func (db *DB) CommitTxn(txn txnif.AsyncTxn) (err error) {
-	return txn.Commit()
+	return txn.Commit(context.Background())
 }
 
 func (db *DB) GetTxnByID(id []byte) (txn txnif.AsyncTxn, err error) {
@@ -137,13 +128,21 @@ func (db *DB) GetOrCreateTxnWithMeta(
 	return db.TxnMgr.GetOrCreateTxnWithMeta(info, id, ts)
 }
 
-func (db *DB) RollbackTxn(txn txnif.AsyncTxn) error {
-	return txn.Rollback()
+func (db *DB) StartTxnWithStartTSAndSnapshotTS(
+	info []byte,
+	ts types.TS) (txn txnif.AsyncTxn, err error) {
+	return db.TxnMgr.StartTxnWithStartTSAndSnapshotTS(info, ts, ts)
 }
 
-func (db *DB) Replay(dataFactory *tables.DataFactory, maxTs types.TS) {
-	// maxTs := db.Catalog.GetCheckpointed().MaxTS
-	replayer := newReplayer(dataFactory, db, maxTs)
+func (db *DB) RollbackTxn(txn txnif.AsyncTxn) error {
+	return txn.Rollback(context.Background())
+}
+
+func (db *DB) Replay(dataFactory *tables.DataFactory, maxTs types.TS, lsn uint64, valid bool) {
+	if !valid {
+		logutil.Infof("checkpoint version is too small, LSN check is disable")
+	}
+	replayer := newReplayer(dataFactory, db, maxTs, lsn, valid)
 	replayer.OnTimeStamp(maxTs)
 	replayer.Replay()
 
@@ -151,6 +150,10 @@ func (db *DB) Replay(dataFactory *tables.DataFactory, maxTs types.TS) {
 	if err != nil {
 		panic(err)
 	}
+}
+
+func (db *DB) AddFaultPoint(ctx context.Context, name string, freq string, action string, iarg int64, sarg string) error {
+	return fault.AddFaultPoint(ctx, name, freq, action, iarg, sarg)
 }
 
 func (db *DB) Close() error {
@@ -161,12 +164,12 @@ func (db *DB) Close() error {
 	db.GCManager.Stop()
 	db.BGScanner.Stop()
 	db.BGCheckpointRunner.Stop()
-	db.Scheduler.Stop()
+	db.Runtime.Scheduler.Stop()
 	db.TxnMgr.Stop()
 	db.LogtailMgr.Stop()
 	db.Wal.Close()
-	db.Opts.Catalog.Close()
+	db.Catalog.Close()
 	db.DiskCleaner.Stop()
-	db.TransferTable.Close()
+	db.Runtime.TransferTable.Close()
 	return db.DBLocker.Close()
 }

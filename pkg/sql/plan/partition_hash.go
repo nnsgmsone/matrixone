@@ -44,15 +44,10 @@ func (hpb *hashPartitionBuilder) build(ctx context.Context, partitionBinder *Par
 		partitionDef.Type = plan.PartitionType_LINEAR_HASH
 	}
 
-	//step 3: build partition expr
-	planExpr, err := partitionBinder.BindExpr(partitionType.Expr, 0, true)
+	// build partition expr
+	err = buildPartitionExpr(ctx, tableDef, partitionBinder, partitionDef, partitionType.Expr)
 	if err != nil {
 		return err
-	}
-
-	partitionDef.PartitionExpr = &plan.PartitionExpr{
-		Expr:    planExpr,
-		ExprStr: tree.String(partitionType.Expr, dialect.MYSQL),
 	}
 
 	err = hpb.buildPartitionDefs(ctx, partitionBinder, partitionDef, partitionSyntaxDef.Partitions)
@@ -71,7 +66,7 @@ func (hpb *hashPartitionBuilder) build(ctx context.Context, partitionBinder *Par
 	}
 
 	partitionDef.PartitionMsg = tree.String(partitionSyntaxDef, dialect.MYSQL)
-	//tableDef.Partition = partitionDef
+	tableDef.Partition = partitionDef
 	return nil
 }
 

@@ -26,14 +26,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
-
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 )
 
 type RoutineManager struct {
@@ -44,6 +45,8 @@ type RoutineManager struct {
 	tlsConfig      *tls.Config
 	aicm           *defines.AutoIncrCacheManager
 	accountRoutine *AccountRoutineManager
+	baseService    BaseService
+	sessionManager *queryservice.SessionManager
 }
 
 type AccountRoutineManager struct {
@@ -67,7 +70,7 @@ func NewKillRecord(killtime time.Time, version uint64) KillRecord {
 }
 
 func (ar *AccountRoutineManager) recordRountine(tenantID int64, rt *Routine, version uint64) {
-	if tenantID == sysAccountID || rt != nil {
+	if tenantID == sysAccountID || rt == nil {
 		return
 	}
 
@@ -80,7 +83,7 @@ func (ar *AccountRoutineManager) recordRountine(tenantID int64, rt *Routine, ver
 }
 
 func (ar *AccountRoutineManager) deleteRoutine(tenantID int64, rt *Routine) {
-	if tenantID == sysAccountID || rt != nil {
+	if tenantID == sysAccountID || rt == nil {
 		return
 	}
 
@@ -95,7 +98,7 @@ func (ar *AccountRoutineManager) deleteRoutine(tenantID int64, rt *Routine) {
 	}
 }
 
-func (ar *AccountRoutineManager) enKillQueue(tenantID int64, version uint64) {
+func (ar *AccountRoutineManager) EnKillQueue(tenantID int64, version uint64) {
 	if tenantID == sysAccountID {
 		return
 	}
@@ -105,6 +108,24 @@ func (ar *AccountRoutineManager) enKillQueue(tenantID int64, version uint64) {
 	defer ar.killQueueMu.Unlock()
 	ar.killIdQueue[tenantID] = KillRecord
 
+}
+
+func (ar *AccountRoutineManager) AlterRoutineStatue(tenantID int64, status string) {
+	if tenantID == sysAccountID {
+		return
+	}
+
+	ar.accountRoutineMu.Lock()
+	defer ar.accountRoutineMu.Unlock()
+	if rts, ok := ar.accountId2Routine[tenantID]; ok {
+		for rt := range rts {
+			if status == "restricted" {
+				rt.setResricted(true)
+			} else {
+				rt.setResricted(false)
+			}
+		}
+	}
 }
 
 func (ar *AccountRoutineManager) deepCopyKillQueue() map[int64]KillRecord {
@@ -124,7 +145,11 @@ func (ar *AccountRoutineManager) deepCopyRoutineMap() map[int64]map[*Routine]uin
 
 	tempRoutineMap := make(map[int64]map[*Routine]uint64, len(ar.accountId2Routine))
 	for account, rountine := range ar.accountId2Routine {
-		tempRoutineMap[account] = rountine
+		tempRountines := make(map[*Routine]uint64, len(rountine))
+		for rt, version := range rountine {
+			tempRountines[rt] = version
+		}
+		tempRoutineMap[account] = tempRountines
 	}
 	return tempRoutineMap
 }
@@ -184,6 +209,22 @@ func (rm *RoutineManager) getConnID() (uint32, error) {
 	return uint32(connID), nil
 }
 
+func (rm *RoutineManager) setBaseService(baseService BaseService) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	rm.baseService = baseService
+}
+
+func (rm *RoutineManager) setSessionMgr(sessionMgr *queryservice.SessionManager) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	rm.sessionManager = sessionMgr
+}
+
+func (rm *RoutineManager) GetAccountRoutineManager() *AccountRoutineManager {
+	return rm.accountRoutine
+}
+
 func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	logutil.Debugf("get the connection from %s", rs.RemoteAddress())
 	pu := rm.getParameterUnit()
@@ -202,9 +243,13 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	// XXX MPOOL pass in a nil mpool.
 	// XXX MPOOL can choose to use a Mid sized mpool, if, we know
 	// this mpool will be deleted.  Maybe in the following Closed method.
-	ses := NewSession(routine.getProtocol(), nil, pu, GSysVariables, true, rm.aicm)
-	ses.SetRequestContext(routine.getCancelRoutineCtx())
-	ses.SetConnectContext(routine.getCancelRoutineCtx())
+	ses := NewSession(routine.getProtocol(), nil, pu, GSysVariables, true, rm.aicm, nil)
+	cancelCtx := routine.getCancelRoutineCtx()
+	if rm.baseService != nil {
+		cancelCtx = context.WithValue(cancelCtx, defines.NodeIDKey{}, rm.baseService.ID())
+	}
+	ses.SetRequestContext(cancelCtx)
+	ses.SetConnectContext(cancelCtx)
 	ses.SetFromRealUser(true)
 	ses.setRoutineManager(rm)
 	ses.setRoutine(routine)
@@ -222,7 +267,9 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	hsV10pkt := pro.makeHandshakeV10Payload()
 	err = pro.writePackets(hsV10pkt)
 	if err != nil {
-		logErrorf(pro.GetDebugString(), "failed to handshake with server, quiting routine... %s", err)
+		logError(pro.ses, pro.GetDebugString(),
+			"Failed to handshake with server, quitting routine...",
+			zap.Error(err))
 		routine.killConnection(true)
 		return
 	}
@@ -253,6 +300,7 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 				metric.ConnectionCounter(accountName).Dec()
 				rm.accountRoutine.deleteRoutine(int64(account.GetTenantID()), rt)
 			})
+			rm.sessionManager.RemoveSession(ses)
 			logDebugf(ses.GetDebugString(), "the io session was closed.")
 		}
 		rt.cleanup()
@@ -311,7 +359,8 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	}()
 	var err error
 	var isTlsHeader bool
-	ctx, span := trace.Start(rm.getCtx(), "RoutineManager.Handler")
+	ctx, span := trace.Start(rm.getCtx(), "RoutineManager.Handler",
+		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
 	connectionInfo := getConnectionInfo(rs)
 	routine := rm.getRoutine(rs)
@@ -320,6 +369,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 		logutil.Errorf("%s error:%v", connectionInfo, err)
 		return err
 	}
+	routine.updateGoroutineId()
 	routine.setInProcessRequest(true)
 	defer routine.setInProcessRequest(false)
 	protocol := routine.getProtocol()
@@ -330,7 +380,9 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	var seq = protocol.GetSequenceId()
 	if !ok {
 		err = moerr.NewInternalError(ctx, "message is not Packet")
-		logErrorf(protoInfo, "error:%v", err)
+		logError(routine.ses, routine.ses.GetDebugString(),
+			"Error occurred",
+			zap.Error(err))
 		return err
 	}
 
@@ -339,14 +391,18 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	for uint32(length) == MaxPayloadSize {
 		msg, err = protocol.GetTcpConnection().Read(goetty.ReadOptions{})
 		if err != nil {
-			logErrorf(protoInfo, "read message failed. error:%s", err)
+			logError(routine.ses, routine.ses.GetDebugString(),
+				"Failed to read message",
+				zap.Error(err))
 			return err
 		}
 
 		packet, ok = msg.(*Packet)
 		if !ok {
 			err = moerr.NewInternalError(ctx, "message is not Packet")
-			logErrorf(protoInfo, "error:%v", err)
+			logError(routine.ses, routine.ses.GetDebugString(),
+				"An error occurred",
+				zap.Error(err))
 			return err
 		}
 
@@ -369,7 +425,9 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			logDebugf(protoInfo, "setup ssl")
 			isTlsHeader, err = protocol.HandleHandshake(ctx, payload)
 			if err != nil {
-				logErrorf(protoInfo, "error:%v", err)
+				logError(routine.ses, routine.ses.GetDebugString(),
+					"An error occurred",
+					zap.Error(err))
 				return err
 			}
 			if isTlsHeader {
@@ -379,15 +437,19 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 				logDebugf(protoInfo, "get TLS conn ok")
 				newCtx, cancelFun := context.WithTimeout(ctx, 20*time.Second)
 				if err = tlsConn.HandshakeContext(newCtx); err != nil {
-					logErrorf(protoInfo, "before cancel() error:%v", err)
+					logError(routine.ses, routine.ses.GetDebugString(),
+						"Error occurred before cancel()",
+						zap.Error(err))
 					cancelFun()
-					logErrorf(protoInfo, "after cancel() error:%v", err)
+					logError(routine.ses, routine.ses.GetDebugString(),
+						"Error occurred after cancel()",
+						zap.Error(err))
 					return err
 				}
 				cancelFun()
-				logDebugf(protoInfo, "TLS handshake ok")
+				logDebug(routine.ses, protoInfo, "TLS handshake ok")
 				rs.UseConn(tlsConn)
-				logDebugf(protoInfo, "TLS handshake finished")
+				logDebug(routine.ses, protoInfo, "TLS handshake finished")
 
 				// tls upgradeOk
 				protocol.SetTlsEstablished()
@@ -403,7 +465,9 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			logDebugf(protoInfo, "handleHandshake")
 			_, err = protocol.HandleHandshake(ctx, payload)
 			if err != nil {
-				logErrorf(protoInfo, "error:%v", err)
+				logError(routine.ses, routine.ses.GetDebugString(),
+					"Error occurred",
+					zap.Error(err))
 				return err
 			}
 			if err = protocol.Authenticate(ctx); err != nil {
@@ -416,6 +480,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 		if ses != nil && dbName != "" {
 			ses.SetDatabaseName(dbName)
 		}
+		rm.sessionManager.AddSession(ses)
 		return nil
 	}
 
@@ -425,7 +490,9 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	//handle request
 	err = routine.handleRequest(req)
 	if err != nil {
-		logErrorf(protoInfo, "error:%v", err)
+		logError(routine.ses, routine.ses.GetDebugString(),
+			"Error occurred",
+			zap.Error(err))
 		return err
 	}
 
@@ -559,7 +626,7 @@ func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit, aicm *defi
 			default:
 			}
 			rm.KillRoutineConnections()
-			time.Sleep(time.Duration(time.Duration(pu.SV.KillRountinesInterval) * time.Minute))
+			time.Sleep(time.Duration(time.Duration(pu.SV.KillRountinesInterval) * time.Second))
 		}
 	}()
 

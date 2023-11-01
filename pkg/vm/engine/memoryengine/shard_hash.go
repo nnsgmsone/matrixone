@@ -45,7 +45,7 @@ func (*HashShard) Batch(
 	tableID ID,
 	getDefs getDefsFunc,
 	bat *batch.Batch,
-	nodes []metadata.DNService,
+	nodes []metadata.TNService,
 ) (
 	sharded []*ShardedBatch,
 	err error,
@@ -96,7 +96,7 @@ func (*HashShard) Batch(
 	for _, store := range nodes {
 		for _, info := range store.Shards {
 			shards = append(shards, &Shard{
-				DNShardRecord: metadata.DNShardRecord{
+				TNShardRecord: metadata.TNShardRecord{
 					ShardID: info.ShardID,
 				},
 				ReplicaID: info.ReplicaID,
@@ -107,17 +107,20 @@ func (*HashShard) Batch(
 	sort.Slice(shards, func(i, j int) bool {
 		return shards[i].ShardID < shards[j].ShardID
 	})
-	m := make(map[*Shard]*batch.Batch)
+
+	type batValue struct {
+		bat   *batch.Batch
+		empty bool
+	}
+	m := make(map[*Shard]batValue)
+
 	for _, shard := range shards {
 		batchCopy := *bat
-		for i := range batchCopy.Zs {
-			batchCopy.Zs[i] = 0
-		}
-		m[shard] = &batchCopy
+		m[shard] = batValue{&batchCopy, true}
 	}
 
 	// shard batch
-	for i := 0; i < bat.Length(); i++ {
+	for i := 0; i < bat.RowCount(); i++ {
 		hasher := fnv.New32()
 		for _, info := range infos {
 			vec := bat.Vecs[info.Index]
@@ -132,23 +135,16 @@ func (*HashShard) Batch(
 		}
 		n := int(hasher.Sum32())
 		shard := shards[n%len(shards)]
-		m[shard].Zs[i] = 1
+		m[shard] = batValue{m[shard].bat, false}
 	}
 
-	for shard, bat := range m {
-		isEmpty := true
-		for _, i := range bat.Zs {
-			if i > 0 {
-				isEmpty = false
-				break
-			}
-		}
-		if isEmpty {
+	for shard, value := range m {
+		if value.empty {
 			continue
 		}
 		sharded = append(sharded, &ShardedBatch{
 			Shard: *shard,
-			Batch: bat,
+			Batch: value.bat,
 		})
 	}
 
@@ -161,7 +157,7 @@ func (h *HashShard) Vector(
 	getDefs getDefsFunc,
 	colName string,
 	vec *vector.Vector,
-	nodes []metadata.DNService,
+	nodes []metadata.TNService,
 ) (
 	sharded []*ShardedVector,
 	err error,
@@ -199,7 +195,7 @@ func (h *HashShard) Vector(
 	for _, store := range nodes {
 		for _, info := range store.Shards {
 			shards = append(shards, &Shard{
-				DNShardRecord: metadata.DNShardRecord{
+				TNShardRecord: metadata.TNShardRecord{
 					ShardID: info.ShardID,
 				},
 				ReplicaID: info.ReplicaID,
@@ -267,7 +263,7 @@ func getBytesFromPrimaryVectorForHash(
 		// is slice
 		size := vec.GetType().TypeSize()
 		l := vec.Length() * size
-		data := unsafe.Slice((*byte)(vector.GetPtrAt(vec, 0)), l)
+		data := unsafe.Slice(vector.GetPtrAt[byte](vec, 0), l)
 		end := (i + 1) * size
 		if end > len(data) {
 			//TODO mimic to pass BVT
@@ -464,7 +460,8 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		return
 
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64:
 		if vec.IsConstNull() {
 			value = Nullable{
 				IsNull: true,
@@ -535,6 +532,21 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
 			Value:  vector.MustFixedCol[types.Timestamp](vec)[i],
+		}
+		return
+
+	case types.T_enum:
+		if vec.IsConstNull() {
+			var zero types.Enum
+			value = Nullable{
+				IsNull: true,
+				Value:  zero,
+			}
+			return
+		}
+		value = Nullable{
+			IsNull: vec.GetNulls().Contains(uint64(i)),
+			Value:  vector.MustFixedCol[types.Enum](vec)[i],
 		}
 		return
 

@@ -15,17 +15,21 @@
 package rpc
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/spf13/cobra"
 )
 
@@ -42,13 +46,20 @@ func (i *inspectContext) String() string   { return "" }
 func (i *inspectContext) Set(string) error { return nil }
 func (i *inspectContext) Type() string     { return "ictx" }
 
+type InspectCmd interface {
+	FromCommand(cmd *cobra.Command) error
+	String() string
+	Run() error
+}
+
 type catalogArg struct {
 	ctx     *inspectContext
 	outfile *os.File
+	tbl     *catalog.TableEntry
 	verbose common.PPLevel
 }
 
-func (c *catalogArg) fromCommand(cmd *cobra.Command) error {
+func (c *catalogArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
 	count, _ := cmd.Flags().GetCount("verbose")
 	var lv common.PPLevel
@@ -64,11 +75,16 @@ func (c *catalogArg) fromCommand(cmd *cobra.Command) error {
 	}
 	c.verbose = lv
 
+	address, _ := cmd.Flags().GetString("target")
+	c.tbl, err = parseTableTarget(address, c.ctx.acinfo, c.ctx.db)
+	if err != nil {
+		return err
+	}
+
 	file, _ := cmd.Flags().GetString("outfile")
 	if file != "" {
 		if f, err := os.Create(file); err != nil {
-			cmd.OutOrStdout().Write([]byte(fmt.Sprintf("open %s err: %v", file, err)))
-			return err
+			return moerr.NewInternalErrorNoCtx("open %s err: %v", file, err)
 		} else {
 			c.outfile = f
 		}
@@ -76,275 +92,335 @@ func (c *catalogArg) fromCommand(cmd *cobra.Command) error {
 	return nil
 }
 
-func runCatalog(arg *catalogArg, respWriter io.Writer) {
-	if arg.outfile != nil {
-		ret := arg.ctx.db.Catalog.SimplePPString(arg.verbose)
-		arg.outfile.WriteString(ret)
-		defer arg.outfile.Close()
-		respWriter.Write([]byte("write file done"))
+func (c *catalogArg) String() string {
+	t := "*"
+	if c.tbl != nil {
+		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchema().Name)
+	}
+	f := "nil"
+	if c.outfile != nil {
+		f = c.outfile.Name()
+	}
+	return fmt.Sprintf("(%s) outfile: %v, verbose: %d, ", t, f, c.verbose)
+}
+
+func (c *catalogArg) Run() error {
+	var ret string
+	if c.tbl != nil {
+		ret = c.tbl.PPString(c.verbose, 0, "")
 	} else {
-		visitor := newCatalogRespVisitor(arg.verbose)
-		arg.ctx.db.Catalog.RecurLoop(visitor)
-
-		ret, _ := types.Encode(visitor.GetResponse())
-		arg.ctx.resp.Payload = ret
-		arg.ctx.resp.Typ = db.InspectCata
+		ret = c.ctx.db.Catalog.SimplePPString(c.verbose)
 	}
-}
-
-type addCCmd struct {
-	ctx                *inspectContext
-	db, tbl, name, typ string
-	pos                int
-}
-
-func (c *addCCmd) fromCommand(cmd *cobra.Command) error {
-	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
-
-	c.db, _ = cmd.Flags().GetString("db")
-	c.tbl, _ = cmd.Flags().GetString("table")
-	c.name, _ = cmd.Flags().GetString("name")
-	c.typ, _ = cmd.Flags().GetString("type")
-	c.pos, _ = cmd.Flags().GetInt("pos")
-
+	if c.outfile != nil {
+		c.outfile.WriteString(ret)
+		defer c.outfile.Close()
+		c.ctx.resp.Payload = []byte("write file done")
+	} else {
+		c.ctx.resp.Payload = []byte(ret)
+	}
 	return nil
 }
 
-func runAddC(cmd *addCCmd) error {
-	txn, _ := cmd.ctx.db.StartTxn(nil)
-	db, _ := txn.GetDatabase(cmd.db)
-	tbl, _ := db.GetRelationByName(cmd.tbl)
-	typ, ok := types.Types[cmd.typ]
-	planTyp := types.NewProtoType(typ.ToType().Oid)
-	if !ok {
-		planTyp = types.NewProtoType(types.T_uint32)
-	}
-	err := tbl.AlterTable(context.TODO(), api.NewAddColumnReq(0, 0, cmd.name, planTyp, int32(cmd.pos)))
-	if err != nil {
-		if txn.Rollback() != nil {
-			panic("rollback error are you kidding?")
-		}
-		return err
-	}
-	return txn.Commit()
-}
-
-type dropCCmd struct {
+type objStatArg struct {
 	ctx     *inspectContext
-	db, tbl string
-	pos     int
+	tbl     *catalog.TableEntry
+	verbose common.PPLevel
 }
 
-func (c *dropCCmd) fromCommand(cmd *cobra.Command) error {
+func (c *objStatArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
-
-	c.db, _ = cmd.Flags().GetString("db")
-	c.tbl, _ = cmd.Flags().GetString("table")
-	c.pos, _ = cmd.Flags().GetInt("pos")
-
+	count, _ := cmd.Flags().GetCount("verbose")
+	var lv common.PPLevel
+	switch count {
+	case 0:
+		lv = common.PPL0
+	case 1:
+		lv = common.PPL1
+	case 2:
+		lv = common.PPL2
+	case 3:
+		lv = common.PPL3
+	}
+	c.verbose = lv
+	address, _ := cmd.Flags().GetString("target")
+	c.tbl, err = parseTableTarget(address, c.ctx.acinfo, c.ctx.db)
+	if err != nil {
+		return err
+	}
+	if c.tbl == nil {
+		return moerr.NewInvalidInputNoCtx("need table target")
+	}
 	return nil
 }
 
-func runDropC(cmd *dropCCmd) error {
-	txn, _ := cmd.ctx.db.StartTxn(nil)
-	db, _ := txn.GetDatabase(cmd.db)
-	tbl, _ := db.GetRelationByName(cmd.tbl)
-	seqnum := tbl.Schema().(*catalog.Schema).ColDefs[cmd.pos].SeqNum
-	err := tbl.AlterTable(context.TODO(), api.NewRemoveColumnReq(0, 0, uint32(cmd.pos), uint32(seqnum)))
-	if err != nil {
-		if txn.Rollback() != nil {
-			panic("rollback error are you kidding?")
-		}
-		return err
+func (c *objStatArg) String() string {
+	t := "*"
+	if c.tbl != nil {
+		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchema().Name)
 	}
-	return txn.Commit()
+	return t
 }
 
-type renameTCmd struct {
-	ctx          *inspectContext
-	db, old, new string
-}
-
-func (c *renameTCmd) fromCommand(cmd *cobra.Command) error {
-	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
-
-	c.db, _ = cmd.Flags().GetString("db")
-	c.old, _ = cmd.Flags().GetString("old")
-	c.new, _ = cmd.Flags().GetString("new")
-
+func (c *objStatArg) Run() error {
+	if c.tbl != nil {
+		b := &bytes.Buffer{}
+		p := c.ctx.db.MergeHandle.GetPolicy(c.tbl.ID).(*merge.BasicPolicyConfig)
+		b.WriteString(c.tbl.ObjectStatsString(c.verbose))
+		b.WriteByte('\n')
+		b.WriteString(fmt.Sprintf("\n%s", p.String()))
+		c.ctx.resp.Payload = b.Bytes()
+	}
 	return nil
 }
 
-func runRenameT(cmd *renameTCmd) error {
-	txn, _ := cmd.ctx.db.StartTxn(nil)
-	db, _ := txn.GetDatabase(cmd.db)
-	tbl, _ := db.GetRelationByName(cmd.old)
-	err := tbl.AlterTable(context.TODO(), api.NewRenameTableReq(0, 0, cmd.old, cmd.new))
-	if err != nil {
-		if txn.Rollback() != nil {
-			panic("rollback error are you kidding?")
-		}
-		return err
-	}
-	return txn.Commit()
+type manuallyMergeArg struct {
+	ctx     *inspectContext
+	tbl     *catalog.TableEntry
+	objects []*catalog.SegmentEntry
 }
 
-func initCommand(ctx *inspectContext) *cobra.Command {
+func (c *manuallyMergeArg) FromCommand(cmd *cobra.Command) (err error) {
+	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+
+	address, _ := cmd.Flags().GetString("target")
+	c.tbl, err = parseTableTarget(address, c.ctx.acinfo, c.ctx.db)
+	if err != nil {
+		return err
+	}
+	if c.tbl == nil {
+		return moerr.NewInvalidInputNoCtx("need table target")
+	}
+
+	objects, _ := cmd.Flags().GetStringSlice("objects")
+
+	dedup := make(map[string]struct{}, len(objects))
+	for _, o := range objects {
+		if _, ok := dedup[o]; ok {
+			return moerr.NewInvalidInputNoCtx("duplicate object %s", o)
+		}
+		dedup[o] = struct{}{}
+	}
+	if len(dedup) < 2 {
+		return moerr.NewInvalidInputNoCtx("need at least 2 objects")
+	}
+	segs := make([]*catalog.SegmentEntry, 0, len(objects))
+	for o := range dedup {
+		parts := strings.Split(o, "_")
+		uid, err := types.ParseUuid(parts[0])
+		if err != nil {
+			return err
+		}
+		seg, err := c.tbl.GetSegmentByID(&uid)
+		if err != nil {
+			return moerr.NewInvalidInputNoCtx("not found object %s", o)
+		}
+		if !seg.IsActive() || !seg.IsSorted() || seg.GetNextObjectIndex() != 1 {
+			return moerr.NewInvalidInputNoCtx("object is deleted or not a flushed one %s", o)
+		}
+		segs = append(segs, seg)
+	}
+
+	c.objects = segs
+	return nil
+}
+
+func (c *manuallyMergeArg) String() string {
+	t := "*"
+	if c.tbl != nil {
+		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchema().Name)
+	}
+
+	b := &bytes.Buffer{}
+	for _, o := range c.objects {
+		b.WriteString(fmt.Sprintf("%s_0000,", o.ID.ToString()))
+	}
+
+	return fmt.Sprintf("(%s) objects: %s", t, b.String())
+}
+
+func (c *manuallyMergeArg) Run() error {
+	err := c.ctx.db.MergeHandle.ManuallyMerge(c.tbl, c.objects)
+	if err != nil {
+		return err
+	}
+	c.ctx.resp.Payload = []byte(fmt.Sprintf(
+		"success. see more to run select mo_ctl('dn', 'inspect', 'object -t %s.%s')\\G",
+		c.tbl.GetDB().GetName(), c.tbl.GetLastestSchema().Name,
+	))
+	return nil
+}
+
+type compactPolicyArg struct {
+	ctx              *inspectContext
+	tbl              *catalog.TableEntry
+	maxMergeObjN     int32
+	minRowsQualified int32
+	notLoadMoreThan  int32
+}
+
+func (c *compactPolicyArg) FromCommand(cmd *cobra.Command) (err error) {
+	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+
+	address, _ := cmd.Flags().GetString("target")
+	c.tbl, err = parseTableTarget(address, c.ctx.acinfo, c.ctx.db)
+	if err != nil {
+		return err
+	}
+	c.maxMergeObjN, _ = cmd.Flags().GetInt32("maxMergeObjN")
+	c.minRowsQualified, _ = cmd.Flags().GetInt32("minRowsQualified")
+	c.notLoadMoreThan, _ = cmd.Flags().GetInt32("notLoadMoreThan")
+	return nil
+}
+
+func (c *compactPolicyArg) String() string {
+	t := "*"
+	if c.tbl != nil {
+		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchema().Name)
+	}
+	return fmt.Sprintf(
+		"(%s) maxMergeObjN: %v, minRowsQualified: %v, notLoadMoreThan: %v",
+		t, c.maxMergeObjN, c.minRowsQualified, c.notLoadMoreThan,
+	)
+}
+
+func (c *compactPolicyArg) Run() error {
+	if c.tbl == nil {
+		// reset all
+		c.ctx.db.MergeHandle.ConfigPolicy(0, nil)
+		// set runtime global config
+		common.RuntimeMaxMergeObjN.Store(c.maxMergeObjN)
+		common.RuntimeMinRowsQualified.Store(c.minRowsQualified)
+	} else {
+		c.ctx.db.MergeHandle.ConfigPolicy(c.tbl.ID, &merge.BasicPolicyConfig{
+			MergeMaxOneRun: int(c.maxMergeObjN),
+			ObjectMinRows:  int(c.minRowsQualified),
+		})
+	}
+	common.RuntimeNotLoadMoreThan.Store(c.notLoadMoreThan)
+	c.ctx.resp.Payload = []byte("<empty>")
+	return nil
+}
+
+func RunFactory[T InspectCmd](t T) func(cmd *cobra.Command, args []string) {
+	return func(cmd *cobra.Command, args []string) {
+		if err := t.FromCommand(cmd); err != nil {
+			cmd.OutOrStdout().Write([]byte(fmt.Sprintf("parse err: %v", err)))
+			return
+		}
+		err := t.Run()
+		if err != nil {
+			cmd.OutOrStdout().Write(
+				[]byte(fmt.Sprintf("run err: %v", err)),
+			)
+		} else {
+			cmd.OutOrStdout().Write(
+				[]byte(fmt.Sprintf("success. arg %v", t.String())),
+			)
+		}
+	}
+}
+
+func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use: "inspect",
 	}
 
+	rootCmd.PersistentFlags().VarPF(inspectCtx, "ictx", "", "").Hidden = true
+
+	rootCmd.SetArgs(inspectCtx.args)
+	rootCmd.SetErr(inspectCtx.out)
+	rootCmd.SetOut(inspectCtx.out)
+
+	rootCmd.CompletionOptions.DisableDefaultCmd = true
+
 	catalogCmd := &cobra.Command{
 		Use:   "catalog",
 		Short: "show catalog",
-		Run: func(cmd *cobra.Command, args []string) {
-			arg := &catalogArg{}
-			if err := arg.fromCommand(cmd); err != nil {
-				return
-			}
-			runCatalog(arg, cmd.OutOrStdout())
-		},
+		Run:   RunFactory(&catalogArg{}),
 	}
-	addCCmd := &cobra.Command{
-		Use:   "addc",
-		Short: "add column",
-		Run: func(cmd *cobra.Command, args []string) {
-			arg := &addCCmd{}
-			if err := arg.fromCommand(cmd); err != nil {
-				return
-			}
-			err := runAddC(arg)
-			if err != nil {
-				cmd.OutOrStdout().Write([]byte(fmt.Sprintf("%v", err)))
-			} else {
-				cmd.OutOrStdout().Write([]byte("add column success"))
-			}
-		},
-	}
-
-	dropCCmd := &cobra.Command{
-		Use:   "dropc",
-		Short: "add column",
-		Run: func(cmd *cobra.Command, args []string) {
-			arg := &dropCCmd{}
-			if err := arg.fromCommand(cmd); err != nil {
-				return
-			}
-			err := runDropC(arg)
-			if err != nil {
-				cmd.OutOrStdout().Write([]byte(fmt.Sprintf("%v", err)))
-			} else {
-				cmd.OutOrStdout().Write([]byte("drop column success"))
-			}
-		},
-	}
-
-	renameTCmd := &cobra.Command{
-		Use:   "renamet",
-		Short: "rename table",
-		Run: func(cmd *cobra.Command, args []string) {
-			arg := &renameTCmd{}
-			if err := arg.fromCommand(cmd); err != nil {
-				return
-			}
-			err := runRenameT(arg)
-			if err != nil {
-				cmd.OutOrStdout().Write([]byte(fmt.Sprintf("%v", err)))
-			} else {
-				cmd.OutOrStdout().Write([]byte("rename table success"))
-			}
-		},
-	}
-
-	rootCmd.PersistentFlags().VarPF(ctx, "ictx", "", "").Hidden = true
-
-	rootCmd.SetArgs(ctx.args)
-	rootCmd.SetErr(ctx.out)
-	rootCmd.SetOut(ctx.out)
 
 	catalogCmd.Flags().CountP("verbose", "v", "verbose level")
 	catalogCmd.Flags().StringP("outfile", "o", "", "write output to a file")
+	catalogCmd.Flags().StringP("target", "t", "*", "format: db.table")
 	rootCmd.AddCommand(catalogCmd)
 
-	addCCmd.Flags().StringP("db", "d", "", "database")
-	addCCmd.Flags().StringP("table", "b", "", "table")
-	addCCmd.Flags().StringP("name", "n", "", "column name")
-	addCCmd.Flags().StringP("type", "t", "", "type name")
-	addCCmd.Flags().IntP("pos", "p", -1, "column postion")
-	rootCmd.AddCommand(addCCmd)
+	objectCmd := &cobra.Command{
+		Use:   "object",
+		Short: "show object statistics",
+		Run:   RunFactory(&objStatArg{}),
+	}
+	objectCmd.Flags().CountP("verbose", "v", "verbose level")
+	objectCmd.Flags().StringP("target", "t", "*", "format: db.table")
+	rootCmd.AddCommand(objectCmd)
 
-	dropCCmd.Flags().StringP("db", "d", "", "database")
-	dropCCmd.Flags().StringP("table", "b", "", "table")
-	dropCCmd.Flags().IntP("pos", "p", -1, "column postion")
-	rootCmd.AddCommand(dropCCmd)
+	policyCmd := &cobra.Command{
+		Use:   "policy",
+		Short: "set merge policy for table",
+		Run:   RunFactory(&compactPolicyArg{}),
+	}
+	policyCmd.Flags().StringP("target", "t", "*", "format: db.table")
+	policyCmd.Flags().Int32P("maxMergeObjN", "o", common.DefaultMaxMergeObjN, "max number of objects merged for one")
+	policyCmd.Flags().Int32P("minRowsQualified", "m", common.DefaultMinRowsQualified, "object with a few rows will be picked up to merge")
+	policyCmd.Flags().Int32P("notLoadMoreThan", "l", common.DefaultNotLoadMoreThan, "not load metadata if table has too much objects. Only works for rawlog table")
+	rootCmd.AddCommand(policyCmd)
 
-	renameTCmd.Flags().StringP("db", "d", "", "database")
-	renameTCmd.Flags().StringP("old", "o", "", "old table")
-	renameTCmd.Flags().StringP("new", "n", "", "new table")
-	rootCmd.AddCommand(renameTCmd)
+	mmCmd := &cobra.Command{
+		Use:   "merge",
+		Short: "manually merge objects",
+		Run:   RunFactory(&manuallyMergeArg{}),
+	}
+
+	mmCmd.Flags().StringP("target", "t", "*", "format: db.table")
+	mmCmd.Flags().StringSliceP("objects", "o", nil, "format: object_id_0000,object_id_0000")
+	rootCmd.AddCommand(mmCmd)
 
 	return rootCmd
 }
 
-func RunInspect(ctx *inspectContext) {
-	rootCmd := initCommand(ctx)
+func RunInspect(ctx context.Context, inspectCtx *inspectContext) {
+	rootCmd := initCommand(ctx, inspectCtx)
 	rootCmd.Execute()
 }
 
-type catalogRespVisitor struct {
-	catalog.LoopProcessor
-	level common.PPLevel
-	stack []*db.CatalogResp
-}
-
-func newCatalogRespVisitor(lv common.PPLevel) *catalogRespVisitor {
-	return &catalogRespVisitor{
-		level: lv,
-		stack: []*db.CatalogResp{{Item: "Catalog"}},
+func parseTableTarget(address string, ac *db.AccessInfo, db *db.DB) (*catalog.TableEntry, error) {
+	if address == "*" {
+		return nil, nil
 	}
-}
-
-func (c *catalogRespVisitor) GetResponse() *db.CatalogResp {
-	return c.stack[0]
-}
-
-func entryLevelString[T interface {
-	StringWithLevel(common.PPLevel) string
-}](entry T, lv common.PPLevel) *db.CatalogResp {
-	return &db.CatalogResp{Item: entry.StringWithLevel(lv)}
-}
-
-func (c *catalogRespVisitor) onstack(idx int, resp *db.CatalogResp) {
-	c.stack = c.stack[:idx+1]
-	c.stack[idx].Sub = append(c.stack[idx].Sub, resp)
-	c.stack = append(c.stack, resp)
-}
-
-func (c *catalogRespVisitor) OnDatabase(database *catalog.DBEntry) error {
-	c.onstack(0, entryLevelString(database, c.level))
-	return nil
-}
-
-func (c *catalogRespVisitor) OnTable(table *catalog.TableEntry) error {
-	if c.level == common.PPL0 {
-		return moerr.GetOkStopCurrRecur()
+	parts := strings.Split(address, ".")
+	if len(parts) != 2 {
+		return nil, moerr.NewInvalidInputNoCtx(fmt.Sprintf("invalid db.table: %q", address))
 	}
-	c.onstack(1, entryLevelString(table, c.level))
-	return nil
-}
 
-func (c *catalogRespVisitor) OnSegment(seg *catalog.SegmentEntry) error {
-	if c.level == common.PPL0 {
-		return moerr.GetOkStopCurrRecur()
+	txn, _ := db.StartTxn(nil)
+	if ac != nil {
+		logutil.Infof("inspect with access info: %+v", ac)
+		txn.BindAccessInfo(ac.AccountID, ac.UserID, ac.RoleID)
 	}
-	c.onstack(2, entryLevelString(seg, c.level))
-	return nil
-}
 
-func (c *catalogRespVisitor) OnBlock(blk *catalog.BlockEntry) error {
-	if c.level == common.PPL0 {
-		return moerr.GetOkStopCurrRecur()
+	did, err1 := strconv.Atoi(parts[0])
+	tid, err2 := strconv.Atoi(parts[1])
+
+	if err1 == nil && err2 == nil {
+		dbHdl, err := txn.GetDatabaseByID(uint64(did))
+		if err != nil {
+			return nil, err
+		}
+		tblHdl, err := dbHdl.GetRelationByID(uint64(tid))
+		if err != nil {
+			return nil, err
+		}
+		txn.Commit(context.Background())
+		return tblHdl.GetMeta().(*catalog.TableEntry), nil
+	} else {
+		dbHdl, err := txn.GetDatabase(parts[0])
+		if err != nil {
+			return nil, err
+		}
+		tblHdl, err := dbHdl.GetRelationByName(parts[1])
+		if err != nil {
+			return nil, err
+		}
+		txn.Commit(context.Background())
+		return tblHdl.GetMeta().(*catalog.TableEntry), nil
 	}
-	c.onstack(3, entryLevelString(blk, c.level))
-	return nil
 }

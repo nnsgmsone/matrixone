@@ -11,11 +11,14 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 package group_concat
 
 import (
-	"bytes"
+	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"math"
 	"strings"
 	"unsafe"
 
@@ -115,21 +118,6 @@ func (gc *GroupConcat) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-// Dup will duplicate a new agg with the same type.
-func (gc *GroupConcat) Dup() agg.Agg[any] {
-	var newRes []string = make([]string, len(gc.res))
-	copy(newRes, gc.res)
-	var newItyp []types.Type = make([]types.Type, 0, len(gc.ityp))
-	copy(newItyp, gc.ityp)
-	var inserts []string = make([]string, 0, len(gc.inserts))
-	return &GroupConcat{
-		arg:     gc.arg,
-		res:     newRes,
-		inserts: inserts,
-		ityp:    newItyp,
-	}
-}
-
 // Type return the type of the agg's result.
 func (gc *GroupConcat) OutputType() types.Type {
 	typ := types.T_text.ToType()
@@ -144,33 +132,6 @@ func (gc *GroupConcat) OutputType() types.Type {
 // group_concat is not a normal agg func, we don't need this func
 func (gc *GroupConcat) InputTypes() []types.Type {
 	return gc.ityp
-}
-
-// String return related information of the agg.
-// used to show query plans.
-func (gc *GroupConcat) String() string {
-	buf := new(bytes.Buffer)
-	buf.WriteString("group_concat( ")
-	if gc.arg.Dist {
-		buf.WriteString("distinct ")
-	}
-	for i, expr := range gc.arg.GroupExpr {
-		if i > 0 {
-			buf.WriteString(", ")
-		}
-		buf.WriteString(fmt.Sprintf("%v", expr))
-	}
-	if len(gc.arg.OrderByExpr) > 0 {
-		buf.WriteString(" order by ")
-	}
-	for i, expr := range gc.arg.OrderByExpr {
-		if i > 0 {
-			buf.WriteString(", ")
-		}
-		buf.WriteString(fmt.Sprintf("%v", expr))
-	}
-	buf.WriteString(fmt.Sprintf(" separtor %v)", gc.arg.Separator))
-	return buf.String()
 }
 
 // Free the agg.
@@ -234,7 +195,7 @@ func (gc *GroupConcat) Eval(m *mpool.MPool) (*vector.Vector, error) {
 // rowCount indicates the number of times the rowIndex-row is repeated.
 // for group_concat(distinct a,b,c separator '|'); vecs is: a,b,c
 // remember that, we won't do evalExpr here, so the groupExpr is not used here
-func (gc *GroupConcat) Fill(groupIndex int64, rowIndex int64, rowCount int64, vecs []*vector.Vector) error {
+func (gc *GroupConcat) Fill(groupIndex int64, rowIndex int64, vecs []*vector.Vector) error {
 	if hasNull(vecs, rowIndex) {
 		return nil
 	}
@@ -247,10 +208,13 @@ func (gc *GroupConcat) Fill(groupIndex int64, rowIndex int64, rowCount int64, ve
 		s, _ := VectorToString(vecs[i], int(rowIndex))
 		res_row += s
 		// prefix length + data
-		length := uint16(len(s))
-		// WTF is the following crap?
-		// insert_row += string(unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)) + s
-		insert_row += unsafe.String((*byte)(unsafe.Pointer(&length)), 2) + s
+		l := len(s)
+		if l > math.MaxUint16 {
+			panic("too long")
+		}
+		bs := make([]byte, 2)
+		binary.LittleEndian.PutUint16(bs, uint16(l))
+		insert_row += unsafe.String(&bs[0], 2) + s
 	}
 	if gc.arg.Dist {
 		if flag, err = gc.maps[groupIndex].InsertValue(insert_row); err != nil {
@@ -267,27 +231,22 @@ func (gc *GroupConcat) Fill(groupIndex int64, rowIndex int64, rowCount int64, ve
 			gc.inserts[groupIndex] += insert_row
 		}
 	} else {
-		for k := 0; k < int(rowCount); k++ {
-			if len(gc.res[groupIndex]) != 0 {
-				gc.res[groupIndex] += gc.arg.Separator
-				gc.inserts[groupIndex] += gc.arg.Separator
-			} else {
-				gc.groups++
-			}
-			gc.res[groupIndex] += res_row
-			gc.inserts[groupIndex] += insert_row
+		if len(gc.res[groupIndex]) != 0 {
+			gc.res[groupIndex] += gc.arg.Separator
+			gc.inserts[groupIndex] += gc.arg.Separator
+		} else {
+			gc.groups++
 		}
+		gc.res[groupIndex] += res_row
+		gc.inserts[groupIndex] += insert_row
 	}
 	return nil
 }
 
-// BulkFill use a whole vector to update the data of agg's group
-// groupIndex is the index number of the group
-// rowCounts is the count number of each row.
-func (gc *GroupConcat) BulkFill(groupIndex int64, rowCounts []int64, vecs []*vector.Vector) error {
+func (gc *GroupConcat) BulkFill(groupIndex int64, vecs []*vector.Vector) error {
 	length := vecs[0].Length()
 	for i := 0; i < length; i++ {
-		if err := gc.Fill(groupIndex, int64(i), rowCounts[i], vecs); err != nil {
+		if err := gc.Fill(groupIndex, int64(i), vecs); err != nil {
 			return err
 		}
 	}
@@ -306,12 +265,12 @@ func (gc *GroupConcat) BulkFill(groupIndex int64, rowCounts []int64, vecs []*vec
 //	rowCounts[i] is count number of the row[i]
 //
 // For a more detailed introduction of rowCounts, please refer to comments of Function Fill.
-func (gc *GroupConcat) BatchFill(offset int64, os []uint8, vps []uint64, rowCounts []int64, vecs []*vector.Vector) error {
+func (gc *GroupConcat) BatchFill(offset int64, os []uint8, vps []uint64, vecs []*vector.Vector) error {
 	for i := range os {
 		if vps[i] == 0 {
 			continue
 		}
-		if err := gc.Fill(int64(vps[i]-1), offset+int64(i), rowCounts[i+int(offset)], vecs); err != nil {
+		if err := gc.Fill(int64(vps[i]-1), offset+int64(i), vecs); err != nil {
 			return err
 		}
 	}
@@ -372,15 +331,10 @@ func (gc *GroupConcat) BatchMerge(agg2 agg.Agg[any], start int64, os []uint8, vp
 	return nil
 }
 
-// GetInputTypes get types of aggregate's input arguments.
-func (gc *GroupConcat) GetInputTypes() []types.Type {
-	return gc.ityp
-}
-
 // GetOperatorId get types of aggregate's aggregate id.
 // this is used to print log in group string();
-func (gc *GroupConcat) GetOperatorId() int {
-	return agg.AggregateGroupConcat
+func (gc *GroupConcat) GetOperatorId() int64 {
+	return function.GroupConcatFunctionID
 }
 
 func (gc *GroupConcat) IsDistinct() bool {
@@ -441,6 +395,10 @@ func VectorToString(vec *vector.Vector, rowIndex int) (string, error) {
 		return fmt.Sprintf("%v", vector.GetFixedAt[float64](vec, rowIndex)), nil
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob:
 		return vec.GetStringAt(rowIndex), nil
+	case types.T_array_float32:
+		return types.ArrayToString[float32](vector.GetArrayAt[float32](vec, rowIndex)), nil
+	case types.T_array_float64:
+		return types.ArrayToString[float64](vector.GetArrayAt[float64](vec, rowIndex)), nil
 	case types.T_decimal64:
 		val := vector.GetFixedAt[types.Decimal64](vec, rowIndex)
 		return val.Format(vec.GetType().Scale), nil
@@ -463,6 +421,8 @@ func VectorToString(vec *vector.Vector, rowIndex int) (string, error) {
 	case types.T_datetime:
 		val := vector.GetFixedAt[types.Datetime](vec, rowIndex)
 		return val.String(), nil
+	case types.T_enum:
+		return fmt.Sprintf("%v", vector.GetFixedAt[uint16](vec, rowIndex)), nil
 	default:
 		return "", nil
 	}

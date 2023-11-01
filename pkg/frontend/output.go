@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"go.uber.org/zap"
 )
 
 var _ outputPool = &outputQueue{}
@@ -34,12 +35,12 @@ type outputQueue struct {
 	mrs          *MysqlResultSet
 	rowIdx       uint64
 	length       uint64
-	ep           *ExportParam
+	ep           *ExportConfig
 	lineStr      []byte
 	showStmtType ShowStatementType
 }
 
-func NewOutputQueue(ctx context.Context, ses *Session, columnCount int, mrs *MysqlResultSet, ep *ExportParam) *outputQueue {
+func NewOutputQueue(ctx context.Context, ses *Session, columnCount int, mrs *MysqlResultSet, ep *ExportConfig) *outputQueue {
 	const countOfResultSet = 1
 	if ctx == nil {
 		ctx = ses.GetRequestContext()
@@ -61,7 +62,7 @@ func NewOutputQueue(ctx context.Context, ses *Session, columnCount int, mrs *Mys
 	}
 
 	if ep == nil {
-		ep = ses.GetExportParam()
+		ep = ses.GetExportConfig()
 	}
 
 	return &outputQueue{
@@ -106,9 +107,11 @@ func (oq *outputQueue) flush() error {
 	if oq.rowIdx <= 0 {
 		return nil
 	}
-	if oq.ep.Outfile {
+	if oq.ep.needExportToFile() {
 		if err := exportDataToCSVFile(oq); err != nil {
-			logErrorf(oq.ses.GetDebugString(), "export to csv file error %v", err)
+			logError(oq.ses, oq.ses.GetDebugString(),
+				"Error occurred while exporting to CSV file",
+				zap.Error(err))
 			return err
 		}
 	} else {
@@ -119,7 +122,9 @@ func (oq *outputQueue) flush() error {
 		}
 
 		if err := oq.proto.SendResultSetTextBatchRowSpeedup(oq.mrs, oq.rowIdx); err != nil {
-			logErrorf(oq.ses.GetDebugString(), "flush error %v", err)
+			logError(oq.ses, oq.ses.GetDebugString(),
+				"Flush error",
+				zap.Error(err))
 			return err
 		}
 	}
@@ -128,7 +133,15 @@ func (oq *outputQueue) flush() error {
 }
 
 // extractRowFromEveryVector gets the j row from the every vector and outputs the row
-func extractRowFromEveryVector(ses *Session, dataSet *batch.Batch, j int, oq outputPool) ([]interface{}, error) {
+// needCopyBytes : true -- make a copy of the bytes. else not.
+// Case 1: needCopyBytes = false.
+// For responding the client, we do not make a copy of the bytes. Because the data
+// has been written into the tcp conn before the batch.Batch returned to the pipeline.
+// Case 2: needCopyBytes = true.
+// For the background execution, we need to make a copy of the bytes. Because the data
+// has been saved in the session. Later the data will be used but then the batch.Batch has
+// been returned to the pipeline and may be reused and changed by the pipeline.
+func extractRowFromEveryVector(ses *Session, dataSet *batch.Batch, j int, oq outputPool, needCopyBytes bool) ([]interface{}, error) {
 	row, err := oq.getEmptyRow()
 	if err != nil {
 		return nil, err
@@ -144,27 +157,17 @@ func extractRowFromEveryVector(ses *Session, dataSet *batch.Batch, j int, oq out
 			rowIndex = 0
 		}
 
-		err = extractRowFromVector(ses, vec, i, row, rowIndex)
+		err = extractRowFromVector(ses, vec, i, row, rowIndex, needCopyBytes)
 		if err != nil {
 			return nil, err
 		}
 		rowIndex = rowIndexBackup
 	}
-	//duplicate rows
-	for i := int64(0); i < dataSet.Zs[j]-1; i++ {
-		erow, rr := oq.getEmptyRow()
-		if rr != nil {
-			return nil, rr
-		}
-		for l := 0; l < len(dataSet.Vecs); l++ {
-			erow[l] = row[l]
-		}
-	}
 	return row, nil
 }
 
 // extractRowFromVector gets the rowIndex row from the i vector
-func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interface{}, rowIndex int) error {
+func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interface{}, rowIndex int, needCopyBytes bool) error {
 	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(rowIndex)) {
 		row[i] = nil
 		return nil
@@ -172,7 +175,7 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 
 	switch vec.GetType().Oid { //get col
 	case types.T_json:
-		row[i] = types.DecodeJson(vec.GetBytesAt(rowIndex))
+		row[i] = types.DecodeJson(copyBytes(vec.GetBytesAt(rowIndex), needCopyBytes))
 	case types.T_bool:
 		row[i] = vector.GetFixedAt[bool](vec, rowIndex)
 	case types.T_int8:
@@ -206,7 +209,17 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 			row[i] = strconv.FormatFloat(val, 'f', int(vec.GetType().Scale), 64)
 		}
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
-		row[i] = vec.GetBytesAt(rowIndex)
+		row[i] = copyBytes(vec.GetBytesAt(rowIndex), needCopyBytes)
+	case types.T_array_float32:
+		// NOTE: Don't merge it with T_varchar. You will get raw binary in the SQL output
+		//+------------------------------+
+		//| abs(cast([1,2,3] as vecf32)) |
+		//+------------------------------+
+		//|   �?   @  @@                  |
+		//+------------------------------+
+		row[i] = vector.GetArrayAt[float32](vec, rowIndex)
+	case types.T_array_float64:
+		row[i] = vector.GetArrayAt[float64](vec, rowIndex)
 	case types.T_date:
 		row[i] = vector.GetFixedAt[types.Date](vec, rowIndex)
 	case types.T_datetime:
@@ -233,8 +246,12 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 		row[i] = vector.GetFixedAt[types.Blockid](vec, rowIndex)
 	case types.T_TS:
 		row[i] = vector.GetFixedAt[types.TS](vec, rowIndex)
+	case types.T_enum:
+		row[i] = copyBytes(vec.GetBytesAt(rowIndex), needCopyBytes)
 	default:
-		logErrorf(ses.GetDebugString(), "extractRowFromVector : unsupported type %d", vec.GetType().Oid)
+		logError(ses, ses.GetDebugString(),
+			"Failed to extract row from vector, unsupported type",
+			zap.Int("typeID", int(vec.GetType().Oid)))
 		return moerr.NewInternalError(ses.requestCtx, "extractRowFromVector : unsupported type %d", vec.GetType().Oid)
 	}
 	return nil

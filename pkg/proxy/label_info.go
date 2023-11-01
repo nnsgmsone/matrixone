@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 )
 
 // LabelHash defines hash value, which is hashed from labelInfo.
@@ -98,7 +99,7 @@ func (l *labelInfo) tenantLabel() map[string]string {
 
 // isSuperTenant returns true if the tenant is sys or empty.
 func (l *labelInfo) isSuperTenant() bool {
-	if l.Tenant == "" || strings.ToLower(string(l.Tenant)) == superTenant {
+	if l.Tenant == "" || strings.ToLower(string(l.Tenant)) == frontend.GetDefaultTenant() {
 		return true
 	}
 	return false

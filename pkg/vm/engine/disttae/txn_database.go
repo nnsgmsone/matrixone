@@ -19,13 +19,16 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var _ engine.Database = new(txnDatabase)
@@ -51,7 +54,7 @@ func (db *txnDatabase) Relations(ctx context.Context) ([]string, error) {
 		}
 		return true
 	})
-	tbls, _ := db.txn.engine.catalog.Tables(defines.GetAccountId(ctx), db.databaseId, db.txn.meta.SnapshotTS)
+	tbls, _ := db.txn.engine.catalog.Tables(defines.GetAccountId(ctx), db.databaseId, db.txn.op.SnapshotTS())
 	for _, tbl := range tbls {
 		//if the table is deleted, do not save it.
 		if _, exist := deleteTables[tbl]; !exist {
@@ -86,7 +89,7 @@ func (db *txnDatabase) getTableNameById(ctx context.Context, id uint64) string {
 	})
 
 	if tblName == "" {
-		tbls, tblIds := db.txn.engine.catalog.Tables(defines.GetAccountId(ctx), db.databaseId, db.txn.meta.SnapshotTS)
+		tbls, tblIds := db.txn.engine.catalog.Tables(defines.GetAccountId(ctx), db.databaseId, db.txn.op.SnapshotTS())
 		for idx, tblId := range tblIds {
 			if tblId == id {
 				tblName = tbls[idx]
@@ -97,26 +100,43 @@ func (db *txnDatabase) getTableNameById(ctx context.Context, id uint64) string {
 	return tblName
 }
 
-func (db *txnDatabase) getRelationById(ctx context.Context, id uint64) (string, engine.Relation, error) {
+func (db *txnDatabase) getRelationById(ctx context.Context, id uint64) (string, engine.Relation) {
 	tblName := db.getTableNameById(ctx, id)
 	if tblName == "" {
-		return "", nil, moerr.NewInternalError(ctx, "can not find table by id %d", id)
+		return "", nil
 	}
-	rel, err := db.Relation(ctx, tblName)
-	return tblName, rel, err
+	rel, _ := db.Relation(ctx, tblName, nil)
+	return tblName, rel
 }
 
-func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relation, error) {
-	logDebugf(*db.txn.meta, "txnDatabase.Relation table %s", name)
-	//check the table is deleted or not
+func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (engine.Relation, error) {
+	logDebugf(db.txn.op.Txn(), "txnDatabase.Relation table %s", name)
+	txn := db.txn
+	if txn.op.Status() == txn2.TxnStatus_Aborted {
+		return nil, moerr.NewTxnClosedNoCtx(txn.op.Txn().ID)
+	}
+
+	// check the table is deleted or not
 	if _, exist := db.txn.deletedTableMap.Load(genTableKey(ctx, name, db.databaseId)); exist {
 		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
 	}
-	if v, ok := db.txn.tableMap.Load(genTableKey(ctx, name, db.databaseId)); ok {
-		return v.(*txnTable), nil
+	p := db.txn.proc
+	if proc != nil {
+		p = proc.(*process.Process)
+	}
+	rel := db.txn.getCachedTable(ctx, genTableKey(ctx, name, db.databaseId),
+		db.txn.op.SnapshotTS())
+	if rel != nil {
+		//rel.Lock()
+		//defer rel.Unlock()
+		//rel.proc = p
+		rel.proc.Store(p)
+		return rel, nil
 	}
 	// get relation from the txn created tables cache: created by this txn
 	if v, ok := db.txn.createMap.Load(genTableKey(ctx, name, db.databaseId)); ok {
+		//v.(*txnTable).proc = p
+		v.(*txnTable).proc.Store(p)
 		return v.(*txnTable), nil
 	}
 
@@ -141,9 +161,10 @@ func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relati
 		Name:       name,
 		DatabaseId: db.databaseId,
 		AccountId:  defines.GetAccountId(ctx),
-		Ts:         db.txn.meta.SnapshotTS,
+		Ts:         db.txn.op.SnapshotTS(),
 	}
 	if ok := db.txn.engine.catalog.GetTable(item); !ok {
+		logutil.Debugf("txnDatabase.Relation table %q(acc %d db %d) does not exist", name, defines.GetAccountId(ctx), db.databaseId)
 		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
 	}
 	tbl := &txnTable{
@@ -165,8 +186,12 @@ func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relati
 		constraint:    item.Constraint,
 		rowid:         item.Rowid,
 		rowids:        item.Rowids,
+		//proc:          p,
+		lastTS: txn.op.SnapshotTS(),
 	}
-	db.txn.tableMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
+	tbl.proc.Store(p)
+
+	db.txn.tableCache.tableMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
 	return tbl, nil
 }
 
@@ -185,7 +210,7 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 		/*
 			Even if the created table in the createMap, there is an
 			INSERT entry in the CN workspace. We need add a DELETE
-			entry in the CN workspace to tell the DN to delete the
+			entry in the CN workspace to tell the TN to delete the
 			table.
 			CORNER CASE
 			begin;
@@ -195,10 +220,10 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 			If we do not add DELETE entry in workspace, there is
 			a table t1 there after commit.
 		*/
-	} else if v, ok := db.txn.tableMap.Load(k); ok {
+	} else if v, ok := db.txn.tableCache.tableMap.Load(k); ok {
 		table := v.(*txnTable)
 		id = table.tableId
-		db.txn.tableMap.Delete(k)
+		db.txn.tableCache.tableMap.Delete(k)
 		rowid = table.rowid
 		rowids = table.rowids
 	} else {
@@ -206,7 +231,7 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 			Name:       name,
 			DatabaseId: db.databaseId,
 			AccountId:  defines.GetAccountId(ctx),
-			Ts:         db.txn.meta.SnapshotTS,
+			Ts:         db.txn.op.SnapshotTS(),
 		}
 		if ok := db.txn.engine.catalog.GetTable(item); !ok {
 			return moerr.GetOkExpectedEOB()
@@ -220,7 +245,7 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 		return err
 	}
 
-	for _, store := range db.txn.dnStores {
+	for _, store := range db.txn.tnStores {
 		if err := db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 			catalog.MO_CATALOG, catalog.MO_TABLES, bat, store, -1, false, false); err != nil {
 			return err
@@ -234,7 +259,7 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 		if err != nil {
 			return err
 		}
-		for _, store := range db.txn.dnStores {
+		for _, store := range db.txn.tnStores {
 			if err = db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
 				catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, store, -1, false, false); err != nil {
 				return err
@@ -258,7 +283,7 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 	k := genTableKey(ctx, name, db.databaseId)
 	v, ok = db.txn.createMap.Load(k)
 	if !ok {
-		v, ok = db.txn.tableMap.Load(k)
+		v, ok = db.txn.tableCache.tableMap.Load(k)
 	}
 
 	if ok {
@@ -271,7 +296,7 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 			Name:       name,
 			DatabaseId: db.databaseId,
 			AccountId:  defines.GetAccountId(ctx),
-			Ts:         db.txn.meta.SnapshotTS,
+			Ts:         db.txn.op.SnapshotTS(),
 		}
 		if ok := db.txn.engine.catalog.GetTable(item); !ok {
 			return 0, moerr.GetOkExpectedEOB()
@@ -284,7 +309,7 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 	if err != nil {
 		return 0, err
 	}
-	for _, store := range db.txn.dnStores {
+	for _, store := range db.txn.tnStores {
 		if err := db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 			catalog.MO_CATALOG, catalog.MO_TABLES, bat, store, -1, false, true); err != nil {
 			return 0, err
@@ -353,7 +378,7 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 		if err != nil {
 			return err
 		}
-		for _, store := range db.txn.dnStores {
+		for _, store := range db.txn.tnStores {
 			if err := db.txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 				catalog.MO_CATALOG, catalog.MO_TABLES, bat, store, -1, true, false); err != nil {
 				return err
@@ -370,7 +395,7 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 		if err != nil {
 			return err
 		}
-		for _, store := range db.txn.dnStores {
+		for _, store := range db.txn.tnStores {
 			if err := db.txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
 				catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, store, -1, true, false); err != nil {
 				return err

@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
 
@@ -61,23 +62,38 @@ func (s *service) heartbeatTask(ctx context.Context) {
 }
 
 func (s *service) heartbeat(ctx context.Context) {
+	start := time.Now()
+	defer func() {
+		v2.CNHeartbeatHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	ctx2, cancel := context.WithTimeout(ctx, s.cfg.HAKeeper.HeatbeatTimeout.Duration)
 	defer cancel()
 
 	hb := logservicepb.CNStoreHeartbeat{
 		UUID:               s.cfg.UUID,
-		ServiceAddress:     s.cfg.ServiceAddress,
+		ServiceAddress:     s.pipelineServiceServiceAddr(),
 		SQLAddress:         s.cfg.SQLAddress,
-		LockServiceAddress: s.cfg.LockService.ServiceAddress,
-		CtlAddress:         s.cfg.Ctl.Address.ServiceAddress,
+		LockServiceAddress: s.lockServiceServiceAddr(),
+		CtlAddress:         s.ctlServiceServiceAddr(),
 		Role:               s.metadata.Role,
 		TaskServiceCreated: s.GetTaskRunner() != nil,
+		QueryAddress:       s.queryServiceServiceAddr(),
+		InitWorkState:      s.cfg.InitWorkState,
+		GossipAddress:      s.gossipServiceAddr(),
+		GossipJoined:       s.gossipNode.Joined(),
+		ConfigData:         s.config.GetData(),
 	}
+
 	cb, err := s._hakeeperClient.SendCNHeartbeat(ctx2, hb)
 	if err != nil {
+		v2.CNHeartbeatFailureCounter.Inc()
 		s.logger.Error("failed to send cn heartbeat", zap.Error(err))
 		return
 	}
+
+	s.config.DecrCount()
+
 	s.handleCommands(cb.Commands)
 }
 
@@ -89,6 +105,27 @@ func (s *service) handleCommands(cmds []logservicepb.ScheduleCommand) {
 		s.logger.Info("applying schedule command", zap.String("command", cmd.LogString()))
 		if cmd.CreateTaskService != nil {
 			s.createTaskService(cmd.CreateTaskService)
+			s.createSQLLogger(cmd.CreateTaskService)
+			s.upgradeOnce.Do(func() {
+				_ = s.stopper.RunNamedTask("upgrade", func(context.Context) {
+					s.upgrade()
+				})
+			})
+		} else if s.gossipNode.Created() && cmd.JoinGossipCluster != nil {
+			s.gossipNode.SetJoined()
+
+			// Start an async task to join the gossip cluster to avoid the long time joining, and if
+			// it fails to join cluster, unset the joined state to give it another try.
+			if err := s.stopper.RunNamedTask("join gossip cluster", func(ctx context.Context) {
+				// The local state may be large, so do not set a timeout context.
+				if err := s.gossipNode.Join(cmd.JoinGossipCluster.Existing); err != nil {
+					s.logger.Error("failed to join gossip cluster", zap.Error(err))
+					s.gossipNode.UnsetJoined()
+				}
+			}); err != nil {
+				s.logger.Error("failed to start task to join gossip cluster", zap.Error(err))
+				s.gossipNode.UnsetJoined()
+			}
 		}
 	}
 }

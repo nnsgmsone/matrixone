@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -76,9 +77,9 @@ func (a *idAllocator) Capacity() uint64 {
 }
 
 func (l *store) setInitialClusterInfo(numOfLogShards uint64,
-	numOfDNShards uint64, numOfLogReplicas uint64) error {
+	numOfTNShards uint64, numOfLogReplicas uint64, nextID uint64, nextIDByKey map[string]uint64) error {
 	cmd := hakeeper.GetInitialClusterRequestCmd(numOfLogShards,
-		numOfDNShards, numOfLogReplicas)
+		numOfTNShards, numOfLogReplicas, nextID, nextIDByKey)
 	ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
 	defer cancel()
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
@@ -111,23 +112,35 @@ func (l *store) updateIDAlloc(count uint64) error {
 	return nil
 }
 
-func (l *store) hakeeperCheck() {
+func (l *store) getCheckerStateFromLeader() (*pb.CheckerState, uint64) {
 	isLeader, term, err := l.isLeaderHAKeeper()
 	if err != nil {
 		l.runtime.Logger().Error("failed to get HAKeeper Leader ID", zap.Error(err))
-		return
+		return nil, term
 	}
 
 	if !isLeader {
 		l.taskScheduler.StopScheduleCronTask()
-		return
+		return nil, term
 	}
 	state, err := l.getCheckerState()
 	if err != nil {
 		// TODO: check whether this is temp error
 		l.runtime.Logger().Error("failed to get checker state", zap.Error(err))
+		return nil, term
+	}
+
+	return state, term
+}
+
+var debugPrintHAKeeperState atomic.Bool
+
+func (l *store) hakeeperCheck() {
+	state, term := l.getCheckerStateFromLeader()
+	if state == nil {
 		return
 	}
+
 	switch state.State {
 	case pb.HAKeeperCreated:
 		l.runtime.Logger().Warn("waiting for initial cluster info to be set, check skipped")
@@ -139,8 +152,11 @@ func (l *store) hakeeperCheck() {
 	case pb.HAKeeperBootstrapFailed:
 		l.handleBootstrapFailure()
 	case pb.HAKeeperRunning:
+		if debugPrintHAKeeperState.CompareAndSwap(false, true) {
+			l.runtime.Logger().Info("HAKeeper is running",
+				zap.Uint64("next id", state.NextId))
+		}
 		l.healthCheck(term, state)
-		l.taskSchedule(state)
 	default:
 		panic("unknown HAKeeper state")
 	}
@@ -294,7 +310,7 @@ func (l *store) getScheduleCommand(check bool,
 		return l.checker.Check(l.alloc, *state), nil
 	}
 	m := bootstrap.NewBootstrapManager(state.ClusterInfo)
-	return m.Bootstrap(l.alloc, state.DNState, state.LogState)
+	return m.Bootstrap(l.alloc, state.TNState, state.LogState)
 }
 
 func (l *store) setTaskTableUser(user pb.TaskTableUser) error {

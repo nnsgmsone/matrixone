@@ -16,16 +16,17 @@ package frontend
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/defines"
-
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 )
 
 // Routine handles requests.
@@ -55,6 +56,19 @@ type Routine struct {
 	connectionBeCounted atomic.Bool
 
 	mu sync.Mutex
+
+	// the id of goroutine that executes the request
+	goroutineID uint64
+
+	restricted atomic.Bool
+}
+
+func (rt *Routine) setResricted(val bool) {
+	rt.restricted.Store(val)
+}
+
+func (rt *Routine) isRestricted() bool {
+	return rt.restricted.Load()
 }
 
 func (rt *Routine) increaseCount(counter func()) {
@@ -130,6 +144,16 @@ func (rt *Routine) getConnectionID() uint32 {
 	return rt.getProtocol().ConnectionID()
 }
 
+func (rt *Routine) updateGoroutineId() {
+	if rt.goroutineID == 0 {
+		rt.goroutineID = GetRoutineId()
+	}
+}
+
+func (rt *Routine) getGoroutineId() uint64 {
+	return rt.goroutineID
+}
+
 func (rt *Routine) getParameters() *config.FrontendParameters {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
@@ -168,8 +192,13 @@ func (rt *Routine) handleRequest(req *Request) error {
 	var err error
 	var resp *Response
 	var quit bool
+
 	reqBegin := time.Now()
-	routineCtx = rt.getCancelRoutineCtx()
+	var span trace.Span
+	routineCtx, span = trace.Start(rt.getCancelRoutineCtx(), "Routine.handleRequest",
+		trace.WithKind(trace.SpanKindStatement))
+	defer span.End()
+
 	parameters := rt.getParameters()
 	mpi := rt.getProtocol()
 	mpi.SetSequenceID(req.seq)
@@ -180,24 +209,32 @@ func (rt *Routine) handleRequest(req *Request) error {
 	ses = rt.getSession()
 	ses.UpdateDebugString()
 	tenant := ses.GetTenantInfo()
-	tenantCtx := context.WithValue(cancelRequestCtx, defines.TenantIDKey{}, tenant.GetTenantID())
+	nodeCtx := cancelRequestCtx
+	if ses.getRoutineManager().baseService != nil {
+		nodeCtx = context.WithValue(cancelRequestCtx, defines.NodeIDKey{}, ses.getRoutineManager().baseService.ID())
+	}
+	tenantCtx := context.WithValue(nodeCtx, defines.TenantIDKey{}, tenant.GetTenantID())
 	tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, tenant.GetUserID())
 	tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, tenant.GetDefaultRoleID())
-	tenantCtx = trace.ContextWithSpanContext(tenantCtx, trace.SpanContextWithID(trace.TraceID(ses.uuid), trace.SpanKindSession))
 	ses.SetRequestContext(tenantCtx)
-	executor.SetSession(rt.getSession())
+	executor.SetSession(ses)
 
 	rt.increaseCount(func() {
 		metric.ConnectionCounter(ses.GetTenantInfo().GetTenant()).Inc()
 	})
 
 	if resp, err = executor.ExecRequest(tenantCtx, ses, req); err != nil {
-		logErrorf(ses.GetDebugString(), "rt execute request failed. error:%v \n", err)
+		logError(ses, ses.GetDebugString(),
+			"Failed to execute request",
+			zap.Error(err))
 	}
 
 	if resp != nil {
 		if err = rt.getProtocol().SendResponse(tenantCtx, resp); err != nil {
-			logErrorf(ses.GetDebugString(), "rt send response failed %v. error:%v ", resp, err)
+			logError(ses, ses.GetDebugString(),
+				"Failed to send response",
+				zap.String("response", fmt.Sprintf("%v", resp)),
+				zap.Error(err))
 		}
 	}
 
@@ -220,10 +257,12 @@ func (rt *Routine) handleRequest(req *Request) error {
 		})
 
 		//ensure cleaning the transaction
-		logErrorf(ses.GetDebugString(), "rollback the txn.")
+		logError(ses, ses.GetDebugString(), "rollback the txn.")
 		err = ses.TxnRollback()
 		if err != nil {
-			logErrorf(ses.GetDebugString(), "rollback txn failed.error:%v", err)
+			logError(ses, ses.GetDebugString(),
+				"Failed to rollback txn",
+				zap.Error(err))
 		}
 
 		//close the network connection
@@ -300,7 +339,9 @@ func (rt *Routine) cleanup() {
 		if ses != nil {
 			err := ses.TxnRollback()
 			if err != nil {
-				logErrorf(ses.GetDebugString(), "rollback txn failed.error:%v", err)
+				logError(ses, ses.GetDebugString(),
+					"Failed to rollback txn",
+					zap.Error(err))
 			}
 		}
 

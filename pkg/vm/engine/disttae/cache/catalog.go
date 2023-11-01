@@ -16,6 +16,7 @@ package cache
 
 import (
 	"fmt"
+	"math"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -35,6 +36,7 @@ func NewCatalog() *CatalogCache {
 		tables: &tableCache{
 			data:       btree.NewBTreeG(tableItemLess),
 			rowidIndex: btree.NewBTreeG(tableItemRowidLess),
+			tableGuard: newTableGuard(),
 		},
 		databases: &databaseCache{
 			data:       btree.NewBTreeG(databaseItemLess),
@@ -299,7 +301,27 @@ func (cc *CatalogCache) DeleteTable(bat *batch.Batch) {
 				DatabaseId: item.DatabaseId,
 				Ts:         timestamps[i].ToTimestamp(),
 			}
-			cc.tables.data.Set(newItem)
+			cc.tables.addTableItem(newItem)
+
+			key := TableKey{
+				AccountId:  item.AccountId,
+				DatabaseId: item.DatabaseId,
+				Name:       item.Name,
+			}
+
+			oldVersion := cc.tables.tableGuard.getSchemaVersion(key)
+
+			if oldVersion != nil && oldVersion.TableId != item.Id {
+				// drop old table for alter table stmt
+				oldVersion.Version = math.MaxUint32
+				cc.tables.tableGuard.setSchemaVersion(key, oldVersion)
+			} else {
+				// normal drop table stmt
+				cc.tables.tableGuard.setSchemaVersion(key, &TableVersion{
+					Version: math.MaxUint32,
+					Ts:      &item.Ts,
+				})
+			}
 		}
 	}
 }
@@ -339,7 +361,7 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 	paritions := bat.GetVector(catalog.MO_TABLES_PARTITION_INFO_IDX + MO_OFF)
 	constraints := bat.GetVector(catalog.MO_TABLES_CONSTRAINT_IDX + MO_OFF)
 	versions := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_TABLES_VERSION_IDX + MO_OFF))
-
+	catalogVersions := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_TABLES_CATALOG_VERSION_IDX + MO_OFF))
 	for i, account := range accounts {
 		item := new(TableItem)
 		item.Id = ids[i]
@@ -355,12 +377,14 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 		item.Partition = paritions.GetStringAt(i)
 		item.CreateSql = createSqls.GetStringAt(i)
 		item.Version = versions[i]
+		item.CatalogVersion = catalogVersions[i]
 		item.PrimaryIdx = -1
 		item.PrimarySeqnum = -1
 		item.ClusterByIdx = -1
 		copy(item.Rowid[:], rowids[i][:])
 		// invalid old name table
-		if exist, ok := cc.tables.rowidIndex.Get(&TableItem{Rowid: rowids[i]}); ok && exist.Name != item.Name {
+		exist, ok := cc.tables.rowidIndex.Get(&TableItem{Rowid: rowids[i]})
+		if ok && exist.Name != item.Name {
 			logutil.Infof("rename invalidate %d-%s,v%d@%s", exist.Id, exist.Name, exist.Version, item.Ts.String())
 			newItem := &TableItem{
 				deleted:    true,
@@ -372,9 +396,32 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 				Version:    exist.Version,
 				Ts:         item.Ts,
 			}
-			cc.tables.data.Set(newItem)
+			cc.tables.addTableItem(newItem)
+
+			key := TableKey{
+				AccountId:  account,
+				DatabaseId: item.DatabaseId,
+				Name:       exist.Name,
+			}
+			cc.tables.tableGuard.setSchemaVersion(key, &TableVersion{
+				Version: math.MaxUint32,
+				Ts:      &item.Ts,
+				TableId: item.Id,
+			})
 		}
-		cc.tables.data.Set(item)
+
+		key := TableKey{
+			AccountId:  account,
+			DatabaseId: item.DatabaseId,
+			Name:       item.Name,
+		}
+
+		cc.tables.tableGuard.setSchemaVersion(key, &TableVersion{
+			Version: item.Version,
+			Ts:      &item.Ts,
+			TableId: item.Id,
+		})
+		cc.tables.addTableItem(item)
 		cc.tables.rowidIndex.Set(item)
 	}
 }
@@ -405,6 +452,7 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 	nums := vector.MustFixedCol[int32](bat.GetVector(catalog.MO_COLUMNS_ATTNUM_IDX + MO_OFF))
 	clusters := vector.MustFixedCol[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_IS_CLUSTERBY + MO_OFF))
 	seqnums := vector.MustFixedCol[uint16](bat.GetVector(catalog.MO_COLUMNS_ATT_SEQNUM_IDX + MO_OFF))
+	enumValues := bat.GetVector(catalog.MO_COLUMNS_ATT_ENUM_IDX + MO_OFF)
 	for i, account := range accounts {
 		key.AccountId = account
 		key.Name = tableNames.GetStringAt(i)
@@ -430,6 +478,7 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 				constraintType:  constraintTypes.GetStringAt(i),
 				isClusterBy:     clusters[i],
 				seqnum:          seqnums[i],
+				enumValues:      enumValues.GetStringAt(i),
 			}
 			copy(col.rowid[:], rowids[i][:])
 			col.typ = append(col.typ, typs.GetBytesAt(i)...)
@@ -467,6 +516,20 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 		item.Defs = defs
 		item.TableDef = getTableDef(item.Name, defs)
 		item.TableDef.Version = item.Version
+		// add Constraint
+		if len(item.Constraint) != 0 {
+			c := new(engine.ConstraintDef)
+			err := c.UnmarshalBinary(item.Constraint)
+			if err != nil {
+				return
+			}
+			for _, ct := range c.Cts {
+				switch k := ct.(type) {
+				case *engine.PrimaryKeyDef:
+					item.TableDef.Pkey = k.Pkey
+				}
+			}
+		}
 	}
 }
 
@@ -509,6 +572,7 @@ func genTableDefOfColumn(col column) engine.TableDef {
 	attr.ClusterBy = col.isClusterBy == 1
 	attr.AutoIncrement = col.isAutoIncrement == 1
 	attr.Seqnum = col.seqnum
+	attr.EnumVlaues = col.enumValues
 	if err := types.Decode(col.typ, &attr.Type); err != nil {
 		panic(err)
 	}
@@ -543,10 +607,11 @@ func getTableDef(name string, defs []engine.TableDef) *plan.TableDef {
 				ColId: attr.Attr.ID,
 				Name:  attr.Attr.Name,
 				Typ: &plan.Type{
-					Id:       int32(attr.Attr.Type.Oid),
-					Width:    attr.Attr.Type.Width,
-					Scale:    attr.Attr.Type.Scale,
-					AutoIncr: attr.Attr.AutoIncrement,
+					Id:         int32(attr.Attr.Type.Oid),
+					Width:      attr.Attr.Type.Width,
+					Scale:      attr.Attr.Type.Scale,
+					AutoIncr:   attr.Attr.AutoIncrement,
+					Enumvalues: attr.Attr.EnumVlaues,
 				},
 				Primary:  attr.Attr.Primary,
 				Default:  attr.Attr.Default,
@@ -563,4 +628,14 @@ func getTableDef(name string, defs []engine.TableDef) *plan.TableDef {
 		Cols:          cols,
 		Name2ColIndex: name2index,
 	}
+}
+
+// GetSchemaVersion returns the version of table
+func (cc *CatalogCache) GetSchemaVersion(name TableKey) *TableVersion {
+	return cc.tables.tableGuard.getSchemaVersion(name)
+}
+
+// addTableItem inserts a new table item.
+func (c *tableCache) addTableItem(item *TableItem) {
+	c.data.Set(item)
 }

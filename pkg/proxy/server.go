@@ -16,6 +16,8 @@ package proxy
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/util"
+	"time"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -23,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
+	"github.com/matrixorigin/matrixone/pkg/version"
 )
 
 var statsFamilyName = "proxy counter"
@@ -36,9 +39,10 @@ type Server struct {
 	// handler handles the client connection.
 	handler *handler
 	// counterSet counts the events in proxy.
-	counterSet *counterSet
-	// for test.
-	testHAKeeperClient logservice.ClusterHAKeeperClient
+	counterSet     *counterSet
+	haKeeperClient logservice.ProxyHAKeeperClient
+	// configData will be sent to HAKeeper.
+	configData *util.ConfigData
 }
 
 // NewServer creates the proxy server.
@@ -49,6 +53,12 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
+
+	frontend.InitServerVersion(version.Version)
+
+	configKVMap, _ := dumpProxyConfig(config)
+	opts = append(opts, WithConfigData(configKVMap))
+
 	s := &Server{
 		config:     config,
 		counterSet: newCounterSet(),
@@ -60,14 +70,31 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 		panic("runtime of proxy is not set")
 	}
 
+	var err error
+	if s.haKeeperClient == nil {
+		ctx, cancel := context.WithTimeout(ctx, time.Second*3)
+		defer cancel()
+		s.haKeeperClient, err = logservice.NewProxyHAKeeperClient(ctx, config.HAKeeper.ClientConfig)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	logExporter := newCounterLogExporter(s.counterSet)
 	stats.Register(statsFamilyName, stats.WithLogExporter(logExporter))
 
 	s.stopper = stopper.NewStopper("mo-proxy", stopper.WithLogger(s.runtime.Logger().RawLogger()))
-	h, err := newProxyHandler(ctx, s.runtime, s.config, s.stopper, s.counterSet, s.testHAKeeperClient)
+	h, err := newProxyHandler(ctx, s.runtime, s.config, s.stopper, s.counterSet, s.haKeeperClient)
 	if err != nil {
 		return nil, err
 	}
+
+	go h.bootstrap(ctx)
+
+	if err := s.stopper.RunNamedTask("proxy heartbeat", s.heartbeat); err != nil {
+		return nil, err
+	}
+
 	s.handler = h
 	app, err := goetty.NewApplication(config.ListenAddress, nil,
 		goetty.WithAppLogger(s.runtime.Logger().RawLogger()),

@@ -17,12 +17,11 @@ package dispatch
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-
 	"github.com/google/uuid"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -58,7 +57,6 @@ func Prepare(proc *process.Process, arg any) error {
 		} else {
 			ap.prepareLocal()
 		}
-		ap.initShuffle()
 
 	case SendToAnyFunc:
 		if ctr.remoteRegsCnt == 0 {
@@ -92,38 +90,63 @@ func Prepare(proc *process.Process, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	ap := arg.(*Argument)
-
 	bat := proc.InputBatch()
-	if bat == nil {
-		if ap.FuncId == ShuffleToAllFunc {
-			return sendShuffledBats(ap, proc)
+	if bat == nil && ap.RecSink {
+		bat = makeEndBatch(proc)
+	} else if bat == nil {
+		return process.ExecStop, nil
+	}
+	if bat.Last() {
+		if !ap.ctr.hasData {
+			bat.SetEnd()
+		} else {
+			ap.ctr.hasData = false
 		}
-		return true, nil
+	} else if bat.IsEmpty() {
+		proc.PutBatch(bat)
+		proc.SetInputBatch(batch.EmptyBatch)
+		return process.ExecNext, nil
+	} else {
+		ap.ctr.hasData = true
 	}
+	ok, err := ap.ctr.sendFunc(bat, ap, proc)
+	if ok {
+		return process.ExecStop, err
+	} else {
+		return process.ExecNext, err
+	}
+}
 
-	if bat.Length() == 0 {
-		bat.Clean(proc.Mp())
-		return false, nil
+func makeEndBatch(proc *process.Process) *batch.Batch {
+	b := batch.NewWithSize(1)
+	b.Attrs = []string{
+		"recursive_col",
 	}
-	return ap.ctr.sendFunc(bat, ap, proc)
+	b.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
+	vector.AppendBytes(b.GetVector(0), []byte("check recursive status"), false, proc.GetMPool())
+	batch.SetLength(b, 1)
+	b.SetEnd()
+	return b
 }
 
 func (arg *Argument) waitRemoteRegsReady(proc *process.Process) (bool, error) {
 	cnt := len(arg.RemoteRegs)
 	for cnt > 0 {
 		timeoutCtx, timeoutCancel := context.WithTimeout(context.Background(), waitNotifyTimeout)
-		defer timeoutCancel()
 		select {
 		case <-timeoutCtx.Done():
-			logutil.Errorf("waiting notify msg timeout")
+			timeoutCancel()
 			return false, moerr.NewInternalErrorNoCtx("wait notify message timeout")
+
 		case <-proc.Ctx.Done():
+			timeoutCancel()
 			arg.ctr.prepared = true
-			logutil.Infof("conctx done during dispatch")
 			return true, nil
+
 		case csinfo := <-proc.DispatchNotifyCh:
+			timeoutCancel()
 			arg.ctr.remoteReceivers = append(arg.ctr.remoteReceivers, &WrapperClientSession{
 				msgId:  csinfo.MsgId,
 				cs:     csinfo.Cs,
@@ -146,7 +169,7 @@ func (arg *Argument) prepareRemote(proc *process.Process) {
 		if arg.FuncId == ShuffleToAllFunc {
 			arg.ctr.remoteToIdx[rr.Uuid] = arg.ShuffleRegIdxRemote[i]
 		}
-		colexec.Srv.PutNotifyChIntoUuidMap(rr.Uuid, proc)
+		colexec.Srv.PutProcIntoUuidMap(rr.Uuid, proc)
 	}
 }
 
@@ -154,22 +177,4 @@ func (arg *Argument) prepareLocal() {
 	arg.ctr.prepared = true
 	arg.ctr.isRemote = false
 	arg.ctr.remoteReceivers = nil
-}
-
-func (arg *Argument) initShuffle() {
-	if arg.ctr.sels == nil {
-		arg.ctr.sels = make([][]int32, arg.ctr.aliveRegCnt)
-		for i := 0; i < arg.ctr.aliveRegCnt; i++ {
-			arg.ctr.sels[i] = make([]int32, 8192)
-		}
-		arg.ctr.batsCount = 0
-		arg.ctr.shuffledBats = make([]*batch.Batch, arg.ctr.aliveRegCnt)
-	}
-}
-
-func (arg *Argument) getSels() [][]int32 {
-	for i := range arg.ctr.sels {
-		arg.ctr.sels[i] = arg.ctr.sels[i][:0]
-	}
-	return arg.ctr.sels
 }

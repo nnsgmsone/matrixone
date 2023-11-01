@@ -36,10 +36,11 @@ func TestLockRemote(t *testing.T) {
 				pb.Method_Lock,
 				func(
 					ctx context.Context,
+					cancel context.CancelFunc,
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
-					writeResponse(ctx, resp, nil, cs)
+					writeResponse(ctx, cancel, resp, nil, cs)
 				},
 			)
 		},
@@ -48,6 +49,8 @@ func TestLockRemote(t *testing.T) {
 			txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(32), "")
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
+			txn.Lock()
+			defer txn.Unlock()
 			l.lock(ctx, txn, [][]byte{{1}}, LockOptions{}, func(r pb.Result, err error) {
 				assert.NoError(t, err)
 			})
@@ -66,10 +69,11 @@ func TestUnlockRemote(t *testing.T) {
 				pb.Method_Unlock,
 				func(
 					ctx context.Context,
+					cancel context.CancelFunc,
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
-					writeResponse(ctx, resp, nil, cs)
+					writeResponse(ctx, cancel, resp, nil, cs)
 				},
 			)
 		},
@@ -91,22 +95,26 @@ func TestUnlockRemoteWithRetry(t *testing.T) {
 		func(s Server) {
 			s.RegisterMethodHandler(
 				pb.Method_Unlock,
-				func(ctx context.Context,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
 					n++
 					if n == 1 {
-						writeResponse(ctx, resp, moerr.NewBackendClosedNoCtx(), cs)
+						writeResponse(ctx, cancel, resp, moerr.NewRPCTimeout(ctx), cs)
 						return
 					}
 					close(c)
-					writeResponse(ctx, resp, nil, cs)
+					writeResponse(ctx, cancel, resp, nil, cs)
 				},
 			)
 			s.RegisterMethodHandler(
 				pb.Method_GetBind,
-				func(ctx context.Context,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
@@ -114,7 +122,7 @@ func TestUnlockRemoteWithRetry(t *testing.T) {
 						ServiceID: "s1",
 						Valid:     true,
 					}
-					writeResponse(ctx, resp, nil, cs)
+					writeResponse(ctx, cancel, resp, nil, cs)
 				},
 			)
 		},
@@ -126,6 +134,108 @@ func TestUnlockRemoteWithRetry(t *testing.T) {
 		},
 		func(lt pb.LockTable) {},
 	)
+}
+
+func TestUnlockRemoteWithCannotRetryAfterTimeout(t *testing.T) {
+	runRemoteLockTableTests(
+		t,
+		pb.LockTable{ServiceID: "s1"},
+		func(s Server) {
+			s.RegisterMethodHandler(
+				pb.Method_Unlock,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession) {
+					// always retry
+					writeResponse(ctx, cancel, resp, moerr.NewRPCTimeout(ctx), cs)
+				},
+			)
+			s.RegisterMethodHandler(
+				pb.Method_GetBind,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession) {
+					resp.GetBind.LockTable = pb.LockTable{
+						ServiceID: "s1",
+						Valid:     true,
+					}
+					writeResponse(ctx, cancel, resp, nil, cs)
+				},
+			)
+		},
+		func(l *remoteLockTable, s Server) {
+			txnID := []byte("txn1")
+			txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(32), "")
+			l.unlock(txn, nil, timestamp.Timestamp{})
+		},
+		func(lt pb.LockTable) {},
+	)
+}
+
+func TestUnlockRemoteWithCannotRetry(t *testing.T) {
+	cannotRetryErrors := []error{moerr.NewBackendCannotConnectNoCtx(), moerr.NewBackendClosedNoCtx()}
+
+	for _, e := range cannotRetryErrors {
+		n := 0
+		c := make(chan struct{})
+		runRemoteLockTableTests(
+			t,
+			pb.LockTable{ServiceID: "s1"},
+			func(s Server) {
+				s.RegisterMethodHandler(
+					pb.Method_Unlock,
+					func(
+						ctx context.Context,
+						cancel context.CancelFunc,
+						req *pb.Request,
+						resp *pb.Response,
+						cs morpc.ClientSession) {
+						n++
+						if n == 1 {
+							writeResponse(ctx, cancel, resp, e, cs)
+							return
+						}
+						close(c)
+						writeResponse(ctx, cancel, resp, nil, cs)
+					},
+				)
+				s.RegisterMethodHandler(
+					pb.Method_GetBind,
+					func(
+						ctx context.Context,
+						cancel context.CancelFunc,
+						req *pb.Request,
+						resp *pb.Response,
+						cs morpc.ClientSession) {
+						resp.GetBind.LockTable = pb.LockTable{
+							ServiceID: "s1",
+							Valid:     true,
+						}
+						writeResponse(ctx, cancel, resp, nil, cs)
+					},
+				)
+			},
+			func(l *remoteLockTable, s Server) {
+				txnID := []byte("txn1")
+				txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(32), "")
+				l.unlock(txn, nil, timestamp.Timestamp{})
+				select {
+				case <-c:
+					assert.Fail(t, "cannot retry")
+				case <-time.After(time.Second):
+					close(c)
+				}
+			},
+			func(lt pb.LockTable) {},
+		)
+	}
+
 }
 
 func TestRemoteWithBindChanged(t *testing.T) {
@@ -143,34 +253,40 @@ func TestRemoteWithBindChanged(t *testing.T) {
 		func(s Server) {
 			s.RegisterMethodHandler(
 				pb.Method_Lock,
-				func(ctx context.Context,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
 					resp.NewBind = &newBind
-					writeResponse(ctx, resp, nil, cs)
+					writeResponse(ctx, cancel, resp, nil, cs)
 				},
 			)
 
 			s.RegisterMethodHandler(
 				pb.Method_Unlock,
-				func(ctx context.Context,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
 					resp.NewBind = &newBind
-					writeResponse(ctx, resp, nil, cs)
+					writeResponse(ctx, cancel, resp, nil, cs)
 				},
 			)
 
 			s.RegisterMethodHandler(
 				pb.Method_GetTxnLock,
-				func(ctx context.Context,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
 					resp.NewBind = &newBind
-					writeResponse(ctx, resp, nil, cs)
+					writeResponse(ctx, cancel, resp, nil, cs)
 				},
 			)
 		},
@@ -179,15 +295,17 @@ func TestRemoteWithBindChanged(t *testing.T) {
 			txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(32), "")
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
+			txn.Lock()
 			l.lock(ctx, txn, [][]byte{{1}}, LockOptions{}, func(r pb.Result, err error) {
 				assert.Error(t, ErrLockTableBindChanged, err)
 			})
 			assert.Equal(t, newBind, <-c)
+			txn.Unlock()
 
 			l.unlock(txn, nil, timestamp.Timestamp{})
 			assert.Equal(t, newBind, <-c)
 
-			l.getLock(txnID, []byte{1}, nil)
+			l.getLock(txnID, pb.WaitTxn{TxnID: []byte{1}}, nil)
 			assert.Equal(t, newBind, <-c)
 		},
 		func(bind pb.LockTable) {
@@ -207,6 +325,7 @@ func runRemoteLockTableTests(
 		register(s)
 		l := newRemoteLockTable(
 			"",
+			time.Second,
 			binding,
 			c,
 			changed)

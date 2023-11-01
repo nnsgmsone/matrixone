@@ -37,6 +37,10 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 		return nil, err
 	}
 
+	if isNullExpr(expr) {
+		return nil, moerr.NewInternalErrorNoCtx("Invalid GROUP BY NULL")
+	}
+
 	if isRoot {
 		astStr := tree.String(astExpr, dialect.MYSQL)
 		if _, ok := b.ctx.groupByAst[astStr]; ok {
@@ -73,4 +77,8 @@ func (b *GroupBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth
 
 func (b *GroupBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
 	return nil, moerr.NewNYI(b.GetContext(), "subquery in GROUP BY clause")
+}
+
+func (b *GroupBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
+	return nil, moerr.NewInvalidInput(b.GetContext(), "cannot bind time window functions '%s'", funcName)
 }

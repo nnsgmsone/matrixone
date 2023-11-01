@@ -16,6 +16,9 @@ package jobs
 
 import (
 	"context"
+	"math/rand"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -61,7 +64,10 @@ func NewFlushBlkTask(
 
 func (task *flushBlkTask) Scope() *common.ID { return task.meta.AsCommonID() }
 
-func (task *flushBlkTask) Execute(ctx context.Context) error {
+func (task *flushBlkTask) Execute(ctx context.Context) (err error) {
+	if v := ctx.Value(TestFlushBailout{}); v != nil {
+		time.Sleep(time.Duration(rand.Intn(200)) * time.Millisecond)
+	}
 	seg := task.meta.ID.Segment()
 	num, _ := task.meta.ID.Offsets()
 	name := objectio.BuildObjectName(seg, num)
@@ -73,12 +79,13 @@ func (task *flushBlkTask) Execute(ctx context.Context) error {
 	if task.meta.GetSchema().HasPK() {
 		writer.SetPrimaryKey(uint16(task.meta.GetSchema().GetSingleSortKeyIdx()))
 	}
+
 	_, err = writer.WriteBatch(containers.ToCNBatch(task.data))
 	if err != nil {
 		return err
 	}
 	if task.delta != nil {
-		_, err := writer.WriteBatchWithOutIndex(containers.ToCNBatch(task.delta))
+		_, err := writer.WriteTombstoneBatch(containers.ToCNBatch(task.delta))
 		if err != nil {
 			return err
 		}

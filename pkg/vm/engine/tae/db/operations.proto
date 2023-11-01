@@ -53,7 +53,7 @@ message Checkpoint {
     int64 FlushDuration         = 1 [(gogoproto.casttype) = "time.Duration"];
 }
 
-message InspectDN {
+message InspectTN {
     option (gogoproto.typedecl) = false;
     AccessInfo AccessInfo       = 1 [(gogoproto.nullable) = false];
     string Operation            = 2;
@@ -70,4 +70,20 @@ message CatalogResp {
     option (gogoproto.typedecl) = false;
     string Item                 = 1;
     repeated CatalogResp Sub    = 2;
+}
+
+message FaultPoint {
+    option (gogoproto.typedecl) = false;
+    string Name                 = 1;
+    string Freq                 = 2;
+    string Action               = 3;
+    int64 Iarg                  = 4;
+    string Sarg                 = 5;
+}
+
+message TraceSpan {
+    option (gogoproto.typedecl) = false;
+    string cmd                  = 1;
+    string spans       = 2;
+    int64 threshold = 3;
 }

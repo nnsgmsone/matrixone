@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 type txnSysBlock struct {
@@ -210,11 +209,18 @@ func FillColumnRow(table *catalog.TableEntry, node *catalog.MVCCNode[*catalog.Ta
 			colData.Append(colDef.OnUpdate, false)
 		case pkgcatalog.SystemColAttr_Seqnum:
 			colData.Append(colDef.SeqNum, false)
+		case pkgcatalog.SystemColAttr_EnumValues:
+			colData.Append([]byte(colDef.EnumValues), false)
 		default:
 			panic("unexpected colname. if add new catalog def, fill it in this switch")
 		}
 	}
 }
+
+func (blk *txnSysBlock) GetDeltaPersistedTS() types.TS {
+	return types.TS{}
+}
+
 func (blk *txnSysBlock) getColumnTableVec(ts types.TS, colIdx int) (colData containers.Vector, err error) {
 	col := catalog.SystemColumnSchema.ColDefs[colIdx]
 	colData = containers.MakeVector(col.Type)
@@ -234,9 +240,9 @@ func (blk *txnSysBlock) getColumnTableVec(ts types.TS, colIdx int) (colData cont
 	}
 	return
 }
-func (blk *txnSysBlock) getColumnTableData(colIdx int) (view *model.ColumnView, err error) {
+func (blk *txnSysBlock) getColumnTableData(colIdx int) (view *containers.ColumnView, err error) {
 	ts := blk.Txn.GetStartTS()
-	view = model.NewColumnView(colIdx)
+	view = containers.NewColumnView(colIdx)
 	colData, err := blk.getColumnTableVec(ts, colIdx)
 	view.SetData(colData)
 	return
@@ -279,6 +285,15 @@ func FillTableRow(table *catalog.TableEntry, node *catalog.MVCCNode[*catalog.Tab
 		colData.Append(schema.Constraint, false)
 	case pkgcatalog.SystemRelAttr_Version:
 		colData.Append(schema.Version, false)
+	case pkgcatalog.SystemRelAttr_CatalogVersion:
+		colData.Append(schema.CatalogVersion, false)
+	case catalog.AccountIDDbNameTblName:
+		packer := types.NewPacker(common.DefaultAllocator)
+		packer.EncodeUint32(schema.AcInfo.TenantID)
+		packer.EncodeStringType([]byte(table.GetDB().GetName()))
+		packer.EncodeStringType([]byte(schema.Name))
+		colData.Append(packer.Bytes(), false)
+		packer.Reset()
 	default:
 		panic("unexpected colname. if add new catalog def, fill it in this switch")
 	}
@@ -303,9 +318,9 @@ func (blk *txnSysBlock) getRelTableVec(ts types.TS, colIdx int) (colData contain
 	return
 }
 
-func (blk *txnSysBlock) getRelTableData(colIdx int) (view *model.ColumnView, err error) {
+func (blk *txnSysBlock) getRelTableData(colIdx int) (view *containers.ColumnView, err error) {
 	ts := blk.Txn.GetStartTS()
-	view = model.NewColumnView(colIdx)
+	view = containers.NewColumnView(colIdx)
 	colData, err := blk.getRelTableVec(ts, colIdx)
 	view.SetData(colData)
 	return
@@ -331,6 +346,12 @@ func FillDBRow(db *catalog.DBEntry, _ *catalog.MVCCNode[*catalog.EmptyMVCCNode],
 		colData.Append(db.GetTenantID(), false)
 	case pkgcatalog.SystemDBAttr_Type:
 		colData.Append([]byte(db.GetDatType()), false)
+	case catalog.AccountIDDbName:
+		packer := types.NewPacker(common.DefaultAllocator)
+		packer.EncodeUint32(db.GetTenantID())
+		packer.EncodeStringType([]byte(db.GetName()))
+		colData.Append(packer.Bytes(), false)
+		packer.Reset()
 	default:
 		panic("unexpected colname. if add new catalog def, fill it in this switch")
 	}
@@ -347,14 +368,14 @@ func (blk *txnSysBlock) getDBTableVec(colIdx int) (colData containers.Vector, er
 	}
 	return
 }
-func (blk *txnSysBlock) getDBTableData(colIdx int) (view *model.ColumnView, err error) {
-	view = model.NewColumnView(colIdx)
+func (blk *txnSysBlock) getDBTableData(colIdx int) (view *containers.ColumnView, err error) {
+	view = containers.NewColumnView(colIdx)
 	colData, err := blk.getDBTableVec(colIdx)
 	view.SetData(colData)
 	return
 }
 
-func (blk *txnSysBlock) GetColumnDataById(ctx context.Context, colIdx int) (view *model.ColumnView, err error) {
+func (blk *txnSysBlock) GetColumnDataById(ctx context.Context, colIdx int) (view *containers.ColumnView, err error) {
 	if !blk.isSysTable() {
 		return blk.txnBlock.GetColumnDataById(ctx, colIdx)
 	}
@@ -369,20 +390,20 @@ func (blk *txnSysBlock) GetColumnDataById(ctx context.Context, colIdx int) (view
 	}
 }
 
-func (blk *txnSysBlock) Prefetch(idxes []uint16) error {
+func (blk *txnSysBlock) Prefetch(idxes []int) error {
 	return nil
 }
 
-func (blk *txnSysBlock) GetColumnDataByName(ctx context.Context, attr string) (view *model.ColumnView, err error) {
+func (blk *txnSysBlock) GetColumnDataByName(ctx context.Context, attr string) (view *containers.ColumnView, err error) {
 	colIdx := blk.entry.GetSchema().GetColIdx(attr)
 	return blk.GetColumnDataById(ctx, colIdx)
 }
 
-func (blk *txnSysBlock) GetColumnDataByNames(attrs []string) (view *model.BlockView, err error) {
+func (blk *txnSysBlock) GetColumnDataByNames(ctx context.Context, attrs []string) (view *containers.BlockView, err error) {
 	if !blk.isSysTable() {
-		return blk.txnBlock.GetColumnDataByNames(attrs)
+		return blk.txnBlock.GetColumnDataByNames(ctx, attrs)
 	}
-	view = model.NewBlockView()
+	view = containers.NewBlockView()
 	ts := blk.Txn.GetStartTS()
 	switch blk.table.GetID() {
 	case pkgcatalog.MO_DATABASE_ID:

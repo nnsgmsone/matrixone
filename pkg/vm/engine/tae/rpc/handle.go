@@ -17,40 +17,50 @@ package rpc
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"fmt"
+
 	"os"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 
 	"github.com/google/shlex"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-
-	"go.uber.org/zap"
 )
 
-// TODO::GC the abandoned txn.
+const (
+	MAX_ALLOWED_TXN_LATENCY = time.Millisecond * 300
+	MAX_TXN_COMMIT_LATENCY  = time.Minute * 2
+)
+
 type Handle struct {
 	db *db.DB
 	mu struct {
@@ -58,6 +68,8 @@ type Handle struct {
 		//map txn id to txnContext.
 		txnCtxs map[string]*txnContext
 	}
+
+	GCManager *gc.Manager
 }
 
 var _ rpchandle.Handler = (*Handle)(nil)
@@ -65,6 +77,7 @@ var _ rpchandle.Handler = (*Handle)(nil)
 type txnContext struct {
 	//createAt is used to GC the abandoned txn.
 	createAt time.Time
+	deadline time.Time
 	meta     txn.TxnMeta
 	reqs     []any
 	//the table to create by this txn.
@@ -75,11 +88,11 @@ func (h *Handle) GetDB() *db.DB {
 	return h.db
 }
 
-func NewTAEHandle(path string, opt *options.Options) *Handle {
+func NewTAEHandle(ctx context.Context, path string, opt *options.Options) *Handle {
 	if path == "" {
 		path = "./store"
 	}
-	tae, err := openTAE(path, opt)
+	tae, err := openTAE(ctx, path, opt)
 	if err != nil {
 		panic(err)
 	}
@@ -88,7 +101,33 @@ func NewTAEHandle(path string, opt *options.Options) *Handle {
 		db: tae,
 	}
 	h.mu.txnCtxs = make(map[string]*txnContext)
+
+	// clean h.mu.txnCtxs by interval
+	h.GCManager = gc.NewManager(
+		gc.WithCronJob(
+			"clean-txn-cache",
+			MAX_TXN_COMMIT_LATENCY,
+			func(ctx context.Context) error {
+				return h.GCCache(time.Now())
+			},
+		),
+	)
+	h.GCManager.Start()
+
 	return h
+}
+
+// TODO: vast items within h.mu.txnCtxs would incur performance penality.
+func (h *Handle) GCCache(now time.Time) error {
+	logutil.Infof("GC rpc handle txn cache")
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for id, txn := range h.mu.txnCtxs {
+		if txn.deadline.Before(now) {
+			delete(h.mu.txnCtxs, id)
+		}
+	}
+	return nil
 }
 
 func (h *Handle) HandleCommit(
@@ -98,73 +137,44 @@ func (h *Handle) HandleCommit(
 	h.mu.RLock()
 	txnCtx, ok := h.mu.txnCtxs[string(meta.GetID())]
 	h.mu.RUnlock()
-	common.DoIfInfoEnabled(func() {
-		logutil.Infof("HandleCommit start : %X\n",
+	common.DoIfDebugEnabled(func() {
+		logutil.Debugf("HandleCommit start : %X",
 			string(meta.GetID()))
 	})
+	s := ""
 	defer func() {
+		if ok {
+			//delete the txn's context.
+			h.mu.Lock()
+			delete(h.mu.txnCtxs, string(meta.GetID()))
+			h.mu.Unlock()
+		}
 		common.DoIfInfoEnabled(func() {
-			logutil.Infof("HandleCommit end : %X, %s\n",
-				string(meta.GetID()), time.Since(start))
+			if time.Since(start) > MAX_ALLOWED_TXN_LATENCY {
+				logutil.Info("Commit with long latency", zap.Duration("duration", time.Since(start)), zap.String("debug", meta.DebugString()))
+			}
 		})
+		if s != "" {
+			logutil.Info("trace span", zap.String("lantency", s))
+		}
 	}()
-	//Handle precommit-write command for 1PC
 	var txn txnif.AsyncTxn
 	if ok {
-		for _, e := range txnCtx.reqs {
-			switch req := e.(type) {
-			case *db.CreateDatabaseReq:
-				err = h.HandleCreateDatabase(
-					ctx,
-					meta,
-					req,
-					&db.CreateDatabaseResp{},
-				)
-			case *db.CreateRelationReq:
-				err = h.HandleCreateRelation(
-					ctx,
-					meta,
-					req,
-					&db.CreateRelationResp{},
-				)
-			case *db.DropDatabaseReq:
-				err = h.HandleDropDatabase(
-					ctx,
-					meta,
-					req,
-					&db.DropDatabaseResp{},
-				)
-			case *db.DropOrTruncateRelationReq:
-				err = h.HandleDropOrTruncateRelation(
-					ctx,
-					meta,
-					req,
-					&db.DropOrTruncateRelationResp{},
-				)
-			case *api.AlterTableReq:
-				err = h.HandleAlterTable(
-					ctx,
-					meta,
-					req,
-					&db.WriteResp{},
-				)
-			case *db.WriteReq:
-				err = h.HandleWrite(
-					ctx,
-					meta,
-					req,
-					&db.WriteResp{},
-				)
-			default:
-				panic(moerr.NewNYI(ctx, "Pls implement me"))
-			}
-			//Need to roll back the txn.
-			if err != nil {
-				txn, _ = h.db.GetTxnByID(meta.GetID())
-				txn.Rollback()
-				return
-			}
+		//Handle precommit-write command for 1PC
+		txn, err = h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
+			types.TimestampToTS(meta.GetSnapshotTS()))
+		if err != nil {
+			return
 		}
+		err = h.handleRequests(ctx, txn, txnCtx)
+		if err != nil {
+			return
+		}
+	}
+	activeDuration := time.Since(start)
+	_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
+	if enable && activeDuration > threshold && txn.GetContext() != nil {
+		txn.GetStore().SetContext(context.WithValue(txn.GetContext(), common.ActiveHandleCommit, &common.DurationRecords{Duration: activeDuration}))
 	}
 	txn, err = h.db.GetTxnByID(meta.GetID())
 	if err != nil {
@@ -174,13 +184,198 @@ func (h *Handle) HandleCommit(
 	if txn.Is2PC() {
 		txn.SetCommitTS(types.TimestampToTS(meta.GetCommitTS()))
 	}
-	err = txn.Commit()
+	err = txn.Commit(ctx)
 	cts = txn.GetCommitTS().ToTimestamp()
 
-	//delete the txn's context.
-	h.mu.Lock()
-	delete(h.mu.txnCtxs, string(meta.GetID()))
-	h.mu.Unlock()
+	if enable {
+		vDuration := txn.GetContext().Value(common.ActiveHandleCommit)
+		if vDuration != nil {
+			duration := vDuration.(*common.DurationRecords)
+			s = fmt.Sprintf("%s[active: %v]", s, duration.Duration)
+		}
+		vHandleRequestDuration := txn.GetContext().Value(common.ActiveHandleRequests)
+		if vHandleRequestDuration != nil {
+			handleRequestDuration := vHandleRequestDuration.(*handleRequestsTraceValue)
+			s = fmt.Sprintf("%s[handle request: %v, createDB %d, createTbl %d, dropDB %d, dropTbl %d, alterTable %d, write %d]", s,
+				handleRequestDuration.Duration,
+				handleRequestDuration.CreateDB,
+				handleRequestDuration.CreateRelation,
+				handleRequestDuration.DropDB,
+				handleRequestDuration.DropOrTruncateRelation,
+				handleRequestDuration.AlterTable,
+				handleRequestDuration.Write)
+		}
+		vDuration = txn.GetContext().Value(common.DequeuePreparing)
+		if vDuration != nil {
+			duration := vDuration.(*common.DurationRecords)
+			s = fmt.Sprintf("%s[dequeue preparing: %v]", s, duration.Duration)
+		}
+		vDuration = txn.GetContext().Value(common.StorePrePrepare)
+		if vDuration != nil {
+			duration := vDuration.(*common.DurationRecords)
+			s = fmt.Sprintf("%s[pre prepare: %v]", s, duration.Duration)
+		}
+		vDuration = txn.GetContext().Value(common.StorePrepareCommit)
+		if vDuration != nil {
+			duration := vDuration.(*common.DurationRecords)
+			s = fmt.Sprintf("%s[prepare commit: %v]", s, duration.Duration)
+		}
+		vDuration = txn.GetContext().Value(common.StorePreApplyCommit)
+		if vDuration != nil {
+			duration := vDuration.(*common.DurationRecords)
+			s = fmt.Sprintf("%s[pre apply commit: %v]", s, duration.Duration)
+		}
+		vDuration = txn.GetContext().Value(common.PrepareWAL)
+		if vDuration != nil {
+			duration := vDuration.(*common.DurationRecords)
+			s = fmt.Sprintf("%s[prepare wal: %v]", s, duration.Duration)
+		}
+		vDuration = txn.GetContext().Value(common.PrepareLogtail)
+		if vDuration != nil {
+			duration := vDuration.(*common.DurationRecords)
+			s = fmt.Sprintf("%s[prepare logtail: %v]", s, duration.Duration)
+		}
+		vDuration = txn.GetContext().Value(common.DequeuePrepared)
+		if vDuration != nil {
+			duration := vDuration.(*common.DurationRecords)
+			s = fmt.Sprintf("%s[dequeue prepared: %v]", s, duration.Duration)
+		}
+		vDuration = txn.GetContext().Value(common.StoreApplyCommit)
+		if vDuration != nil {
+			duration := vDuration.(*common.DurationRecords)
+			s = fmt.Sprintf("%s[apply commit: %v]", s, duration.Duration)
+		}
+	}
+
+	if moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
+		for {
+			txn, err = h.db.StartTxnWithStartTSAndSnapshotTS(nil,
+				types.TimestampToTS(meta.GetSnapshotTS()))
+			if err != nil {
+				return
+			}
+			logutil.Infof("retry txn %X with new txn %X", string(meta.GetID()), txn.GetID())
+			//Handle precommit-write command for 1PC
+			h.handleRequests(ctx, txn, txnCtx)
+			//if txn is 2PC ,need to set commit timestamp passed by coordinator.
+			if txn.Is2PC() {
+				txn.SetCommitTS(types.TimestampToTS(meta.GetCommitTS()))
+			}
+			err = txn.Commit(ctx)
+			cts = txn.GetCommitTS().ToTimestamp()
+			if !moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
+				break
+			}
+		}
+	}
+	return
+}
+
+type handleRequestsTraceValue struct {
+	Duration               time.Duration
+	CreateDB               int
+	CreateRelation         int
+	DropDB                 int
+	DropOrTruncateRelation int
+	AlterTable             int
+	Write                  int
+}
+
+func (h *Handle) handleRequests(
+	ctx context.Context,
+	txn txnif.AsyncTxn,
+	txnCtx *txnContext,
+) (err error) {
+	t0 := time.Now()
+	var createDB, createRelation, dropDB, dropRelation, alterTable, write int
+	defer func() {
+		handleRequestDuration := time.Since(t0)
+		_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
+		if enable && handleRequestDuration > threshold && txn.GetContext() != nil {
+			txn.GetStore().SetContext(context.WithValue(
+				txn.GetContext(),
+				common.ActiveHandleRequests,
+				&handleRequestsTraceValue{
+					Duration:               handleRequestDuration,
+					CreateDB:               createDB,
+					CreateRelation:         createRelation,
+					DropDB:                 dropDB,
+					DropOrTruncateRelation: dropRelation,
+					AlterTable:             alterTable,
+					Write:                  write,
+				}))
+		}
+	}()
+	for _, e := range txnCtx.reqs {
+		switch req := e.(type) {
+		case *db.CreateDatabaseReq:
+			err = h.HandleCreateDatabase(
+				ctx,
+				txn,
+				req,
+				&db.CreateDatabaseResp{},
+			)
+			createDB++
+		case *db.CreateRelationReq:
+			err = h.HandleCreateRelation(
+				ctx,
+				txn,
+				req,
+				&db.CreateRelationResp{},
+			)
+			createRelation++
+		case *db.DropDatabaseReq:
+			err = h.HandleDropDatabase(
+				ctx,
+				txn,
+				req,
+				&db.DropDatabaseResp{},
+			)
+			dropDB++
+		case *db.DropOrTruncateRelationReq:
+			err = h.HandleDropOrTruncateRelation(
+				ctx,
+				txn,
+				req,
+				&db.DropOrTruncateRelationResp{},
+			)
+			dropRelation++
+		case *api.AlterTableReq:
+			err = h.HandleAlterTable(
+				ctx,
+				txn,
+				req,
+				&db.WriteResp{},
+			)
+			alterTable++
+		case *db.WriteReq:
+			err = h.HandleWrite(
+				ctx,
+				txn,
+				req,
+				&db.WriteResp{},
+			)
+			if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) && (strings.HasPrefix(req.TableName, "bmsql") || strings.HasPrefix(req.TableName, "sbtest")) {
+				for _, rreq := range txnCtx.reqs {
+					if crreq, ok := rreq.(*db.WriteReq); ok {
+						logutil.Infof("[precommit] dup handle write typ: %v, %d-%s, %s txn: %s",
+							crreq.Type, crreq.TableID,
+							crreq.TableName, common.MoBatchToString(crreq.Batch, 3),
+							txn.String(),
+						)
+					}
+				}
+			}
+			write++
+		default:
+			panic(moerr.NewNYI(ctx, "Pls implement me"))
+		}
+		//Need to roll back the txn.
+		if err != nil {
+			txn.Rollback(ctx)
+			return
+		}
+	}
 	return
 }
 
@@ -200,7 +395,7 @@ func (h *Handle) HandleRollback(
 	if err != nil {
 		return err
 	}
-	err = txn.Rollback()
+	err = txn.Rollback(ctx)
 	return
 }
 
@@ -223,79 +418,35 @@ func (h *Handle) HandlePrepare(
 	txnCtx, ok := h.mu.txnCtxs[string(meta.GetID())]
 	h.mu.RUnlock()
 	var txn txnif.AsyncTxn
+	defer func() {
+		if ok {
+			//delete the txn's context.
+			h.mu.Lock()
+			delete(h.mu.txnCtxs, string(meta.GetID()))
+			h.mu.Unlock()
+		}
+	}()
 	if ok {
 		//handle pre-commit write for 2PC
-		for _, e := range txnCtx.reqs {
-			switch req := e.(type) {
-			case *db.CreateDatabaseReq:
-				err = h.HandleCreateDatabase(
-					ctx,
-					meta,
-					req,
-					&db.CreateDatabaseResp{},
-				)
-			case *db.CreateRelationReq:
-				err = h.HandleCreateRelation(
-					ctx,
-					meta,
-					req,
-					&db.CreateRelationResp{},
-				)
-			case *db.DropDatabaseReq:
-				err = h.HandleDropDatabase(
-					ctx,
-					meta,
-					req,
-					&db.DropDatabaseResp{},
-				)
-			case *db.DropOrTruncateRelationReq:
-				err = h.HandleDropOrTruncateRelation(
-					ctx,
-					meta,
-					req,
-					&db.DropOrTruncateRelationResp{},
-				)
-			case *api.AlterTableReq:
-				err = h.HandleAlterTable(
-					ctx,
-					meta,
-					req,
-					&db.WriteResp{},
-				)
-			case *db.WriteReq:
-				err = h.HandleWrite(
-					ctx,
-					meta,
-					req,
-					&db.WriteResp{},
-				)
-			default:
-				panic(moerr.NewNYI(ctx, "Pls implement me"))
-			}
-			//need to rollback the txn
-			if err != nil {
-				txn, _ = h.db.GetTxnByID(meta.GetID())
-				txn.Rollback()
-				return
-			}
+		txn, err = h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
+			types.TimestampToTS(meta.GetSnapshotTS()))
+		if err != nil {
+			return
 		}
+		h.handleRequests(ctx, txn, txnCtx)
 	}
 	txn, err = h.db.GetTxnByID(meta.GetID())
 	if err != nil {
 		return timestamp.Timestamp{}, err
 	}
-	participants := make([]uint64, 0, len(meta.GetDNShards()))
-	for _, shard := range meta.GetDNShards() {
+	participants := make([]uint64, 0, len(meta.GetTNShards()))
+	for _, shard := range meta.GetTNShards() {
 		participants = append(participants, shard.GetShardID())
 	}
 	txn.SetParticipants(participants)
 	var ts types.TS
-	ts, err = txn.Prepare()
+	ts, err = txn.Prepare(ctx)
 	pts = ts.ToTimestamp()
-	//delete the txn's context.
-	h.mu.Lock()
-	delete(h.mu.txnCtxs, string(meta.GetID()))
-	h.mu.Unlock()
 	return
 }
 
@@ -311,6 +462,9 @@ func (h *Handle) HandleStartRecovery(
 
 func (h *Handle) HandleClose(ctx context.Context) (err error) {
 	//FIXME::should wait txn request's job done?
+	if h.GCManager != nil {
+		h.GCManager.Stop()
+	}
 	return h.db.Close()
 }
 
@@ -323,8 +477,8 @@ func (h *Handle) HandleGetLogTail(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *api.SyncLogTailReq,
-	resp *api.SyncLogTailResp) (err error) {
-	res, err := logtail.HandleSyncLogTailReq(
+	resp *api.SyncLogTailResp) (closeCB func(), err error) {
+	res, closeCB, err := logtail.HandleSyncLogTailReq(
 		ctx,
 		h.db.BGCheckpointRunner,
 		h.db.LogtailMgr,
@@ -332,17 +486,17 @@ func (h *Handle) HandleGetLogTail(
 		*req,
 		true)
 	if err != nil {
-		return err
+		return
 	}
 	*resp = res
-	return nil
+	return
 }
 
 func (h *Handle) HandleFlushTable(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *db.FlushTable,
-	resp *api.SyncLogTailResp) (err error) {
+	resp *api.SyncLogTailResp) (cb func(), err error) {
 
 	// We use current TS instead of transaction ts.
 	// Here, the point of this handle function is to trigger a flush
@@ -356,31 +510,63 @@ func (h *Handle) HandleFlushTable(
 		req.DatabaseID,
 		req.TableID,
 		currTs)
-	return err
+	return nil, err
 }
 
 func (h *Handle) HandleForceCheckpoint(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *db.Checkpoint,
-	resp *api.SyncLogTailResp) (err error) {
+	resp *api.SyncLogTailResp) (cb func(), err error) {
 
 	timeout := req.FlushDuration
 
 	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 
 	err = h.db.ForceCheckpoint(ctx, currTs, timeout)
-	return err
+	return nil, err
 }
 
-func (h *Handle) HandleInspectDN(
+func (h *Handle) HandleBackup(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req *db.InspectDN,
-	resp *db.InspectResp) (err error) {
+	req *db.Checkpoint,
+	resp *api.SyncLogTailResp) (cb func(), err error) {
+
+	timeout := req.FlushDuration
+
+	backupTime := time.Now().UTC()
+	currTs := types.BuildTS(backupTime.UnixNano(), 0)
+	err = h.db.ForceCheckpoint(ctx, currTs, timeout)
+	if err != nil {
+		return nil, err
+	}
+	currTs = types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	err = h.db.ForceCheckpoint(ctx, currTs, timeout)
+	if err != nil {
+		return nil, err
+	}
+	data := h.db.BGCheckpointRunner.GetAllCheckpoints()
+	var locations string
+	locations += backupTime.Format(time.DateTime) + ";"
+	for i := range data {
+		locations += data[i].GetLocation().String()
+		locations += ":"
+		locations += fmt.Sprintf("%d", data[i].GetVersion())
+		locations += ";"
+	}
+	resp.CkpLocation = locations
+	return nil, err
+}
+
+func (h *Handle) HandleInspectTN(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req *db.InspectTN,
+	resp *db.InspectResp) (cb func(), err error) {
 	args, _ := shlex.Split(req.Operation)
-	common.DoIfInfoEnabled(func() {
-		logutil.Info("Inspect", zap.Strings("args", args))
+	common.DoIfDebugEnabled(func() {
+		logutil.Debug("Inspect", zap.Strings("args", args))
 	})
 	b := &bytes.Buffer{}
 
@@ -391,9 +577,9 @@ func (h *Handle) HandleInspectDN(
 		out:    b,
 		resp:   resp,
 	}
-	RunInspect(inspectCtx)
+	RunInspect(ctx, inspectCtx)
 	resp.Message = b.String()
-	return nil
+	return nil, nil
 }
 
 func (h *Handle) prefetchDeleteRowID(ctx context.Context,
@@ -402,27 +588,14 @@ func (h *Handle) prefetchDeleteRowID(ctx context.Context,
 		return nil
 	}
 	//for loading deleted rowid.
-	db, err := h.db.Catalog.GetDatabaseByID(req.DatabaseId)
-	if err != nil {
-		return err
-	}
-	tbl, err := db.GetTableEntryByID(req.TableID)
-	if err != nil {
-		return err
-	}
-	var version uint32
-	if req.Schema != nil {
-		version = req.Schema.Version
-	}
-	schema := tbl.GetVersionSchema(version)
-	pkIdx := schema.GetPrimaryKey().Idx
 	columnIdx := 0
+	pkIdx := 1
 	//start loading jobs asynchronously,should create a new root context.
 	loc, err := blockio.EncodeLocationFromString(req.DeltaLocs[0])
 	if err != nil {
 		return err
 	}
-	pref, err := blockio.BuildPrefetchParams(h.db.Fs.Service, loc)
+	pref, err := blockio.BuildPrefetchParams(h.db.Runtime.Fs.Service, loc)
 	if err != nil {
 		return err
 	}
@@ -432,7 +605,7 @@ func (h *Handle) prefetchDeleteRowID(ctx context.Context,
 		if err != nil {
 			return err
 		}
-		pref.AddBlock([]uint16{uint16(columnIdx), uint16(pkIdx)}, []uint16{location.ID()})
+		pref.AddBlockWithType([]uint16{uint16(columnIdx), uint16(pkIdx)}, []uint16{location.ID()}, uint16(objectio.SchemaTombstone))
 	}
 	return blockio.PrefetchWithMerged(pref)
 }
@@ -443,14 +616,18 @@ func (h *Handle) prefetchMetadata(ctx context.Context,
 		return nil
 	}
 	//start loading jobs asynchronously,should create a new root context.
+	var objectName objectio.ObjectNameShort
 	for _, meta := range req.MetaLocs {
 		loc, err := blockio.EncodeLocationFromString(meta)
 		if err != nil {
 			return err
 		}
-		err = blockio.PrefetchMeta(h.db.Fs.Service, loc)
-		if err != nil {
-			return err
+		if !objectio.IsSameObjectLocVsShort(loc, &objectName) {
+			err := blockio.PrefetchMeta(h.db.Runtime.Fs.Service, loc)
+			if err != nil {
+				return err
+			}
+			objectName = *loc.Name().Short()
 		}
 	}
 	return nil
@@ -494,8 +671,10 @@ func (h *Handle) CacheTxnRequest(
 	h.mu.Lock()
 	txnCtx, ok := h.mu.txnCtxs[string(meta.GetID())]
 	if !ok {
+		now := time.Now()
 		txnCtx = &txnContext{
-			createAt: time.Now(),
+			createAt: now,
+			deadline: now.Add(MAX_TXN_COMMIT_LATENCY),
 			meta:     meta,
 			toCreate: make(map[uint64]*catalog2.Schema),
 		}
@@ -520,9 +699,7 @@ func (h *Handle) HandlePreCommitWrite(
 	req *api.PrecommitWriteCmd,
 	resp *api.SyncLogTailResp) (err error) {
 	var e any
-
 	es := req.EntryList
-
 	for len(es) > 0 {
 		e, es, err = catalog.ParseEntryList(es)
 		if err != nil {
@@ -560,6 +737,10 @@ func (h *Handle) HandlePreCommitWrite(
 					DatabaseName: cmd.DatabaseName,
 					DatabaseID:   cmd.DatabaseId,
 					Defs:         cmd.Defs,
+				}
+				// TODO: debug for #11917
+				if strings.Contains(req.Name, "sbtest") {
+					logutil.Infof("create table: %s.%s\n", req.DatabaseName, req.Name)
 				}
 				if err = h.CacheTxnRequest(ctx, meta, req,
 					new(db.CreateRelationResp)); err != nil {
@@ -623,7 +804,7 @@ func (h *Handle) HandlePreCommitWrite(
 				TableName:    pe.GetTableName(),
 				FileName:     pe.GetFileName(),
 				Batch:        moBat,
-				PkCheck:      db.PKCheckType(pe.GetPkCheckByDn()),
+				PkCheck:      db.PKCheckType(pe.GetPkCheckByTn()),
 			}
 			if req.FileName != "" {
 				rows := catalog.GenRows(req.Batch)
@@ -656,24 +837,18 @@ func (h *Handle) HandlePreCommitWrite(
 
 func (h *Handle) HandleCreateDatabase(
 	ctx context.Context,
-	meta txn.TxnMeta,
+	txn txnif.AsyncTxn,
 	req *db.CreateDatabaseReq,
 	resp *db.CreateDatabaseResp) (err error) {
 	_, span := trace.Start(ctx, "HandleCreateDatabase")
 	defer span.End()
 
-	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
-		types.TimestampToTS(meta.GetSnapshotTS()))
-	if err != nil {
-		return err
-	}
-
 	common.DoIfInfoEnabled(func() {
-		logutil.Infof("[precommit] create database: %+v\n txn: %s\n", req, txn.String())
+		logutil.Infof("[precommit] create database: %+v txn: %s", req, txn.String())
 	})
 	defer func() {
-		common.DoIfInfoEnabled(func() {
-			logutil.Infof("[precommit] create database end txn: %s\n", txn.String())
+		common.DoIfDebugEnabled(func() {
+			logutil.Debugf("[precommit] create database end txn: %s", txn.String())
 		})
 	}()
 
@@ -695,22 +870,16 @@ func (h *Handle) HandleCreateDatabase(
 
 func (h *Handle) HandleDropDatabase(
 	ctx context.Context,
-	meta txn.TxnMeta,
+	txn txnif.AsyncTxn,
 	req *db.DropDatabaseReq,
 	resp *db.DropDatabaseResp) (err error) {
 
-	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
-		types.TimestampToTS(meta.GetSnapshotTS()))
-	if err != nil {
-		return err
-	}
-
 	common.DoIfInfoEnabled(func() {
-		logutil.Infof("[precommit] drop database: %+v\n txn: %s\n", req, txn.String())
+		logutil.Infof("[precommit] drop database: %+v txn: %s", req, txn.String())
 	})
 	defer func() {
-		common.DoIfInfoEnabled(func() {
-			logutil.Infof("[precommit] drop database end: %s\n", txn.String())
+		common.DoIfDebugEnabled(func() {
+			logutil.Debugf("[precommit] drop database end: %s", txn.String())
 		})
 	}()
 
@@ -723,22 +892,17 @@ func (h *Handle) HandleDropDatabase(
 
 func (h *Handle) HandleCreateRelation(
 	ctx context.Context,
-	meta txn.TxnMeta,
+	txn txnif.AsyncTxn,
 	req *db.CreateRelationReq,
 	resp *db.CreateRelationResp) (err error) {
 
-	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
-		types.TimestampToTS(meta.GetSnapshotTS()))
-	if err != nil {
-		return
-	}
-
 	common.DoIfInfoEnabled(func() {
-		logutil.Infof("[precommit] create relation: %+v\n txn: %s\n", req, txn.String())
+		logutil.Infof("[precommit] create relation: %+v txn: %s", req, txn.String())
 	})
 	defer func() {
-		common.DoIfInfoEnabled(func() {
-			logutil.Infof("[precommit] create relation end txn: %s\n", txn.String())
+		// do not turn it on in prod. This print outputs multiple duplicate lines
+		common.DoIfDebugEnabled(func() {
+			logutil.Debugf("[precommit] create relation end txn: %s", txn.String())
 		})
 	}()
 
@@ -760,22 +924,16 @@ func (h *Handle) HandleCreateRelation(
 
 func (h *Handle) HandleDropOrTruncateRelation(
 	ctx context.Context,
-	meta txn.TxnMeta,
+	txn txnif.AsyncTxn,
 	req *db.DropOrTruncateRelationReq,
 	resp *db.DropOrTruncateRelationResp) (err error) {
 
-	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
-		types.TimestampToTS(meta.GetSnapshotTS()))
-	if err != nil {
-		return
-	}
-
 	common.DoIfInfoEnabled(func() {
-		logutil.Infof("[precommit] drop/truncate relation: %+v\n txn: %s\n", req, txn.String())
+		logutil.Infof("[precommit] drop/truncate relation: %+v txn: %s", req, txn.String())
 	})
 	defer func() {
-		common.DoIfInfoEnabled(func() {
-			logutil.Infof("[precommit] drop/truncate relation end txn: %s\n", txn.String())
+		common.DoIfDebugEnabled(func() {
+			logutil.Debugf("[precommit] drop/truncate relation end txn: %s", txn.String())
 		})
 	}()
 
@@ -795,7 +953,7 @@ func (h *Handle) HandleDropOrTruncateRelation(
 // HandleWrite Handle DML commands
 func (h *Handle) HandleWrite(
 	ctx context.Context,
-	meta txn.TxnMeta,
+	txn txnif.AsyncTxn,
 	req *db.WriteReq,
 	resp *db.WriteResp) (err error) {
 	defer func() {
@@ -803,11 +961,6 @@ func (h *Handle) HandleWrite(
 			req.Cancel()
 		}
 	}()
-	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
-		types.TimestampToTS(meta.GetSnapshotTS()))
-	if err != nil {
-		return
-	}
 	ctx = perfcounter.WithCounterSetFrom(ctx, h.db.Opts.Ctx)
 	switch req.PkCheck {
 	case db.FullDedup:
@@ -822,25 +975,30 @@ func (h *Handle) HandleWrite(
 		txn.SetDedupType(txnif.FullSkipWorkSpaceDedup)
 	}
 	common.DoIfDebugEnabled(func() {
-		logutil.Debugf("[precommit] handle write typ: %v, %d-%s, %d-%s\n txn: %s\n",
+		logutil.Debugf("[precommit] handle write typ: %v, %d-%s, %d-%s txn: %s",
 			req.Type, req.TableID,
 			req.TableName, req.DatabaseId, req.DatabaseName,
 			txn.String(),
 		)
-		logutil.Debugf("[precommit] write batch: %s\n", common.DebugMoBatch(req.Batch))
+		logutil.Debugf("[precommit] write batch: %s", common.DebugMoBatch(req.Batch))
 	})
+	var dbase handle.Database
+	var tb handle.Relation
 	defer func() {
 		common.DoIfDebugEnabled(func() {
-			logutil.Debugf("[precommit] handle write end txn: %s\n", txn.String())
+			logutil.Debugf("[precommit] handle write end txn: %s", txn.String())
 		})
+		if err != nil && moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) && (strings.HasPrefix(req.TableName, "bmsql") || strings.HasPrefix(req.TableName, "sbtest")) {
+			logutil.Infof("[precommit] dup handle catalog on dup %s ", tb.GetMeta().(*catalog2.TableEntry).PPString(common.PPL1, 0, ""))
+		}
 	}()
 
-	dbase, err := txn.GetDatabaseByID(req.DatabaseId)
+	dbase, err = txn.GetDatabaseByID(req.DatabaseId)
 	if err != nil {
 		return
 	}
 
-	tb, err := dbase.GetRelationByID(req.TableID)
+	tb, err = dbase.GetRelationByID(req.TableID)
 	if err != nil {
 		return
 	}
@@ -856,8 +1014,7 @@ func (h *Handle) HandleWrite(
 				}
 				locations = append(locations, location)
 			}
-
-			err = tb.AddBlksWithMetaLoc(locations)
+			err = tb.AddBlksWithMetaLoc(ctx, locations)
 			return
 		}
 		//check the input batch passed by cn is valid.
@@ -883,6 +1040,7 @@ func (h *Handle) HandleWrite(
 		err = AppendDataToTable(ctx, tb, req.Batch)
 		return
 	}
+
 	//handle delete
 	if req.FileName != "" {
 		//wait for loading deleted row-id done.
@@ -890,52 +1048,82 @@ func (h *Handle) HandleWrite(
 		if deadline, ok := ctx.Deadline(); ok {
 			_, req.Cancel = context.WithTimeout(nctx, time.Until(deadline))
 		}
-		columnIdx := 0
+		rowidIdx := 0
+		pkIdx := 1
 		for _, key := range req.DeltaLocs {
 			var location objectio.Location
 			location, err = blockio.EncodeLocationFromString(key)
 			if err != nil {
 				return err
 			}
+			var ok bool
 			var bat *batch.Batch
-			bat, err = blockio.LoadColumns(
+			bat, err = blockio.LoadTombstoneColumns(
 				ctx,
-				[]uint16{uint16(columnIdx)},
+				[]uint16{uint16(rowidIdx), uint16(pkIdx)},
 				nil,
-				h.db.Fs.Service,
+				h.db.Runtime.Fs.Service,
 				location,
 				nil,
 			)
 			if err != nil {
 				return
 			}
-			vec := containers.ToDNVector(bat.Vecs[0])
-			defer vec.Close()
-			if err = tb.DeleteByPhyAddrKeys(vec); err != nil {
+			blkids := getBlkIDsFromRowids(bat.Vecs[0])
+			id := tb.GetMeta().(*catalog2.TableEntry).AsCommonID()
+			if len(blkids) == 1 {
+				for blkID := range blkids {
+					id.BlockID = blkID
+				}
+				ok, err = tb.TryDeleteByDeltaloc(id, location)
+				if err != nil {
+					return
+				}
+				if ok {
+					continue
+				}
+				logutil.Warnf("blk %v try delete by deltaloc failed", id.BlockID.String())
+			} else {
+				logutil.Warnf("multiply blocks in one deltalocation")
+			}
+			rowIDVec := containers.ToTNVector(bat.Vecs[0])
+			defer rowIDVec.Close()
+			pkVec := containers.ToTNVector(bat.Vecs[1])
+			//defer pkVec.Close()
+			if err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec); err != nil {
 				return
 			}
 		}
 		return
 	}
-	vec := containers.ToDNVector(req.Batch.GetVector(0))
-	defer vec.Close()
-	err = tb.DeleteByPhyAddrKeys(vec)
+	if len(req.Batch.Vecs) != 2 {
+		panic(fmt.Sprintf("req.Batch.Vecs length is %d, should be 2", len(req.Batch.Vecs)))
+	}
+	rowIDVec := containers.ToTNVector(req.Batch.GetVector(0))
+	defer rowIDVec.Close()
+	pkVec := containers.ToTNVector(req.Batch.GetVector(1))
+	//defer pkVec.Close()
+	err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec)
 	return
+}
+
+func getBlkIDsFromRowids(vec *vector.Vector) map[types.Blockid]struct{} {
+	rowids := vector.MustFixedCol[types.Rowid](vec)
+	blkids := make(map[types.Blockid]struct{})
+	for _, rowid := range rowids {
+		blkID := *rowid.BorrowBlockID()
+		blkids[blkID] = struct{}{}
+	}
+	return blkids
 }
 
 func (h *Handle) HandleAlterTable(
 	ctx context.Context,
-	meta txn.TxnMeta,
+	txn txnif.AsyncTxn,
 	req *api.AlterTableReq,
 	resp *db.WriteResp) (err error) {
-	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
-		types.TimestampToTS(meta.GetSnapshotTS()))
-	if err != nil {
-		return err
-	}
-
 	common.DoIfInfoEnabled(func() {
-		logutil.Infof("[precommit] alter table: %v txn: %s\n", req.String(), txn.String())
+		logutil.Debugf("[precommit] alter table: %v txn: %s", req.String(), txn.String())
 	})
 
 	dbase, err := txn.GetDatabaseByID(req.DbId)
@@ -951,27 +1139,50 @@ func (h *Handle) HandleAlterTable(
 	return tbl.AlterTable(ctx, req)
 }
 
-func openTAE(targetDir string, opt *options.Options) (tae *db.DB, err error) {
+func (h *Handle) HandleAddFaultPoint(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req *db.FaultPoint,
+	resp *api.SyncLogTailResp) (func(), error) {
+	if req.Name == db.EnableFaultInjection {
+		fault.Enable()
+		return nil, nil
+	} else if req.Name == db.DisableFaultInjection {
+		fault.Disable()
+		return nil, nil
+	}
+	return nil, h.db.AddFaultPoint(ctx, req.Name, req.Freq, req.Action, req.Iarg, req.Sarg)
+}
+
+func (h *Handle) HandleTraceSpan(ctx context.Context,
+	meta txn.TxnMeta,
+	req *db.TraceSpan,
+	resp *api.SyncLogTailResp) (func(), error) {
+
+	return nil, nil
+}
+
+func openTAE(ctx context.Context, targetDir string, opt *options.Options) (tae *db.DB, err error) {
 
 	if targetDir != "" {
 		mask := syscall.Umask(0)
 		if err := os.MkdirAll(targetDir, os.FileMode(0755)); err != nil {
 			syscall.Umask(mask)
-			logutil.Infof("Recreate dir error:%v\n", err)
+			logutil.Infof("Recreate dir error:%v", err)
 			return nil, err
 		}
 		syscall.Umask(mask)
-		tae, err = db.Open(targetDir+"/tae", opt)
+		tae, err = db.Open(ctx, targetDir+"/tae", opt)
 		if err != nil {
-			logutil.Infof("Open tae failed. error:%v", err)
+			logutil.Warnf("Open tae failed. error:%v", err)
 			return nil, err
 		}
 		return tae, nil
 	}
 
-	tae, err = db.Open(targetDir, opt)
+	tae, err = db.Open(ctx, targetDir, opt)
 	if err != nil {
-		logutil.Infof("Open tae failed. error:%v", err)
+		logutil.Warnf("Open tae failed. error:%v", err)
 		return nil, err
 	}
 	return

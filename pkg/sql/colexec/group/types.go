@@ -52,8 +52,10 @@ type container struct {
 	strHashMap *hashmap.StrHashMap
 	//idx        *index.LowCardinalityIndex
 
-	aggVecs   []evalVector
-	groupVecs []evalVector
+	aggVecs           []evalVector
+	groupVecs         []evalVector
+	keyWidth          int // keyWidth is the width of group by columns, it determines which hash map to use.
+	groupVecsNullable bool
 
 	// multiVecs are used for group_concat,
 	// cause that group_concat can have many cols like group(a,b,c)
@@ -61,26 +63,29 @@ type container struct {
 	multiVecs [][]evalVector
 
 	vecs []*vector.Vector
-	// we use this to distinct bat.Aggs[i] is UnaryAgg or MultiAgg
-	mapAggType map[int32]int
 
 	bat *batch.Batch
 
-	alreadyGetAgg bool
+	hasAggResult bool
+
+	tmpVecs []*vector.Vector // for reuse
 }
 
 type Argument struct {
-	ctr       *container
-	NeedEval  bool // need to projection the aggregate column
-	Ibucket   uint64
-	Nbucket   uint64
-	Exprs     []*plan.Expr // group Expressions
-	Types     []types.Type
-	Aggs      []agg.Aggregate         // aggregations
-	MultiAggs []group_concat.Argument // multiAggs, for now it's group_concat
+	ctr            *container
+	IsShuffle      bool // is shuffle group
+	PreAllocSize   uint64
+	NeedEval       bool // need to projection the aggregate column
+	Ibucket        uint64
+	Nbucket        uint64
+	Exprs          []*plan.Expr // group Expressions
+	Types          []types.Type
+	Aggs           []agg.Aggregate         // aggregations
+	MultiAggs      []group_concat.Argument // multiAggs, for now it's group_concat
+	PartialResults []any
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
 		mp := proc.Mp()
@@ -89,6 +94,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		ctr.cleanAggVectors()
 		ctr.cleanGroupVectors()
 		ctr.cleanMultiAggVecs()
+		ctr.tmpVecs = nil
 	}
 }
 

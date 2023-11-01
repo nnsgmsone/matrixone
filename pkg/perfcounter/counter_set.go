@@ -53,13 +53,23 @@ type FileServiceCounterSet struct {
 			Hit              stats.Counter
 			GetFileContent   stats.Counter
 			SetFileContent   stats.Counter
-			OpenFile         stats.Counter
+			OpenIOEntryFile  stats.Counter
+			OpenFullFile     stats.Counter
+			CreateFile       stats.Counter
 			StatFile         stats.Counter
 			WriteFile        stats.Counter
 			Error            stats.Counter
 			Evict            stats.Counter
 			EvictPending     stats.Counter
 			EvictImmediately stats.Counter
+		}
+		Remote struct {
+			Read stats.Counter
+			Hit  stats.Counter
+		}
+		LRU struct {
+			Evict             stats.Counter
+			EvictWithZeroRead stats.Counter
 		}
 	}
 
@@ -80,6 +90,7 @@ type DistTAECounterSet struct {
 		MetadataDeleteEntries stats.Counter
 
 		InsertRows   stats.Counter
+		DeleteRows   stats.Counter
 		ActiveRows   stats.Counter
 		InsertBlocks stats.Counter
 	}

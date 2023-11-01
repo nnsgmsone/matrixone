@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select row_number() over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1",
-		output: "select row_number() over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1",
+		input:  "select (col + col) / 2",
+		output: "select (col + col) / 2",
 	}
 )
 
@@ -78,11 +78,47 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "select _wstart(ts), _wend(ts), max(temperature), min(temperature) from sensor_data where ts > \"2023-08-01 00:00:00.000\" and ts < \"2023-08-01 00:50:00.000\" interval(ts, 10, minute) sliding(5, minute) fill(prev);",
+		output: "select _wstart(ts), _wend(ts), max(temperature), min(temperature) from sensor_data where ts > 2023-08-01 00:00:00.000 and ts < 2023-08-01 00:50:00.000 interval(ts, 10, minute) sliding(5, minute) fill(prev)",
+	}, {
+		input:  "create connector for s with (\"type\"='kafka', \"topic\"= 'user', \"partition\" = '1', \"value\"= 'json', \"bootstrap.servers\" = '127.0.0.1:62610');",
+		output: "create connector for s with (type = kafka, topic = user, partition = 1, value = json, bootstrap.servers = 127.0.0.1:62610)",
+	}, {
+		input:  "select _wstart(ts), _wend(ts), max(temperature), min(temperature) from sensor_data where ts > \"2023-08-01 00:00:00.000\" and ts < \"2023-08-01 00:50:00.000\" interval(ts, 10, minute) sliding(5, minute) fill(prev);",
+		output: "select _wstart(ts), _wend(ts), max(temperature), min(temperature) from sensor_data where ts > 2023-08-01 00:00:00.000 and ts < 2023-08-01 00:50:00.000 interval(ts, 10, minute) sliding(5, minute) fill(prev)",
+	}, {
+		input:  "create connector for s with (\"type\"='kafkamo', \"topic\"= 'user', \"partion\" = '1', \"value\"= 'json', \"bootstrap.servers\" = '127.0.0.1:62610');",
+		output: "create connector for s with (type = kafkamo, topic = user, partion = 1, value = json, bootstrap.servers = 127.0.0.1:62610)",
+	}, {
+		input:  "create stream s(a varchar, b varchar) with (\"type\"='kafka', \"topic\"= 'user', \"partion\" = '1', \"value\"= 'json', \"bootstrap.servers\" = '127.0.0.1:62610');",
+		output: "create stream s (a varchar, b varchar) with (type = kafka, topic = user, partion = 1, value = json, bootstrap.servers = 127.0.0.1:62610)",
+	}, {
+		input:  "drop stream if exists s",
+		output: "drop table if exists s",
+	}, {
+		input:  "CREATE STREAM enriched WITH (\n    VALUE_SCHEMA_ID = 1\n  ) AS\n  SELECT\n     cs.*,\n     u.name,\n     u.classification,\n     u.level\n  FROM clickstream cs\n    JOIN users u ON u.id = cs.userId",
+		output: "create stream enriched with (value_schema_id = 1) as select cs.*, u.name, u.classification, u.level from clickstream as cs inner join users as u on u.id = cs.userid",
+	}, {
+		input:  "CREATE STREAM filtered AS\n   SELECT \n     a, \n     few,\n     columns \n   FROM source_stream",
+		output: "create stream filtered as select a, few, columns from source_stream",
+	}, {
+		input:  "CREATE STREAM pageviews (\n    page_id BIGINT KEY\n  ) WITH (\n    KAFKA_TOPIC = 'keyed-pageviews-topic',\n    VALUE_FORMAT = 'JSON_SR',\n    VALUE_SCHEMA_ID = 2\n  );",
+		output: "create stream pageviews (page_id bigint key) with (kafka_topic = keyed-pageviews-topic, value_format = JSON_SR, value_schema_id = 2)",
+	}, {
+		input:  "CREATE STREAM pageviews (\n    viewtime BIGINT,\n    user_id VARCHAR\n  ) WITH (\n    KAFKA_TOPIC = 'keyless-pageviews-topic',\n    KEY_FORMAT = 'AVRO',\n    KEY_SCHEMA_ID = 1,\n    VALUE_FORMAT = 'JSON_SR'\n  );",
+		output: "create stream pageviews (viewtime bigint, user_id varchar) with (kafka_topic = keyless-pageviews-topic, key_format = AVRO, key_schema_id = 1, value_format = JSON_SR)",
+	}, {
+		input:  "CREATE STREAM pageviews (page_id BIGINT, viewtime BIGINT, user_id VARCHAR) WITH (\n    KAFKA_TOPIC = 'keyless-pageviews-topic',\n    VALUE_FORMAT = 'JSON'\n  )",
+		output: "create stream pageviews (page_id bigint, viewtime bigint, user_id varchar) with (kafka_topic = keyless-pageviews-topic, value_format = JSON)",
+	}, {
 		input:  "select row_number() over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1",
 		output: "select row_number() over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1",
 	}, {
 		input:  "select dense_rank() over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1",
 		output: "select dense_rank() over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1",
+	}, {
+		input:  "select day_key,day_date,day,month,quarter,year,week,day_of_week from bi_date where 1=2;",
+		output: "select day_key, day_date, day, month, quarter, year, week, day_of_week from bi_date where 1 = 2",
 	}, {
 		input:  "select sum(a) over(partition by a range between interval 1 day preceding and interval 2 day following) from t1",
 		output: "select sum(a) over (partition by a range between interval(1, day) preceding and interval(2, day) following) from t1",
@@ -98,6 +134,9 @@ var (
 	}, {
 		input:  "load data url s3option {\"bucket\"='dan-test1', \"filepath\"='ex_table_dan_gzip.gz',\"role_arn\"='arn:aws:iam::468413122987:role/dev-cross-s3', \"external_id\"='5404f91c_4e59_4898_85b3', \"compression\"='auto'} into table hx3.t2 fields terminated by ',' enclosed by '\\\"' lines terminated by '\\n';\n",
 		output: "load data url s3option {'bucket'='dan-test1', 'filepath'='ex_table_dan_gzip.gz', 'role_arn'='arn:aws:iam::468413122987:role/dev-cross-s3', 'external_id'='5404f91c_4e59_4898_85b3', 'compression'='auto'} into table hx3.t2 fields terminated by , enclosed by \" lines terminated by \n",
+	}, {
+		input:  "load data url stageoption my_stage into table hx3.t2 fields terminated by ',' enclosed by '' lines terminated by '\\n';\n",
+		output: "load data url from stage my_stage into table hx3.t2 fields terminated by , lines terminated by \n",
 	}, {
 		input:  "SHOW CREATE TABLE information_schema.PROCESSLIST;",
 		output: "show create table information_schema.processlist",
@@ -121,7 +160,7 @@ var (
 		output: "show variables like sql_mode",
 	}, {
 		input:  "show index from t1 from db",
-		output: "show index from db.t1",
+		output: "show index from t1 from db",
 	}, {
 		input:  "select * from (SELECT * FROM (SELECT 1, 2, 3)) AS t1",
 		output: "select * from (select * from (select 1, 2, 3)) as t1",
@@ -148,10 +187,13 @@ var (
 		input:  "select algo_alarm_record.* from algo_alarm_record inner join (SELECT id FROM algo_alarm_record use index(algo_alarm_record_algo_id_first_id_created_at_index) WHERE first_id = 0 AND created_at >= '2022-09-18 00:00:00' AND created_at <= '2022-10-18 00:00:00' and algo_id not in (9808,9809) order by id desc limit 0,10 ) e on e.id = algo_alarm_record.id order by algo_alarm_record.id desc;",
 		output: "select algo_alarm_record.* from algo_alarm_record inner join (select id from algo_alarm_record use index(algo_alarm_record_algo_id_first_id_created_at_index) where first_id = 0 and created_at >= 2022-09-18 00:00:00 and created_at <= 2022-10-18 00:00:00 and algo_id not in (9808, 9809) order by id desc limit 10 offset 0) as e on e.id = algo_alarm_record.id order by algo_alarm_record.id desc",
 	}, {
+		input:  "SELECT * FROM kv WHERE k = 1 FOR UPDATE",
+		output: "select * from kv where k = 1 for update",
+	}, {
 		input: "select a from t1 use index(b)",
 	}, {
-		input:  "SELECT   id,cid,status,ip,stream   FROM camera     WHERE (cid_type = ?)",
-		output: "select id, cid, status, ip, stream from camera where (cid_type = ?)",
+		input:  "SELECT   id,cid,status,ip,streams   FROM camera     WHERE (cid_type = ?)",
+		output: "select id, cid, status, ip, streams from camera where (cid_type = ?)",
 	}, {
 		input:  "CREATE  \nVIEW `xab0100` AS (\n  select `a`.`SYSUSERID` AS `sysuserid`,`a`.`USERID` AS `userid`,`a`.`USERNAME` AS `usernm`,`a`.`PWDHASH` AS `userpwd`,`a`.`USERTYPE` AS `usertype`,`a`.`EMPID` AS `empid`,`a`.`EMAIL` AS `email`,`a`.`TELO` AS `telo`,`a`.`TELH` AS `telh`,`a`.`MOBIL` AS `mobil`,(case `a`.`ACTIVED` when '1' then 'N' when '2' then 'Y' else 'Y' end) AS `useyn`,`a`.`ENABLEPWD` AS `enablepwd`,`a`.`ENABLEMMSG` AS `enablemmsg`,`a`.`FEECENTER` AS `feecenter`,left(concat(ifnull(`c`.`ORGID`,''),'|'),(char_length(concat(ifnull(`c`.`ORGID`,''),'|')) - 1)) AS `orgid`,left(concat(ifnull(`c`.`ORGNAME`,''),'|'),(char_length(concat(ifnull(`c`.`ORGNAME`,''),'|')) - 1)) AS `orgname`,ifnull(`a`.`ISPLANNER`,'') AS `isplanner`,ifnull(`a`.`ISWHEMPLOYEE`,'') AS `iswhemployee`,ifnull(`a`.`ISBUYER`,'') AS `isbuyer`,ifnull(`a`.`ISQCEMPLOYEE`,'') AS `isqceemployee`,ifnull(`a`.`ISSALEEMPLOYEE`,'') AS `issaleemployee`,`a`.`SEX` AS `sex`,ifnull(`c`.`ENTID`,'3') AS `ORGANIZATION_ID`,ifnull(`a`.`NOTICEUSER`,'') AS `NOTICEUSER` \n  from ((`kaf_cpcuser` `a` left join `kaf_cpcorguser` `b` on((`a`.`SYSUSERID` = `b`.`SYSUSERID`))) left join `kaf_cpcorg` `c` on((`b`.`ORGID` = `c`.`ORGID`))) \n  order by `a`.`SYSUSERID`,`a`.`USERID`,`a`.`USERNAME`,`a`.`USERPASS`,`a`.`USERTYPE`,`a`.`EMPID`,`a`.`EMAIL`,`a`.`TELO`,`a`.`TELH`,`a`.`MOBIL`,`a`.`ACTIVED`,`a`.`ENABLEPWD`,`a`.`ENABLEMMSG`,`a`.`FEECENTER`,`a`.`ISPLANNER`,`a`.`ISWHEMPLOYEE`,`a`.`ISBUYER`,`a`.`ISQCEMPLOYEE`,`a`.`ISSALEEMPLOYEE`,`a`.`SEX`,`c`.`ENTID`) ;\n",
 		output: "create view xab0100 as (select a.sysuserid as sysuserid, a.userid as userid, a.username as usernm, a.pwdhash as userpwd, a.usertype as usertype, a.empid as empid, a.email as email, a.telo as telo, a.telh as telh, a.mobil as mobil, (case a.actived when 1 then N when 2 then Y else Y end) as useyn, a.enablepwd as enablepwd, a.enablemmsg as enablemmsg, a.feecenter as feecenter, left(concat(ifnull(c.orgid, ), |), (char_length(concat(ifnull(c.orgid, ), |)) - 1)) as orgid, left(concat(ifnull(c.orgname, ), |), (char_length(concat(ifnull(c.orgname, ), |)) - 1)) as orgname, ifnull(a.isplanner, ) as isplanner, ifnull(a.iswhemployee, ) as iswhemployee, ifnull(a.isbuyer, ) as isbuyer, ifnull(a.isqcemployee, ) as isqceemployee, ifnull(a.issaleemployee, ) as issaleemployee, a.sex as sex, ifnull(c.entid, 3) as ORGANIZATION_ID, ifnull(a.noticeuser, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.sysuserid = b.sysuserid)) left join kaf_cpcorg as c on ((b.orgid = c.orgid)) order by a.sysuserid, a.userid, a.username, a.userpass, a.usertype, a.empid, a.email, a.telo, a.telh, a.mobil, a.actived, a.enablepwd, a.enablemmsg, a.feecenter, a.isplanner, a.iswhemployee, a.isbuyer, a.isqcemployee, a.issaleemployee, a.sex, c.entid)",
@@ -196,7 +238,7 @@ var (
 		input: "select password from t1",
 	}, {
 		input:  "create table t1 (a datetime on update CURRENT_TIMESTAMP(1))",
-		output: "create table t1 (a datetime(26) on update current_timestamp(1))",
+		output: "create table t1 (a datetime on update current_timestamp(1))",
 	}, {
 		input:  `create table table10 (a int primary key, b varchar(10)) checksum=0 COMMENT="asdf"`,
 		output: "create table table10 (a int primary key, b varchar(10)) checksum = 0 comment = asdf",
@@ -261,14 +303,12 @@ var (
 	}, {
 		input: "select cast(false as varchar)",
 	}, {
-		input:  "select cast(a as timestamp)",
-		output: "select cast(a as timestamp(26))",
+		input: "select cast(a as timestamp)",
 	}, {
 		input:  "select cast(\"2022-01-30\" as varchar);",
 		output: "select cast(2022-01-30 as varchar)",
 	}, {
-		input:  "select cast(b as timestamp) from t2",
-		output: "select cast(b as timestamp(26)) from t2",
+		input: "select cast(b as timestamp) from t2",
 	}, {
 		input:  "select cast(\"2022-01-01 01:23:34\" as varchar)",
 		output: "select cast(2022-01-01 01:23:34 as varchar)",
@@ -341,7 +381,7 @@ var (
 		output: "set a = b",
 	}, {
 		input:  "CREATE TABLE t1 (datetime datetime, timestamp timestamp, date date)",
-		output: "create table t1 (datetime datetime(26), timestamp timestamp(26), date date)",
+		output: "create table t1 (datetime datetime, timestamp timestamp, date date)",
 	}, {
 		input:  "SET timestamp=DEFAULT;",
 		output: "set timestamp = default",
@@ -466,7 +506,7 @@ var (
 		output: "select group_concat(distinct 2, ,) from t1",
 	}, {
 		input:  "SELECT GROUP_CONCAT(DISTINCT a order by a) from t1",
-		output: "select group_concat(distinct a, ,) from t1",
+		output: "select group_concat(distinct a, ,order by a) from t1",
 	}, {
 		input: "select variance(2) from t1",
 	}, {
@@ -621,7 +661,7 @@ var (
 		input:  "/* mysql-connector-java-8.0.27 (Revision: e920b979015ae7117d60d72bcc8f077a839cd791) */SHOW VARIABLES;",
 		output: "show variables",
 	}, {
-		input: "create index idx1 using bsi on a (a) ",
+		input: "create index idx1 using bsi on a (a)",
 	}, {
 		input:  "INSERT INTO pet VALUES row('Sunsweet05','Dsant05','otter','f',30.11,2), row('Sunsweet06','Dsant06','otter','m',30.11,3);",
 		output: "insert into pet values (Sunsweet05, Dsant05, otter, f, 30.11, 2), (Sunsweet06, Dsant06, otter, m, 30.11, 3)",
@@ -883,6 +923,8 @@ var (
 		}, {
 			input: "select avg(u.a), count(*) from u",
 		}, {
+			input: "select approx_count(*) from u",
+		}, {
 			input: "select avg(u.a), count(u.b) from u",
 		}, {
 			input: "select sum(col_1d) from tbl1 where col_1d < 13 group by col_1e",
@@ -1063,7 +1105,7 @@ var (
 		},
 		{
 			input:  `CREATE TABLE tp10 (col1 INT, col2 CHAR(5), col3 DATETIME) PARTITION BY HASH (YEAR(col3));`,
-			output: `create table tp10 (col1 int, col2 char(5), col3 datetime(26)) partition by hash (year(col3))`,
+			output: `create table tp10 (col1 int, col2 char(5), col3 datetime) partition by hash (year(col3))`,
 		},
 		{
 			input:  `CREATE TABLE tp11 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY LINEAR HASH( YEAR(col3)) PARTITIONS 6`,
@@ -1418,7 +1460,7 @@ var (
 			input: "create table t (a float(20, 20) not null, b int(20) null, c int(30) null)",
 		}, {
 			input:  "create table t1 (t time(3) null, dt datetime(6) null, ts timestamp(1) null)",
-			output: "create table t1 (t time(26, 3) null, dt datetime(26, 6) null, ts timestamp(26, 1) null)",
+			output: "create table t1 (t time(3, 3) null, dt datetime(6, 6) null, ts timestamp(1, 1) null)",
 		}, {
 			input:  "create table t1 (a int default 1 + 1 - 2 * 3 / 4 div 7 ^ 8 << 9 >> 10 % 11)",
 			output: "create table t1 (a int default 1 + 1 - 2 * 3 / 4 div 7 ^ 8 << 9 >> 10 % 11)",
@@ -1876,6 +1918,10 @@ var (
 			input: "alter account if exists abc open",
 		},
 		{
+			input:  "alter account if exists abc restricted",
+			output: "alter account if exists abc restricted",
+		},
+		{
 			input:  "alter account if exists abc admin_name 'root' identified by '111' open",
 			output: "alter account if exists abc admin_name 'root' identified by '******' open",
 		},
@@ -2048,6 +2094,78 @@ var (
 			output: "create sequence s as smallint unsigned increment by 1 minvalue -100 maxvalue 100 start with -90 cycle",
 		},
 		{
+			input:  "ALTER SEQUENCE my_sequence START WITH 100;",
+			output: "alter sequence my_sequence start with 100 ",
+		},
+		{
+			input:  "ALTER SEQUENCE my_sequence INCREMENT BY 5;",
+			output: "alter sequence my_sequence increment by 5 ",
+		},
+		{
+			input:  "ALTER SEQUENCE my_sequence MINVALUE 1 MAXVALUE 1000;",
+			output: "alter sequence my_sequence minvalue 1 maxvalue 1000 ",
+		},
+		{
+			input:  "ALTER SEQUENCE my_sequence CYCLE;",
+			output: "alter sequence my_sequence cycle",
+		},
+		{
+			input:  "alter table t1 modify column b int",
+			output: "alter table t1 modify column b int",
+		},
+		{
+			input:  "alter table t1 modify column b VARCHAR(20) first",
+			output: "alter table t1 modify column b varchar(20) first",
+		},
+		{
+			input:  "alter table t1 modify column b VARCHAR(20) after a",
+			output: "alter table t1 modify column b varchar(20) after a",
+		},
+		{
+			input:  "alter table t1 modify b VARCHAR(20) after a",
+			output: "alter table t1 modify column b varchar(20) after a",
+		},
+		{
+			input:  "alter table t1 change column a b int",
+			output: "alter table t1 change column a b int",
+		},
+		{
+			input:  "alter table t1 change column a b int first",
+			output: "alter table t1 change column a b int first",
+		},
+		{
+			input:  "alter table t1 change a x varchar(20) after b",
+			output: "alter table t1 change column a x varchar(20) after b",
+		},
+		{
+			input:  "alter table t1 change column a x varchar(20) after b",
+			output: "alter table t1 change column a x varchar(20) after b",
+		},
+		{
+			input:  "alter table emp rename column deptno to deptid",
+			output: "alter table emp rename column deptno to deptid",
+		},
+		{
+			input:  "alter table t1 alter a set default 100",
+			output: "alter table t1 alter column a set default 100",
+		},
+		{
+			input:  "alter table t1 alter column a drop default",
+			output: "alter table t1 alter column a drop default",
+		},
+		{
+			input:  "alter table t1 alter column b set visible",
+			output: "alter table t1 alter column b set visible",
+		},
+		{
+			input:  "alter table t1 order by a ASC, b DESC",
+			output: "alter table t1 order by a asc, b desc",
+		},
+		{
+			input:  "alter table t1 order by a, b DESC",
+			output: "alter table t1 order by a, b desc",
+		},
+		{
 			input: "alter table tbl1 drop column col1",
 		},
 		{
@@ -2121,6 +2239,26 @@ var (
 			output: "alter table t1 add foreign key (col4) references dept(deptno)",
 		},
 		{
+			input:  "alter table t1 add constraint pk primary key pk1 (col1, col4)",
+			output: "alter table t1 add constraint pk primary key pk1 (col1, col4)",
+		},
+		{
+			input:  "alter table t1 add constraint pk primary key (col4)",
+			output: "alter table t1 add constraint pk primary key (col4)",
+		},
+		{
+			input:  "alter table t1 add constraint pk primary key (col1, col4)",
+			output: "alter table t1 add constraint pk primary key (col1, col4)",
+		},
+		{
+			input:  "alter table t1 add primary key (col1, col4)",
+			output: "alter table t1 add primary key (col1, col4)",
+		},
+		{
+			input:  "alter table t1 add primary key pk1 (col1, col4)",
+			output: "alter table t1 add primary key pk1 (col1, col4)",
+		},
+		{
 			input:  "alter table t1 comment 'abc'",
 			output: "alter table t1 comment = abc",
 		},
@@ -2147,6 +2285,38 @@ var (
 		},
 		{
 			input: "create publication pub1 database db1 comment 'test'",
+		},
+		{
+			input:  "CREATE STAGE my_ext_stage URL='s3://load/files/'",
+			output: "create stage my_ext_stage url='s3://load/files/'",
+		},
+		{
+			input:  "CREATE STAGE my_ext_stage1 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'};",
+			output: "create stage my_ext_stage1 url='s3://load/files/' crentiasl={'AWS_KEY_ID'='1a2b3c','AWS_SECRET_KEY'='4x5y6z'}",
+		},
+		{
+			input:  "CREATE STAGE my_ext_stage1 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c', 'AWS_SECRET_KEY'='4x5y6z'} ENABLE = TRUE;",
+			output: "create stage my_ext_stage1 url='s3://load/files/' crentiasl={'AWS_KEY_ID'='1a2b3c','AWS_SECRET_KEY'='4x5y6z'} enabled",
+		},
+		{
+			input:  "DROP STAGE my_ext_stage1",
+			output: "drop stage my_ext_stage1",
+		},
+		{
+			input:  "DROP STAGE if exists my_ext_stage1",
+			output: "drop stage if not exists my_ext_stage1",
+		},
+		{
+			input:  "ALTER STAGE my_ext_stage SET URL='s3://loading/files/new/'",
+			output: "alter stage my_ext_stage set  url='s3://loading/files/new/'",
+		},
+		{
+			input:  "ALTER STAGE my_ext_stage SET CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'};",
+			output: "alter stage my_ext_stage set  crentiasl={'AWS_KEY_ID'='1a2b3c','AWS_SECRET_KEY'='4x5y6z'}",
+		},
+		{
+			input:  "SHOW STAGES LIKE 'my_stage'",
+			output: "show stages like my_stage",
 		},
 		{
 			input: "create database db1 from acc0 publication pub1",
@@ -2248,6 +2418,225 @@ var (
 		{
 			input:  "select BINARY 124",
 			output: "select binary(124)",
+		},
+		{
+			input:  "set transaction isolation level read committed;",
+			output: "set transaction isolation level read committed",
+		},
+		{
+			input:  "set global transaction isolation level read committed , read write , isolation level read committed , read only;",
+			output: "set global transaction isolation level read committed , read write , isolation level read committed , read only",
+		},
+		{
+			input:  "set session transaction isolation level read committed , read write , isolation level read committed , read only;",
+			output: "set transaction isolation level read committed , read write , isolation level read committed , read only",
+		},
+		{
+			input:  "set session transaction isolation level read committed , isolation level read uncommitted , isolation level repeatable read , isolation level serializable;",
+			output: "set transaction isolation level read committed , isolation level read uncommitted , isolation level repeatable read , isolation level serializable",
+		},
+		{
+			input:  "create table t1(a int) STORAGE DISK;",
+			output: "create table t1 (a int) tablespace =  STORAGE DISK",
+		}, {
+			input:  "create table t1 (a int) STORAGE DISK;",
+			output: "create table t1 (a int) tablespace =  STORAGE DISK",
+		}, {
+			input: "create table t1 (a numeric(10, 2))",
+		}, {
+			input: "create table t1 (a mediumint)",
+		}, {
+			input:  "drop schema if exists ssb",
+			output: "drop database if exists ssb",
+		}, {
+			input:  "drop table if exists ssb RESTRICT",
+			output: "drop table if exists ssb",
+		}, {
+			input:  "drop table if exists ssb CASCADE",
+			output: "drop table if exists ssb",
+		}, {
+			input: "create table t1 (a int) AUTOEXTEND_SIZE = 10",
+		}, {
+			input:  "create table t1 (a int) ENGINE_ATTRIBUTE = 'abc'",
+			output: "create table t1 (a int) ENGINE_ATTRIBUTE = abc",
+		}, {
+			input: "create table t1 (a int) INSERT_METHOD = NO",
+		}, {
+			input: "create table t1 (a int) INSERT_METHOD = FIRST",
+		}, {
+			input: "create table t1 (a int) INSERT_METHOD = LAST",
+		}, {
+			input: "create table t1 (a int) START TRANSACTION",
+		}, {
+			input:  "create table t1 (a int) SECONDARY_ENGINE_ATTRIBUTE = 'abc'",
+			output: "create table t1 (a int) SECONDARY_ENGINE_ATTRIBUTE = abc",
+		}, {
+			input:  "create table /*! if not exists */ t1 (a int)",
+			output: "create table if not exists t1 (a int)",
+		}, {
+			input:  "create table /*!50100 if not exists */ t1 (a int)",
+			output: "create table if not exists t1 (a int)",
+		}, {
+			input:  "create table /*!50100 if not exists */ t1 (a int) /*!AUTOEXTEND_SIZE = 10*/",
+			output: "create table if not exists t1 (a int) AUTOEXTEND_SIZE = 10",
+		}, {
+			input:  "/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */",
+			output: "set OLD_CHARACTER_SET_CLIENT = @@CHARACTER_SET_CLIENT",
+		}, {
+			input:  "SET @@GLOBAL.GTID_PURGED=/*!80000 '+'*/ '65c4c218-d343-11eb-8106-525400f4f901:1-769275'",
+			output: "set global GTID_PURGED = 65c4c218-d343-11eb-8106-525400f4f901:1-769275",
+		}, {
+			input:  " /*!40103 SET TIME_ZONE='+00:00' */",
+			output: "set time_zone = +00:00",
+		}, {
+			input:  "/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */",
+			output: "set OLD_CHARACTER_SET_CLIENT = @@CHARACTER_SET_CLIENT",
+		}, {
+			input:  "/*!40103 SET @OLD_TIME_ZONE=@@TIME_ZONE */",
+			output: "set OLD_TIME_ZONE = @@TIME_ZONE",
+		}, {
+			input:  "/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */",
+			output: "set OLD_SQL_MODE = @@SQL_MODE, sql_mode = NO_AUTO_VALUE_ON_ZERO",
+		}, {
+			input:  "/*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;",
+			output: "set OLD_SQL_NOTES = @@SQL_NOTES, sql_notes = 0",
+		}, {
+			input:  "SELECT /*+ RESOURCE_GROUP(resouce_group_name) */ * from table_name;",
+			output: "select * from table_name",
+		}, {
+			input:  "SELECT /*+ qb_name(viewSub, v@sel_1 . @sel_2) use_index(e3@viewSub, idx) hash_agg(viewSub) */ * FROM v;",
+			output: "select * from v",
+		}, {
+			input:  "SELECT * FROM t1 dt WHERE EXISTS( WITH RECURSIVE qn AS (SELECT a AS b UNION ALL SELECT b+1 FROM qn WHERE b=0 or b = 1) SELECT * FROM qn dtqn1 where exists (select /*+ NO_DECORRELATE() */ b from qn where dtqn1.b+1))",
+			output: "select * from t1 as dt where exists (with recursive qn as (select a as b union all select b + 1 from qn where b = 0 or b = 1) select * from qn as dtqn1 where exists (select b from qn where dtqn1.b + 1))",
+		}, {
+			input:  "select /*+use_index(tmp1, code)*/ * from tmp1 where code > 1",
+			output: "select * from tmp1 where code > 1",
+		}, {
+			input:  "explain analyze select /*+ HASH_JOIN(t1, t2) */ t1.k from t t1, t t2 where t1.v = t2.v+1",
+			output: "explain (analyze) select t1.k from t as t1 cross join t as t2 where t1.v = t2.v + 1",
+		}, {
+			input:  "prepare stmt from 'select /*+ inl_join(t2) */ * from t t1 join t t2 on t1.a = t2.a and t1.c = t2.c where t2.a = 1 or t2.b = 1;';",
+			output: "prepare stmt from select /*+ inl_join(t2) */ * from t t1 join t t2 on t1.a = t2.a and t1.c = t2.c where t2.a = 1 or t2.b = 1;",
+		}, {
+			input:  "CREATE DATABASE /*!32312 IF NOT EXISTS*/ `ucl360_demo_v3` /*!40100 DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci */ /*!80016 DEFAULT ENCRYPTION='N' */;",
+			output: "create database if not exists ucl360_demo_v3 default character set utf8mb4 collate utf8mb4_0900_ai_ci encryption N",
+		}, {
+			input:  "alter table t1 algorithm = DEFAULT",
+			output: "alter table t1 alter algorithm not enforce",
+		}, {
+			input:  "alter table t1 algorithm = INSTANT",
+			output: "alter table t1 alter algorithm not enforce",
+		}, {
+			input:  "alter table t1 algorithm = INPLACE",
+			output: "alter table t1 alter algorithm not enforce",
+		}, {
+			input:  "alter table t1 algorithm = COPY",
+			output: "alter table t1 alter algorithm not enforce",
+		}, {
+			input:  "alter table t1 default CHARACTER SET = a COLLATE = b",
+			output: "alter table t1 charset = a",
+		}, {
+			input:  "alter table t1 CONVERT TO CHARACTER SET a COLLATE b",
+			output: "alter table t1 charset = a",
+		}, {
+			input:  "alter table t1 DISABLE KEYS",
+			output: "alter table t1 charset = DISABLE",
+		}, {
+			input:  "alter table t1 ENABLE KEYS",
+			output: "alter table t1 charset = ENABLE",
+		}, {
+			input:  "alter table t1 DISCARD TABLESPACE",
+			output: "alter table t1 charset = DISCARD",
+		}, {
+			input:  "alter table t1 IMPORT TABLESPACE",
+			output: "alter table t1 charset = IMPORT",
+		}, {
+			input:  "alter table t1 FORCE",
+			output: "alter table t1 charset = FORCE",
+		}, {
+			input:  "alter table t1 LOCK = DEFAULT",
+			output: "alter table t1 charset = LOCK",
+		}, {
+			input:  "alter table t1 LOCK = NONE",
+			output: "alter table t1 charset = LOCK",
+		}, {
+			input:  "alter table t1 LOCK = SHARED",
+			output: "alter table t1 charset = LOCK",
+		}, {
+			input:  "alter table t1 LOCK = EXCLUSIVE",
+			output: "alter table t1 charset = LOCK",
+		}, {
+			input:  "alter table t1 WITHOUT VALIDATION",
+			output: "alter table t1 charset = WITHOUT",
+		}, {
+			input:  "alter table t1 WITH VALIDATION",
+			output: "alter table t1 charset = WITH",
+		}, {
+			input:  "alter table t1 alter CHECK a ENFORCED",
+			output: "alter table t1 alter CHECK enforce",
+		}, {
+			input:  "alter table t1 alter CONSTRAINT a NOT ENFORCED",
+			output: "alter table t1 alter CONSTRAINT not enforce",
+		}, {
+			input:  "create SQL SECURITY DEFINER VIEW t2 as select * from t1",
+			output: "create view t2 as select * from t1",
+		}, {
+			input:  "create SQL SECURITY INVOKER VIEW t2 as select * from t1",
+			output: "create view t2 as select * from t1",
+		}, {
+			input:  "create VIEW t2 as select * from t1 WITH CASCADED CHECK OPTION",
+			output: "create view t2 as select * from t1",
+		}, {
+			input:  "create VIEW t2 as select * from t1 WITH LOCAL CHECK OPTION",
+			output: "create view t2 as select * from t1",
+		}, {
+			input:  "insert into t1 values(_binary 0x123)",
+			output: "insert into t1 values (123)",
+		}, {
+			input:  "backup '123' filesystem '/home/abc'",
+			output: "backup 123 filesystem /home/abc",
+		}, {
+			input:  "backup '123' s3option {\"bucket\"='dan-test1', \"filepath\"='ex_table_dan_gzip.gz',\"role_arn\"='arn:aws:iam::468413122987:role/dev-cross-s3', \"external_id\"='5404f91c_4e59_4898_85b3', \"compression\"='auto'}",
+			output: "backup 123 s3option {'bucket'='dan-test1', 'filepath'='ex_table_dan_gzip.gz', 'role_arn'='arn:aws:iam::468413122987:role/dev-cross-s3', 'external_id'='5404f91c_4e59_4898_85b3', 'compression'='auto'}",
+		}, {
+			input:  "backup '123' s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}",
+			output: "backup 123 s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}",
+		}, {
+			input:  "backup '123' s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}",
+			output: "backup 123 s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}",
+		}, {
+			input:  `backup '123' s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='jsonline/jsonline_object.jl', 'region'='us-west-2', 'compression'='none', 'format'='jsonline', 'jsondata'='object'}`,
+			output: `backup 123 s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='jsonline/jsonline_object.jl', 'region'='us-west-2', 'compression'='none', 'format'='jsonline', 'jsondata'='object'}`,
+		}, {
+			input:  "/*!50001 CREATE ALGORITHM=UNDEFINED *//*!50013 DEFINER=`root`@`%` SQL SECURITY DEFINER *//*!50001 VIEW `pga0010` AS select distinct `a`.`FACDIV` AS `FACDIV`,`a`.`BLDCD` AS `BLDCD`,`a`.`PRDCD` AS `PRDCD`,`a`.`PRDNAM` AS `PRDNAM`,`a`.`PRDLNG` AS `PRDLNG`,`a`.`PRDWID` AS `PRDWID`,`a`.`PRDGAG` AS `PRDGAG`,`a`.`AREA` AS `AREA`,`a`.`GLZTYP` AS `GLZTYP`,`a`.`TECTYP` AS `TECTYP`,`a`.`PRDCATE` AS `PRDCATE`,`a`.`PRCCD` AS `PRCCD`,`a`.`PRCDSC` AS `PRCDSC`,`a`.`GLSSTR` AS `GLSSTR`,`a`.`REMARK` AS `REMARK`,`a`.`USEYN` AS `USEYN`,`a`.`ISMES` AS `ISMES` from (select 'N' AS `ISMES`,`skim`.`bga0010`.`USEYN` AS `USEYN`,`skim`.`bga0010`.`FACDIV` AS `FACDIV`,`skim`.`bga0010`.`BLDCDFATHER` AS `BLDCD`,substring_index(`skim`.`bga0010`.`PRDCD`,'-',1) AS `PRDCD`,`skim`.`bga0010`.`PRDNAM` AS `PRDNAM`,`skim`.`bga0010`.`PRDLNG` AS `PRDLNG`,`skim`.`bga0010`.`PRDWID` AS `PRDWID`,`skim`.`bga0010`.`PRDGAG` AS `PRDGAG`,`skim`.`bga0010`.`AREA` AS `AREA`,`skim`.`bga0010`.`GLZTYP` AS `GLZTYP`,`skim`.`bga0010`.`TECTYP` AS `TECTYP`,`skim`.`bga0010`.`PRDCATE` AS `PRDCATE`,`skim`.`bga0010`.`MATCST` AS `MATCST`,`skim`.`bga0010`.`PRCCD` AS `PRCCD`,`skim`.`bga0010`.`PRCDSC` AS `PRCDSC`,`skim`.`bga0010`.`GLSSTR` AS `GLSSTR`,`skim`.`bga0010`.`REMARK` AS `REMARK` from `skim`.`bga0010` where ((`skim`.`bga0010`.`ISMES` = 'Y') and (`skim`.`bga0010`.`USEYN` = 'Y') and (not(substring_index(`skim`.`bga0010`.`PRDCD`,'-',1) in (select `skim`.`bga0010`.`PRDCD` from `skim`.`bga0010` where ((`skim`.`bga0010`.`ISMES` = 'N') and (`skim`.`bga0010`.`USEYN` = 'Y')))))) union all select `skim`.`bga0010`.`ISMES` AS `ISMES`,`skim`.`bga0010`.`USEYN` AS `USEYN`,`skim`.`bga0010`.`FACDIV` AS `FACDIV`,`skim`.`bga0010`.`BLDCD` AS `BLDCD`,`skim`.`bga0010`.`PRDCD` AS `PRDCD`,`skim`.`bga0010`.`PRDNAM` AS `PRDNAM`,`skim`.`bga0010`.`PRDLNG` AS `PRDLNG`,`skim`.`bga0010`.`PRDWID` AS `PRDWID`,`skim`.`bga0010`.`PRDGAG` AS `PRDGAG`,`skim`.`bga0010`.`AREA` AS `AREA`,`skim`.`bga0010`.`GLZTYP` AS `GLZTYP`,`skim`.`bga0010`.`TECTYP` AS `TECTYP`,`skim`.`bga0010`.`PRDCATE` AS `PRDCATE`,`skim`.`bga0010`.`MATCST` AS `MATCST`,`skim`.`bga0010`.`PRCCD` AS `PRCCD`,`skim`.`bga0010`.`PRCDSC` AS `PRCDSC`,`skim`.`bga0010`.`GLSSTR` AS `GLSSTR`,`skim`.`bga0010`.`REMARK` AS `REMARK` from `skim`.`bga0010` where ((`skim`.`bga0010`.`ISMES` = 'N') and (`skim`.`bga0010`.`USEYN` = 'Y'))) `a` order by `a`.`BLDCD` */;",
+			output: "create view pga0010 as select distinct a.facdiv as FACDIV, a.bldcd as BLDCD, a.prdcd as PRDCD, a.prdnam as PRDNAM, a.prdlng as PRDLNG, a.prdwid as PRDWID, a.prdgag as PRDGAG, a.area as AREA, a.glztyp as GLZTYP, a.tectyp as TECTYP, a.prdcate as PRDCATE, a.prccd as PRCCD, a.prcdsc as PRCDSC, a.glsstr as GLSSTR, a.remark as REMARK, a.useyn as USEYN, a.ismes as ISMES from (select N as ISMES, skim.bga0010.useyn as USEYN, skim.bga0010.facdiv as FACDIV, skim.bga0010.bldcdfather as BLDCD, substring_index(skim.bga0010.prdcd, -, 1) as PRDCD, skim.bga0010.prdnam as PRDNAM, skim.bga0010.prdlng as PRDLNG, skim.bga0010.prdwid as PRDWID, skim.bga0010.prdgag as PRDGAG, skim.bga0010.area as AREA, skim.bga0010.glztyp as GLZTYP, skim.bga0010.tectyp as TECTYP, skim.bga0010.prdcate as PRDCATE, skim.bga0010.matcst as MATCST, skim.bga0010.prccd as PRCCD, skim.bga0010.prcdsc as PRCDSC, skim.bga0010.glsstr as GLSSTR, skim.bga0010.remark as REMARK from skim.bga0010 where ((skim.bga0010.ismes = Y) and (skim.bga0010.useyn = Y) and (not (substring_index(skim.bga0010.prdcd, -, 1) in (select skim.bga0010.prdcd from skim.bga0010 where ((skim.bga0010.ismes = N) and (skim.bga0010.useyn = Y)))))) union all select skim.bga0010.ismes as ISMES, skim.bga0010.useyn as USEYN, skim.bga0010.facdiv as FACDIV, skim.bga0010.bldcd as BLDCD, skim.bga0010.prdcd as PRDCD, skim.bga0010.prdnam as PRDNAM, skim.bga0010.prdlng as PRDLNG, skim.bga0010.prdwid as PRDWID, skim.bga0010.prdgag as PRDGAG, skim.bga0010.area as AREA, skim.bga0010.glztyp as GLZTYP, skim.bga0010.tectyp as TECTYP, skim.bga0010.prdcate as PRDCATE, skim.bga0010.matcst as MATCST, skim.bga0010.prccd as PRCCD, skim.bga0010.prcdsc as PRCDSC, skim.bga0010.glsstr as GLSSTR, skim.bga0010.remark as REMARK from skim.bga0010 where ((skim.bga0010.ismes = N) and (skim.bga0010.useyn = Y))) as a order by a.bldcd",
+		}, {
+			input:  "/*!50001 CREATE ALGORITHM=UNDEFINED *//*!50013 DEFINER=`root`@`%` SQL SECURITY DEFINER *//*!50001 VIEW `sale_employee` AS select `ct`.`ENTID` AS `ORGANIZATION_ID`,`cu`.`SYSUSERID` AS `SALE_EMPLOYEE_ID`,`cu`.`SYSUSERID` AS `EMPLOYEE_ID`,`cu`.`ACTIVED` AS `ISUSEABLE`,`cu`.`CREATOR` AS `CREATED_BY`,`cu`.`CREATETIME` AS `CREATION_DATE`,`cu`.`UPDATOR` AS `LAST_UPDATED_BY`,`cu`.`UPDATETIME` AS `LAST_UPDATE_DATE`,'' AS `ATTRIBUTE11`,'' AS `ATTRIBUTE21`,'' AS `ATTRIBUTE31`,0 AS `ATTRIBUTE41`,0 AS `ATTRIBUTE51`,0 AS `AREA_ID` from (`kaf_cpcuser` `cu` join `kaf_cpcent` `ct`) where (`cu`.`ISSALEEMPLOYEE` = 2) */;",
+			output: "create view sale_employee as select ct.entid as ORGANIZATION_ID, cu.sysuserid as SALE_EMPLOYEE_ID, cu.sysuserid as EMPLOYEE_ID, cu.actived as ISUSEABLE, cu.creator as CREATED_BY, cu.createtime as CREATION_DATE, cu.updator as LAST_UPDATED_BY, cu.updatetime as LAST_UPDATE_DATE,  as ATTRIBUTE11,  as ATTRIBUTE21,  as ATTRIBUTE31, 0 as ATTRIBUTE41, 0 as ATTRIBUTE51, 0 as AREA_ID from kaf_cpcuser as cu inner join kaf_cpcent as ct where (cu.issaleemployee = 2)",
+		}, {
+			input:  "/*!50001 CREATE ALGORITHM=UNDEFINED *//*!50013 DEFINER=`root`@`%` SQL SECURITY DEFINER *//*!50001 VIEW `xab0100` AS (select `a`.`SYSUSERID` AS `sysuserid`,`a`.`USERID` AS `userid`,`a`.`USERNAME` AS `usernm`,`a`.`PWDHASH` AS `userpwd`,`a`.`USERTYPE` AS `usertype`,`a`.`EMPID` AS `empid`,`a`.`EMAIL` AS `email`,`a`.`TELO` AS `telo`,`a`.`TELH` AS `telh`,`a`.`MOBIL` AS `mobil`,(case `a`.`ACTIVED` when '1' then 'N' when '2' then 'Y' else 'Y' end) AS `useyn`,`a`.`ENABLEPWD` AS `enablepwd`,`a`.`ENABLEMMSG` AS `enablemmsg`,`a`.`FEECENTER` AS `feecenter`,left(concat(ifnull(`c`.`ORGID`,''),'|'),(char_length(concat(ifnull(`c`.`ORGID`,''),'|')) - 1)) AS `orgid`,left(concat(ifnull(`c`.`ORGNAME`,''),'|'),(char_length(concat(ifnull(`c`.`ORGNAME`,''),'|')) - 1)) AS `orgname`,ifnull(`a`.`ISPLANNER`,'') AS `isplanner`,ifnull(`a`.`ISWHEMPLOYEE`,'') AS `iswhemployee`,ifnull(`a`.`ISBUYER`,'') AS `isbuyer`,ifnull(`a`.`ISQCEMPLOYEE`,'') AS `isqceemployee`,ifnull(`a`.`ISSALEEMPLOYEE`,'') AS `issaleemployee`,`a`.`SEX` AS `sex`,ifnull(`c`.`ENTID`,'3') AS `ORGANIZATION_ID`,ifnull(`a`.`NOTICEUSER`,'') AS `NOTICEUSER` from ((`kaf_cpcuser` `a` left join `kaf_cpcorguser` `b` on((`a`.`SYSUSERID` = `b`.`SYSUSERID`))) left join `kaf_cpcorg` `c` on((`b`.`ORGID` = `c`.`ORGID`))) order by `a`.`SYSUSERID`,`a`.`USERID`,`a`.`USERNAME`,`a`.`USERPASS`,`a`.`USERTYPE`,`a`.`EMPID`,`a`.`EMAIL`,`a`.`TELO`,`a`.`TELH`,`a`.`MOBIL`,`a`.`ACTIVED`,`a`.`ENABLEPWD`,`a`.`ENABLEMMSG`,`a`.`FEECENTER`,`a`.`ISPLANNER`,`a`.`ISWHEMPLOYEE`,`a`.`ISBUYER`,`a`.`ISQCEMPLOYEE`,`a`.`ISSALEEMPLOYEE`,`a`.`SEX`,`c`.`ENTID`) */;",
+			output: "create view xab0100 as (select a.sysuserid as sysuserid, a.userid as userid, a.username as usernm, a.pwdhash as userpwd, a.usertype as usertype, a.empid as empid, a.email as email, a.telo as telo, a.telh as telh, a.mobil as mobil, (case a.actived when 1 then N when 2 then Y else Y end) as useyn, a.enablepwd as enablepwd, a.enablemmsg as enablemmsg, a.feecenter as feecenter, left(concat(ifnull(c.orgid, ), |), (char_length(concat(ifnull(c.orgid, ), |)) - 1)) as orgid, left(concat(ifnull(c.orgname, ), |), (char_length(concat(ifnull(c.orgname, ), |)) - 1)) as orgname, ifnull(a.isplanner, ) as isplanner, ifnull(a.iswhemployee, ) as iswhemployee, ifnull(a.isbuyer, ) as isbuyer, ifnull(a.isqcemployee, ) as isqceemployee, ifnull(a.issaleemployee, ) as issaleemployee, a.sex as sex, ifnull(c.entid, 3) as ORGANIZATION_ID, ifnull(a.noticeuser, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.sysuserid = b.sysuserid)) left join kaf_cpcorg as c on ((b.orgid = c.orgid)) order by a.sysuserid, a.userid, a.username, a.userpass, a.usertype, a.empid, a.email, a.telo, a.telh, a.mobil, a.actived, a.enablepwd, a.enablemmsg, a.feecenter, a.isplanner, a.iswhemployee, a.isbuyer, a.isqcemployee, a.issaleemployee, a.sex, c.entid)",
+		},
+		{
+			input:  "show connectors",
+			output: "show connectors",
+		},
+		{
+			input:  "show index from t1 from db",
+			output: "show index from t1 from db",
+		},
+		{
+			input:  "show index from t1",
+			output: "show index from t1",
+		},
+		{
+			input:  "show index from db.t1",
+			output: "show index from db.t1",
+		},
+		{
+			input:  "show index from db.t1 from db",
+			output: "show index from db.t1 from db",
 		},
 	}
 )

@@ -16,8 +16,11 @@ package containers
 
 import (
 	"bytes"
+	"math/rand"
+	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -93,7 +96,7 @@ func TestBatch1b(t *testing.T) {
 }
 func TestBatch2(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	vecTypes := types.MockColTypes(17)
+	vecTypes := types.MockColTypes(23)
 	bat := MockBatch(vecTypes, 10, 3, nil)
 	assert.Equal(t, 10, bat.Length())
 
@@ -109,7 +112,7 @@ func TestBatch2(t *testing.T) {
 
 func TestBatch3(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	vecTypes := types.MockColTypes(17)
+	vecTypes := types.MockColTypes(23)
 	bat := MockBatch(vecTypes, 101, 3, nil)
 	defer bat.Close()
 	bats := bat.Split(5)
@@ -124,4 +127,87 @@ func TestBatch3(t *testing.T) {
 	bats = bat2.Split(2)
 	t.Log(bats[0].Vecs[3].Length())
 	t.Log(bats[1].Vecs[3].Length())
+}
+
+func TestBatchWithPool(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	colTypes := types.MockColTypes(23)
+	seedBat := MockBatch(colTypes, 10, 3, nil)
+	defer seedBat.Close()
+
+	uid := uuid.New()
+	pool := NewVectorPool(uid.String(), 200)
+
+	bat := BuildBatchWithPool(seedBat.Attrs, colTypes, 0, pool)
+
+	err := bat.Append(seedBat)
+	assert.NoError(t, err)
+	assert.True(t, seedBat.Equals(bat))
+
+	bat.Reset()
+
+	usedCnt, _ := pool.FixedSizeUsed(false)
+	assert.True(t, usedCnt > 0)
+
+	assert.Equal(t, 0, bat.Length())
+	err = bat.Append(seedBat)
+	assert.NoError(t, err)
+	assert.True(t, seedBat.Equals(bat))
+	bat.Close()
+
+	usedCnt, _ = pool.FixedSizeUsed(false)
+	assert.Equal(t, 0, usedCnt)
+	usedCnt, _ = pool.VarlenUsed(false)
+	assert.Equal(t, 0, usedCnt)
+
+	pool.Destory()
+}
+
+func TestBatchSpliter(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	vecTypes := types.MockColTypes(23)
+	bat := MockBatch(vecTypes, 11, 3, nil)
+	defer bat.Close()
+	spliter := NewBatchSplitter(bat, 5)
+	expects_1 := []int{5, 5, 1}
+	var actuals_1 []int
+	for {
+		bat, err := spliter.Next()
+		if err != nil {
+			break
+		}
+		actuals_1 = append(actuals_1, bat.Length())
+	}
+	assert.Equal(t, expects_1, actuals_1)
+
+	bat2 := MockBatch(vecTypes, 10, 3, nil)
+	defer bat2.Close()
+	spliter = NewBatchSplitter(bat2, 5)
+	expects_2 := []int{5, 5}
+	var actuals_2 []int
+	for {
+		bat, err := spliter.Next()
+		if err != nil {
+			break
+		}
+		actuals_2 = append(actuals_2, bat.Length())
+	}
+	assert.Equal(t, expects_2, actuals_2)
+}
+
+func TestApproxSize(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	vec := MockVector(types.T_uint8.ToType(), 1024, false, nil)
+	t.Log(vec.ApproxSize())
+	defer vec.Close()
+
+	svec := MakeVector(types.T_varchar.ToType())
+	defer svec.Close()
+	sizeCnt := 0
+	for i := 0; i < 1024; i++ {
+		l := rand.Intn(100)
+		sizeCnt += l
+		svec.Append([]byte(strings.Repeat("x", l)), false)
+	}
+	t.Log(svec.ApproxSize(), sizeCnt)
 }

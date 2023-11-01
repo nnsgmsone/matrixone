@@ -21,12 +21,10 @@ import (
 )
 
 const (
-	defaultRpcMaxMessageSize        = 16 * mpool.KB
-	defaultRpcPayloadCopyBufferSize = 16 * mpool.KB
-	defaultRpcEnableChecksum        = true
-	defaultLogtailCollectInterval   = 50 * time.Millisecond
-	defaultResponseSendTimeout      = 10 * time.Second
-	defaultMaxLogtailFetchFailure   = 5
+	defaultRpcMaxMessageSize      = 16 * mpool.KB
+	defaultRpcEnableChecksum      = true
+	defaultLogtailCollectInterval = 50 * time.Millisecond
+	defaultResponseSendTimeout    = 10 * time.Second
 )
 
 type CacheCfg struct {
@@ -48,6 +46,12 @@ type CheckpointCfg struct {
 	GlobalVersionInterval     time.Duration
 	GCCheckpointInterval      time.Duration
 	DisableGCCheckpoint       bool
+	ReservedWALEntryCount     uint64
+
+	// only for test
+	// it is used to control the block rows of the checkpoint
+	BlockRows int
+	Size      int
 }
 
 type GCCfg struct {
@@ -70,22 +74,18 @@ type LogtailCfg struct {
 }
 
 type LogtailServerCfg struct {
-	RpcMaxMessageSize        int64
-	RpcPayloadCopyBufferSize int64
-	RpcEnableChecksum        bool
-	LogtailCollectInterval   time.Duration
-	ResponseSendTimeout      time.Duration
-	MaxLogtailFetchFailure   int
+	RpcMaxMessageSize      int64
+	RpcEnableChecksum      bool
+	LogtailCollectInterval time.Duration
+	ResponseSendTimeout    time.Duration
 }
 
 func NewDefaultLogtailServerCfg() *LogtailServerCfg {
 	return &LogtailServerCfg{
-		RpcMaxMessageSize:        defaultRpcMaxMessageSize,
-		RpcPayloadCopyBufferSize: defaultRpcPayloadCopyBufferSize,
-		RpcEnableChecksum:        defaultRpcEnableChecksum,
-		LogtailCollectInterval:   defaultLogtailCollectInterval,
-		ResponseSendTimeout:      defaultResponseSendTimeout,
-		MaxLogtailFetchFailure:   defaultMaxLogtailFetchFailure,
+		RpcMaxMessageSize:      defaultRpcMaxMessageSize,
+		RpcEnableChecksum:      defaultRpcEnableChecksum,
+		LogtailCollectInterval: defaultLogtailCollectInterval,
+		ResponseSendTimeout:    defaultResponseSendTimeout,
 	}
 }
 
@@ -93,16 +93,10 @@ func (l *LogtailServerCfg) Validate() {
 	if l.RpcMaxMessageSize <= 0 {
 		l.RpcMaxMessageSize = defaultRpcMaxMessageSize
 	}
-	if l.RpcPayloadCopyBufferSize <= 0 {
-		l.RpcPayloadCopyBufferSize = defaultRpcPayloadCopyBufferSize
-	}
 	if l.LogtailCollectInterval <= 0 {
 		l.LogtailCollectInterval = defaultLogtailCollectInterval
 	}
 	if l.ResponseSendTimeout <= 0 {
 		l.ResponseSendTimeout = defaultResponseSendTimeout
-	}
-	if l.MaxLogtailFetchFailure <= 0 {
-		l.MaxLogtailFetchFailure = defaultMaxLogtailFetchFailure
 	}
 }

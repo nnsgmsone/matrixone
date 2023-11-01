@@ -33,19 +33,19 @@ func TestMakeEvent(t *testing.T) {
 	require.False(t, r)
 
 	t.Run("kill query", func(t *testing.T) {
-		e, r = makeEvent(&eventReq{msg: makeSimplePacket("kill quer8y 12")})
+		e, r = makeEvent(makeSimplePacket("kill quer8y 12"))
 		require.Nil(t, e)
 		require.False(t, r)
 
-		e, r = makeEvent(&eventReq{msg: makeSimplePacket("kill query 123")})
+		e, r = makeEvent(makeSimplePacket("kill query 123"))
 		require.NotNil(t, e)
 		require.True(t, r)
 
-		e, r = makeEvent(&eventReq{msg: makeSimplePacket("kiLL Query 12")})
+		e, r = makeEvent(makeSimplePacket("kiLL Query 12"))
 		require.NotNil(t, e)
 		require.True(t, r)
 
-		e, r = makeEvent(&eventReq{msg: makeSimplePacket("set ")})
+		e, r = makeEvent(makeSimplePacket("set "))
 		require.Nil(t, e)
 		require.False(t, r)
 	})
@@ -88,73 +88,19 @@ func TestMakeEvent(t *testing.T) {
 			"set '1'",
 			"set _'1'",
 			"set _a'1'",
-			"set _a='1'",
-			"set @@@a:='1'",
 			"set @a@:='1'",
 			"set @a:='1",
 		}
 		for _, stmt := range stmtsValid {
-			e, r = makeEvent(&eventReq{msg: makeSimplePacket(stmt)})
+			e, r = makeEvent(makeSimplePacket(stmt))
 			require.NotNil(t, e)
 			require.False(t, r)
 		}
 		for _, stmt := range stmtsInvalid {
-			e, r = makeEvent(&eventReq{msg: makeSimplePacket(stmt)})
+			e, r = makeEvent(makeSimplePacket(stmt))
 			require.Nil(t, e)
 			require.False(t, r)
 		}
-	})
-
-	t.Run("suspend account", func(t *testing.T) {
-		n1, _ := net.Pipe()
-		defer n1.Close()
-
-		e, r = makeEvent(&eventReq{
-			msg: makeSimplePacket("alter account a1 suspend"),
-			dst: n1,
-		})
-		require.NotNil(t, e)
-		require.False(t, r)
-
-		e, r = makeEvent(&eventReq{
-			msg: makeSimplePacket("alter account if exists  a1 suspend"),
-			dst: n1,
-		})
-		require.NotNil(t, e)
-		require.False(t, r)
-
-		e, r = makeEvent(&eventReq{
-			msg: makeSimplePacket("alter1 account a1 suspend"),
-			dst: n1,
-		})
-		require.Nil(t, e)
-		require.False(t, r)
-	})
-
-	t.Run("drop account", func(t *testing.T) {
-		n1, _ := net.Pipe()
-		defer n1.Close()
-
-		e, r = makeEvent(&eventReq{
-			msg: makeSimplePacket("drop account a1"),
-			dst: n1,
-		})
-		require.NotNil(t, e)
-		require.False(t, r)
-
-		e, r = makeEvent(&eventReq{
-			msg: makeSimplePacket("drop account if exists a1"),
-			dst: n1,
-		})
-		require.NotNil(t, e)
-		require.False(t, r)
-
-		e, r = makeEvent(&eventReq{
-			msg: makeSimplePacket("dr1op account a1"),
-			dst: n1,
-		})
-		require.Nil(t, e)
-		require.False(t, r)
 	})
 }
 
@@ -476,16 +422,16 @@ func TestSetVarEvent(t *testing.T) {
 	}
 }
 
-func TestSuspendDropAccountEvent(t *testing.T) {
+func TestPrepareEvent(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
+	temp := os.TempDir()
 	tp := newTestProxyHandler(t)
 	defer tp.closeFn()
 
-	temp := os.TempDir()
 	addr1 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
 	require.NoError(t, os.RemoveAll(addr1))
-	cn1 := testMakeCNServer("uuid1", addr1, 10, "", labelInfo{Tenant: "t1"})
+	cn1 := testMakeCNServer("uuid1", addr1, 10, "", labelInfo{})
 	stopFn1 := startTestCNServer(t, tp.ctx, addr1, nil)
 	defer func() {
 		require.NoError(t, stopFn1())
@@ -493,7 +439,7 @@ func TestSuspendDropAccountEvent(t *testing.T) {
 
 	addr2 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
 	require.NoError(t, os.RemoveAll(addr2))
-	cn2 := testMakeCNServer("uuid2", addr2, 20, "", labelInfo{Tenant: "t2"})
+	cn2 := testMakeCNServer("uuid2", addr2, 20, "", labelInfo{})
 	stopFn2 := startTestCNServer(t, tp.ctx, addr2, nil)
 	defer func() {
 		require.NoError(t, stopFn2())
@@ -517,7 +463,7 @@ func TestSuspendDropAccountEvent(t *testing.T) {
 	clientProxy2, client2 := net.Pipe()
 	serverProxy2, _ := net.Pipe()
 
-	cc2 := newMockClientConn(clientProxy2, "t2", clientInfo{}, tp.ru, tu2)
+	cc2 := newMockClientConn(clientProxy2, "t1", clientInfo{}, tp.ru, tu2)
 	require.NotNil(t, cc2)
 	sc2 := newMockServerConn(serverProxy2)
 	require.NotNil(t, sc2)
@@ -529,8 +475,7 @@ func TestSuspendDropAccountEvent(t *testing.T) {
 		for {
 			select {
 			case e := <-tu2.reqC:
-				err := cc2.HandleEvent(ctx, e, tu2.respC)
-				require.NoError(t, err)
+				_ = cc2.HandleEvent(ctx, e, tu2.respC)
 			case r := <-tu2.respC:
 				if len(r) > 0 {
 					res <- r
@@ -542,11 +487,11 @@ func TestSuspendDropAccountEvent(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// tunnel1 is on cn1, tenant is t1.
+	// tunnel1 is on cn1, connection ID is 10.
 	_, _, err = tp.ru.Connect(cn1, testPacket, tu1)
 	require.NoError(t, err)
 
-	// tunnel2 is on cn2, tenant is t2.
+	// tunnel2 is on cn2, connection ID is 20.
 	_, _, err = tp.ru.Connect(cn2, testPacket, tu2)
 	require.NoError(t, err)
 
@@ -612,8 +557,7 @@ func TestSuspendDropAccountEvent(t *testing.T) {
 	errChan := make(chan error, 1)
 	go func() {
 		<-sendEventCh
-		// client2 send kill connection to cn1, which tenant t1 connect to.
-		if _, err := client2.Write(makeSimplePacket("alter account t1 suspend")); err != nil {
+		if _, err := client2.Write(makeSimplePacket("prepare p1 from 'select ?+?'")); err != nil {
 			errChan <- err
 			return
 		}
@@ -623,11 +567,9 @@ func TestSuspendDropAccountEvent(t *testing.T) {
 	barrierStart2 <- struct{}{}
 	barrierEnd2 <- struct{}{}
 
-	addr := string(<-res)
-	// This test case is mainly focus on if the query is route to the
-	// right cn server, but not the result of the query. So we just
-	// check the address which is handled is equal to cn1, but not cn2.
-	require.Equal(t, cn1.addr, addr)
+	// wait for result
+	<-res
+	require.Equal(t, 1, len(cc2.(*mockClientConn).prepareStmts))
 
 	select {
 	case err = <-errChan:
@@ -646,9 +588,6 @@ func TestEventType_String(t *testing.T) {
 	e3 := setVarEvent{}
 	require.Equal(t, "SetVar", e3.eventType().String())
 
-	e4 := suspendAccountEvent{}
-	require.Equal(t, "SuspendAccount", e4.eventType().String())
-
-	e5 := dropAccountEvent{}
-	require.Equal(t, "DropAccount", e5.eventType().String())
+	e6 := prepareEvent{}
+	require.Equal(t, "Prepare", e6.eventType().String())
 }

@@ -19,22 +19,24 @@ import (
 	"io"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestCacheExample(t *testing.T) {
+	ctx := context.Background()
+
 	dir := t.TempDir()
 	fs, err := NewLocalFS(
+		ctx,
 		"rc",
 		dir,
 		CacheConfig{
-			MemoryCapacity: 32 << 20,
+			MemoryCapacity: ptrTo[toml.ByteSize](32 << 20),
 		},
 		nil,
 	)
 	assert.Nil(t, err)
-
-	ctx := context.Background()
 
 	// write
 	err = fs.Write(ctx, IOVector{
@@ -55,8 +57,10 @@ func TestCacheExample(t *testing.T) {
 			{
 				Offset: 0,
 				Size:   2,
-				ToObjectBytes: func(_ io.Reader, data []byte) ([]byte, int64, error) {
-					return data, 8, nil
+				ToCacheData: func(_ io.Reader, data []byte, allocator CacheDataAllocator) (CacheData, error) {
+					cacheData := allocator.Alloc(len(data))
+					copy(cacheData.Bytes(), data)
+					return cacheData, nil
 				},
 			},
 		},
@@ -64,7 +68,7 @@ func TestCacheExample(t *testing.T) {
 	err = fs.Read(ctx, vec)
 	assert.Nil(t, err)
 
-	value := vec.Entries[0].ObjectBytes
-	assert.Equal(t, []byte("42"), value)
+	value := vec.Entries[0].CachedData
+	assert.Equal(t, []byte("42"), value.Bytes())
 
 }

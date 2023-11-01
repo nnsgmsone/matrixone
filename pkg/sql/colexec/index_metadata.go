@@ -82,7 +82,7 @@ func InsertIndexMetadata(eg engine.Engine, ctx context.Context, db engine.Databa
 		return moerr.NewInternalError(ctx, "The databaseid of '%v' is not a valid number", databaseId)
 	}
 
-	relation, err := db.Relation(ctx, tblName)
+	relation, err := db.Relation(ctx, tblName, nil)
 	if err != nil {
 		return err
 	}
@@ -143,7 +143,7 @@ func InsertOneIndexMetadata(eg engine.Engine, ctx context.Context, db engine.Dat
 	if err != nil {
 		return moerr.NewInternalError(ctx, "The databaseid of '%v' is not a valid number", databaseId)
 	}
-	relation, err := db.Relation(ctx, tblName)
+	relation, err := db.Relation(ctx, tblName, nil)
 	if err != nil {
 		return err
 	}
@@ -240,6 +240,8 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 				}
 
 				for i, part := range index.Parts {
+					//NOTE: buildInsertIndexMetaBatch function is used in UT only.
+					part = catalog.ResolveAlias(part)
 					err = vector.AppendFixed(vec_id, indexId, false, proc.Mp())
 					if err != nil {
 						return nil, err
@@ -368,7 +370,7 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 	}
 	bat.Vecs[12] = vec_prikey
 
-	bat.SetZs(bat.GetVector(0).Length(), proc.Mp())
+	bat.SetRowCount(bat.GetVector(0).Length())
 	return bat, nil
 }
 
@@ -377,7 +379,7 @@ func GetNewRelation(eg engine.Engine, dbName, tbleName string, txn client.TxnOpe
 	if err != nil {
 		return nil, err
 	}
-	tableHandler, err := dbHandler.Relation(ctx, tbleName)
+	tableHandler, err := dbHandler.Relation(ctx, tbleName, nil)
 	if err != nil {
 		return nil, err
 	}

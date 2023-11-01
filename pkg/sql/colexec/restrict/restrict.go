@@ -17,7 +17,6 @@ package restrict
 import (
 	"bytes"
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -42,16 +41,21 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	return err
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (status process.ExecStatus, err error) {
 	bat := proc.InputBatch()
 	if bat == nil {
-		return true, nil
+		return process.ExecStop, nil
 	}
-	if bat.Length() == 0 {
-		bat.Clean(proc.Mp())
+	if bat.Last() {
+		proc.SetInputBatch(bat)
+		return process.ExecNext, nil
+	}
+	if bat.IsEmpty() {
+		proc.PutBatch(bat)
 		proc.SetInputBatch(batch.EmptyBatch)
-		return false, nil
+		return process.ExecNext, nil
 	}
+
 	ap := arg.(*Argument)
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
@@ -60,7 +64,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 
 	var sels []int64
 	for i := range ap.ctr.executors {
-		if bat.Length() == 0 {
+		if bat.IsEmpty() {
 			break
 		}
 
@@ -68,21 +72,25 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		if err != nil {
 			bat.Clean(proc.Mp())
 			proc.SetInputBatch(nil)
-			return false, err
+			return process.ExecNext, err
 		}
 
 		if proc.OperatorOutofMemory(int64(vec.Size())) {
-			return false, moerr.NewOOM(proc.Ctx)
+			return process.ExecNext, moerr.NewOOM(proc.Ctx)
 		}
 		anal.Alloc(int64(vec.Size()))
 		if !vec.GetType().IsBoolean() {
-			return false, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
+			return process.ExecNext, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
 		}
 
 		bs := vector.GenerateFunctionFixedTypeParameter[bool](vec)
 		if vec.IsConst() {
 			v, null := bs.GetValue(0)
 			if null || !v {
+				bat, err = tryDupBatch(proc, bat)
+				if err != nil {
+					return process.ExecNext, err
+				}
 				bat.Shrink(nil)
 			}
 		} else {
@@ -107,6 +115,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 					}
 				}
 			}
+			bat, err = tryDupBatch(proc, bat)
+			if err != nil {
+				return process.ExecNext, err
+			}
 			bat.Shrink(sels)
 		}
 	}
@@ -114,6 +126,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	if sels != nil {
 		proc.Mp().PutSels(sels)
 	}
+
+	// bad design here. should compile a pipeline like `-> restrict -> output (just do clean work or memory reuse) -> `
+	// but not use the IsEnd flag to do the clean work.
 	if ap.IsEnd {
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(nil)
@@ -121,5 +136,18 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		anal.Output(bat, isLast)
 		proc.SetInputBatch(bat)
 	}
-	return false, nil
+	return process.ExecNext, nil
+}
+
+func tryDupBatch(proc *process.Process, bat *batch.Batch) (*batch.Batch, error) {
+	cnt := bat.GetCnt()
+	if cnt == 1 {
+		return bat, nil
+	}
+	newBat, err := bat.Dup(proc.Mp())
+	if err != nil {
+		return nil, err
+	}
+	proc.PutBatch(bat)
+	return newBat, nil
 }

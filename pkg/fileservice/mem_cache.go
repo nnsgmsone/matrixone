@@ -16,65 +16,84 @@ package fileservice
 
 import (
 	"context"
+	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice/objcache/clockobjcache"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/objcache/lruobjcache"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/checks/interval"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 type MemCache struct {
-	objCache    ObjectCache
-	ch          chan func()
+	cache       DataCache
 	counterSets []*perfcounter.CounterSet
 }
 
-func NewMemCache(opts ...MemCacheOptionFunc) *MemCache {
-	ch := make(chan func(), 65536)
-	go func() {
-		for fn := range ch {
-			fn()
+func NewMemCache(
+	dataCache DataCache,
+	counterSets []*perfcounter.CounterSet,
+) *MemCache {
+	ret := &MemCache{
+		cache:       dataCache,
+		counterSets: counterSets,
+	}
+	return ret
+}
+
+func NewLRUCache(
+	capacity int64,
+	checkOverlaps bool,
+	callbacks *CacheCallbacks,
+) *lrucache.LRU[CacheKey, CacheData] {
+
+	var overlapChecker *interval.OverlapChecker
+	if checkOverlaps {
+		overlapChecker = interval.NewOverlapChecker("MemCache_LRU")
+	}
+
+	postSetFn := func(key CacheKey, value CacheData) {
+		value.Retain()
+
+		if overlapChecker != nil {
+			if err := overlapChecker.Insert(key.Path, key.Offset, key.Offset+key.Sz); err != nil {
+				panic(err)
+			}
 		}
-	}()
 
-	initOpts := defaultMemCacheOptions()
-	for _, optFunc := range opts {
-		optFunc(&initOpts)
+		if callbacks != nil {
+			for _, fn := range callbacks.PostSet {
+				fn(key, value)
+			}
+		}
 	}
 
-	return &MemCache{
-		objCache:    initOpts.objCache,
-		ch:          ch,
-		counterSets: initOpts.counterSets,
+	postGetFn := func(key CacheKey, value CacheData) {
+		value.Retain()
+
+		if callbacks != nil {
+			for _, fn := range callbacks.PostGet {
+				fn(key, value)
+			}
+		}
 	}
-}
 
-func WithLRU(capacity int64) MemCacheOptionFunc {
-	return func(o *memCacheOptions) {
-		o.objCache = lruobjcache.New(capacity)
+	postEvictFn := func(key CacheKey, value CacheData) {
+		value.Release()
+
+		if overlapChecker != nil {
+			if err := overlapChecker.Remove(key.Path, key.Offset, key.Offset+key.Sz); err != nil {
+				panic(err)
+			}
+		}
+
+		if callbacks != nil {
+			for _, fn := range callbacks.PostEvict {
+				fn(key, value)
+			}
+		}
 	}
-}
 
-func WithClock(capacity int64) MemCacheOptionFunc {
-	return func(o *memCacheOptions) {
-		o.objCache = clockobjcache.New(capacity)
-	}
-}
-
-func WithPerfCounterSets(counterSets []*perfcounter.CounterSet) MemCacheOptionFunc {
-	return func(o *memCacheOptions) {
-		o.counterSets = append(o.counterSets, counterSets...)
-	}
-}
-
-type MemCacheOptionFunc func(*memCacheOptions)
-
-type memCacheOptions struct {
-	objCache    ObjectCache
-	counterSets []*perfcounter.CounterSet
-}
-
-func defaultMemCacheOptions() memCacheOptions {
-	return memCacheOptions{}
+	return lrucache.New[CacheKey, CacheData](capacity, postSetFn, postGetFn, postEvictFn)
 }
 
 var _ IOVectorCache = new(MemCache)
@@ -85,20 +104,22 @@ func (m *MemCache) Read(
 ) (
 	err error,
 ) {
-	if vector.NoCache {
+
+	if vector.CachePolicy.Any(SkipMemoryReads) {
 		return nil
 	}
 
 	var numHit, numRead int64
 	defer func() {
+		v2.FSReadHitMemCounter.Add(float64(numHit))
 		perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 			c.FileService.Cache.Read.Add(numRead)
 			c.FileService.Cache.Hit.Add(numHit)
 			c.FileService.Cache.Memory.Read.Add(numRead)
 			c.FileService.Cache.Memory.Hit.Add(numHit)
-			c.FileService.Cache.Memory.Capacity.Swap(m.objCache.Capacity())
-			c.FileService.Cache.Memory.Used.Swap(m.objCache.Used())
-			c.FileService.Cache.Memory.Available.Swap(m.objCache.Available())
+			c.FileService.Cache.Memory.Capacity.Swap(m.cache.Capacity())
+			c.FileService.Cache.Memory.Used.Swap(m.cache.Used())
+			c.FileService.Cache.Memory.Available.Swap(m.cache.Available())
 		}, m.counterSets...)
 	}()
 
@@ -111,30 +132,27 @@ func (m *MemCache) Read(
 		if entry.done {
 			continue
 		}
-		if entry.ToObjectBytes == nil {
-			continue
-		}
-		key := IOVectorCacheKey{
+		key := CacheKey{
 			Path:   path.File,
 			Offset: entry.Offset,
-			Size:   entry.Size,
+			Sz:     entry.Size,
 		}
-		bs, size, ok := m.objCache.Get(key, vector.Preloading)
+		bs, ok := m.cache.Get(ctx, key)
 		numRead++
 		if ok {
-			vector.Entries[i].ObjectBytes = bs
-			vector.Entries[i].ObjectSize = size
+			vector.Entries[i].CachedData = bs
 			vector.Entries[i].done = true
+			vector.Entries[i].fromCache = m
 			numHit++
-			m.cacheHit()
+			m.cacheHit(time.Nanosecond)
 		}
 	}
 
 	return
 }
 
-func (m *MemCache) cacheHit() {
-	FSProfileHandler.AddSample()
+func (m *MemCache) cacheHit(duration time.Duration) {
+	FSProfileHandler.AddSample(duration)
 }
 
 func (m *MemCache) Update(
@@ -142,7 +160,8 @@ func (m *MemCache) Update(
 	vector *IOVector,
 	async bool,
 ) error {
-	if vector.NoCache {
+
+	if vector.CachePolicy.Any(SkipMemoryWrites) {
 		return nil
 	}
 
@@ -152,27 +171,24 @@ func (m *MemCache) Update(
 	}
 
 	for _, entry := range vector.Entries {
-		if entry.ObjectBytes == nil {
+		if entry.CachedData == nil {
 			continue
 		}
-		key := IOVectorCacheKey{
+		if entry.fromCache == m {
+			continue
+		}
+
+		key := CacheKey{
 			Path:   path.File,
 			Offset: entry.Offset,
-			Size:   entry.Size,
+			Sz:     entry.Size,
 		}
-		if async {
-			obj := entry.ObjectBytes // copy from loop variable
-			objSize := entry.ObjectSize
-			m.ch <- func() {
-				m.objCache.Set(key, obj, objSize, vector.Preloading)
-			}
-		} else {
-			m.objCache.Set(key, entry.ObjectBytes, entry.ObjectSize, vector.Preloading)
-		}
+
+		m.cache.Set(ctx, key, entry.CachedData)
 	}
 	return nil
 }
 
 func (m *MemCache) Flush() {
-	m.objCache.Flush()
+	m.cache.Flush()
 }

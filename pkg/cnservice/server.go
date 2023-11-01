@@ -18,12 +18,14 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -33,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/gossip"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -40,11 +43,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
+	"github.com/matrixorigin/matrixone/pkg/udf"
+	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
+	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"go.uber.org/zap"
@@ -54,11 +62,15 @@ func NewService(
 	cfg *Config,
 	ctx context.Context,
 	fileService fileservice.FileService,
+	gossipNode *gossip.Node,
 	options ...Option,
 ) (Service, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+
+	configKVMap, _ := dumpCnConfig(*cfg)
+	options = append(options, WithConfigData(configKVMap))
 
 	// get metadata fs
 	metadataFS, err := fileservice.Get[fileservice.ReplaceableFileService](fileService, defines.LocalFileServiceName)
@@ -80,12 +92,25 @@ func NewService(
 		metadataFS:  metadataFS,
 		etlFS:       etlFS,
 		fileService: fileService,
+		sessionMgr:  queryservice.NewSessionManager(),
+		addressMgr:  address.NewAddressManager(cfg.ServiceHost, cfg.PortBase),
+		gossipNode:  gossipNode,
 	}
+	srv.registerServices()
+	if _, err = srv.getHAKeeperClient(); err != nil {
+		return nil, err
+	}
+	srv.initQueryService()
+
 	for _, opt := range options {
 		opt(srv)
 	}
 	srv.logger = logutil.Adjust(srv.logger)
 	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
+
+	if err := srv.initCacheServer(); err != nil {
+		return nil, err
+	}
 
 	if err := srv.initMetadata(); err != nil {
 		return nil, err
@@ -97,16 +122,12 @@ func NewService(
 		},
 	}
 
-	if _, err = srv.getHAKeeperClient(); err != nil {
-		return nil, err
-	}
-
 	pu := config.NewParameterUnit(
 		&cfg.Frontend,
 		nil,
 		nil,
 		engine.Nodes{engine.Node{
-			Addr: cfg.ServiceAddress,
+			Addr: srv.pipelineServiceServiceAddr(),
 		}})
 	pu.HAKeeperClient = srv._hakeeperClient
 	cfg.Frontend.SetDefaultValues()
@@ -114,19 +135,39 @@ func NewService(
 	frontend.InitServerVersion(pu.SV.MoVersion)
 
 	// Init the autoIncrCacheManager after the default value is set before the init of moserver.
-	srv.aicm = &defines.AutoIncrCacheManager{AutoIncrCaches: make(map[string]defines.AutoIncrCache), Mu: &sync.Mutex{}, MaxSize: pu.SV.AutoIncrCacheSize}
-
-	if _, err = srv.getHAKeeperClient(); err != nil {
-		return nil, err
+	srv.aicm = &defines.AutoIncrCacheManager{
+		AutoIncrCaches: make(map[string]defines.AutoIncrCache),
+		Mu:             &sync.Mutex{},
+		MaxSize:        pu.SV.AutoIncrCacheSize,
 	}
+
+	// init UdfService
+	var udfServices []udf.Service
+	// add python client to handle python udf
+	if srv.cfg.PythonUdfClient.ServerAddress != "" {
+		pc, err := pythonservice.NewClient(srv.cfg.PythonUdfClient)
+		if err != nil {
+			panic(err)
+		}
+		udfServices = append(udfServices, pc)
+	}
+	srv.udfService, err = udf.NewService(udfServices...)
+	if err != nil {
+		panic(err)
+	}
+
 	srv.pu = pu
 	srv.pu.LockService = srv.lockService
 	srv.pu.HAKeeperClient = srv._hakeeperClient
+	srv.pu.QueryService = srv.queryService
+	srv.pu.UdfService = srv.udfService
+	srv._txnClient = pu.TxnClient
+
 	if err = srv.initMOServer(ctx, pu, srv.aicm); err != nil {
 		return nil, err
 	}
 
-	server, err := morpc.NewRPCServer("cn-server", cfg.ListenAddress,
+	server, err := morpc.NewRPCServer(PipelineService.String(), srv.pipelineServiceListenAddr(),
 		morpc.NewMessageCodec(srv.acquireMessage,
 			morpc.WithCodecMaxBodySize(int(cfg.RPC.MaxMessageSize))),
 		morpc.WithServerLogger(srv.logger),
@@ -146,7 +187,6 @@ func NewService(
 	server.RegisterRequestHandler(srv.handleRequest)
 	srv.server = server
 	srv.storeEngine = pu.StorageEngine
-	srv._txnClient = pu.TxnClient
 
 	srv.requestHandler = func(ctx context.Context,
 		cnAddr string,
@@ -155,6 +195,9 @@ func NewService(
 		engine engine.Engine,
 		fService fileservice.FileService,
 		lockService lockservice.LockService,
+		queryService queryservice.QueryService,
+		hakeeper logservice.CNHAKeeperClient,
+		udfService udf.Service,
 		cli client.TxnClient,
 		aicm *defines.AutoIncrCacheManager,
 		messageAcquirer func() morpc.Message) error {
@@ -165,14 +208,34 @@ func NewService(
 	}
 
 	srv.initCtlService()
+
+	// TODO: global client need to refactor
+	err = cnclient.NewCNClient(
+		srv.pipelineServiceServiceAddr(),
+		&cnclient.ClientConfig{RPC: cfg.RPC})
+	if err != nil {
+		panic(err)
+	}
+
 	return srv, nil
 }
 
 func (s *service) Start() error {
 	s.initTaskServiceHolder()
+	s.initSqlWriterFactory()
+
+	if err := s.queryService.Start(); err != nil {
+		return err
+	}
 
 	if err := s.ctlservice.Start(); err != nil {
 		return err
+	}
+
+	if s.cacheServer != nil {
+		if err := s.cacheServer.Start(); err != nil {
+			return err
+		}
 	}
 
 	err := s.runMoServer()
@@ -200,7 +263,30 @@ func (s *service) Close() error {
 	}
 	// stop I/O pipeline
 	blockio.Stop()
+	if err := s.gossipNode.Leave(time.Second); err != nil {
+		return err
+	}
+	if s.cacheServer != nil {
+		if err := s.cacheServer.Close(); err != nil {
+			return err
+		}
+	}
 	return s.server.Close()
+}
+
+// ID implements the frontend.BaseService interface.
+func (s *service) ID() string {
+	return s.cfg.UUID
+}
+
+// SQLAddress implements the frontend.BaseService interface.
+func (s *service) SQLAddress() string {
+	return s.cfg.SQLAddress
+}
+
+// SessionMgr implements the frontend.BaseService interface.
+func (s *service) SessionMgr() *queryservice.SessionManager {
+	return s.sessionMgr
 }
 
 func (s *service) stopFrontend() error {
@@ -237,6 +323,11 @@ func (s *service) stopRPCs() error {
 	}
 	if s.ctlservice != nil {
 		if err := s.ctlservice.Close(); err != nil {
+			return err
+		}
+	}
+	if s.queryService != nil {
+		if err := s.queryService.Close(); err != nil {
 			return err
 		}
 	}
@@ -280,12 +371,15 @@ func (s *service) handleRequest(
 	go func() {
 		defer value.Cancel()
 		s.requestHandler(ctx,
-			s.cfg.ServiceAddress,
+			s.pipelineServiceServiceAddr(),
 			req,
 			cs,
 			s.storeEngine,
 			s.fileService,
 			s.lockService,
+			s.queryService,
+			s._hakeeperClient,
+			s.udfService,
 			s._txnClient,
 			s.aicm,
 			s.acquireMessage)
@@ -308,7 +402,7 @@ func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit, ai
 		return err
 	}
 
-	s.createMOServer(cancelMoServerCtx, pu, aicm)
+	s.createMOServer(cancelMoServerCtx, pu, aicm, s)
 	return nil
 }
 
@@ -342,10 +436,15 @@ func (s *service) initEngine(
 	return s.bootstrap()
 }
 
-func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterUnit, aicm *defines.AutoIncrCacheManager) {
+func (s *service) createMOServer(
+	inputCtx context.Context,
+	pu *config.ParameterUnit,
+	aicm *defines.AutoIncrCacheManager,
+	baseService frontend.BaseService,
+) {
 	address := fmt.Sprintf("%s:%d", pu.SV.Host, pu.SV.Port)
 	moServerCtx := context.WithValue(inputCtx, config.ParameterUnitKey, pu)
-	s.mo = frontend.NewMOServer(moServerCtx, address, pu, aicm)
+	s.mo = frontend.NewMOServer(moServerCtx, address, pu, aicm, baseService)
 }
 
 func (s *service) runMoServer() error {
@@ -384,14 +483,14 @@ func (s *service) initClusterService() {
 func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
 	// handleTemp is used to manipulate memorystorage stored for temporary table created by sessions.
 	// processing of temporary table is currently on local, so we need to add a WithLocalDispatch logic to service.
-	handleTemp := func(d metadata.DNShard) rpc.TxnRequestHandleFunc {
-		if d.Address != defines.TEMPORARY_TABLE_DN_ADDR {
+	handleTemp := func(d metadata.TNShard) rpc.TxnRequestHandleFunc {
+		if d.Address != defines.TEMPORARY_TABLE_TN_ADDR {
 			return nil
 		}
 
 		// read, write, commit and rollback for temporary tables
 		return func(ctx context.Context, req *txn.TxnRequest, resp *txn.TxnResponse) (err error) {
-			storage, ok := ctx.Value(defines.TemporaryDN{}).(*memorystorage.Storage)
+			storage, ok := ctx.Value(defines.TemporaryTN{}).(*memorystorage.Storage)
 			if !ok {
 				panic("tempStorage should never be nil")
 			}
@@ -481,27 +580,37 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 		var opts []client.TxnClientCreateOption
 		opts = append(opts,
 			client.WithTimestampWaiter(s.timestampWaiter))
-		if s.cfg.Txn.EnableSacrificingFreshness {
+		if s.cfg.Txn.EnableSacrificingFreshness == 1 {
 			opts = append(opts,
 				client.WithEnableSacrificingFreshness())
 		}
-		if s.cfg.Txn.EnableCNBasedConsistency {
+		if s.cfg.Txn.EnableCNBasedConsistency == 1 {
 			opts = append(opts,
 				client.WithEnableCNBasedConsistency())
 		}
-		if s.cfg.Txn.EnableRefreshExpression {
+		if s.cfg.Txn.EnableRefreshExpression == 1 {
 			opts = append(opts,
 				client.WithEnableRefreshExpression())
 		}
-		if s.cfg.Txn.EnableLeakCheck {
+		if s.cfg.Txn.EnableLeakCheck == 1 {
 			opts = append(opts, client.WithEnableLeakCheck(
 				s.cfg.Txn.MaxActiveAges.Duration,
 				func(txnID []byte, createAt time.Time, createBy string) {
+					// dump all goroutines to stderr
+					profile.ProfileGoroutine(os.Stderr, 2)
 					runtime.DefaultRuntime().Logger().Fatal("found leak txn",
 						zap.String("txn-id", hex.EncodeToString(txnID)),
 						zap.Time("create-at", createAt),
 						zap.String("create-by", createBy))
 				}))
+		}
+		if s.cfg.Txn.Limit > 0 {
+			opts = append(opts,
+				client.WithTxnLimit(s.cfg.Txn.Limit))
+		}
+		if s.cfg.Txn.MaxActive > 0 {
+			opts = append(opts,
+				client.WithMaxActiveTxn(s.cfg.Txn.MaxActive))
 		}
 		opts = append(opts, client.WithLockService(s.lockService))
 		c = client.NewTxnClient(
@@ -514,9 +623,10 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 }
 
 func (s *service) initLockService() {
-	cfg := s.cfg.getLockServiceConfig()
+	cfg := s.getLockServiceConfig()
 	s.lockService = lockservice.NewLockService(cfg)
 	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.LockService, s.lockService)
+	lockservice.SetLockServiceByServiceID(s.lockService.GetServiceID(), s.lockService)
 }
 
 // put the waiting-next type msg into client session's cache and return directly
@@ -564,11 +674,14 @@ func handleAssemblePipeline(ctx context.Context, message morpc.Message, cs morpc
 
 func (s *service) initInternalSQlExecutor(mp *mpool.MPool) {
 	exec := compile.NewSQLExecutor(
-		s.cfg.ServiceAddress,
+		s.pipelineServiceServiceAddr(),
 		s.storeEngine,
 		mp,
 		s._txnClient,
 		s.fileService,
+		s.queryService,
+		s._hakeeperClient,
+		s.udfService,
 		s.aicm)
 	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.InternalSQLExecutor, exec)
 }
@@ -585,29 +698,33 @@ func (s *service) initIncrService() {
 		panic(err)
 	}
 	incrService := incrservice.NewIncrService(
+		s.cfg.UUID,
 		store,
 		s.cfg.AutoIncrement)
 	runtime.ProcessLevelRuntime().SetGlobalVariables(
 		runtime.AutoIncrmentService,
 		incrService)
+	incrservice.SetAutoIncrementServiceByID(s.cfg.UUID, incrService)
 }
 
 func (s *service) bootstrap() error {
 	s.initIncrService()
-	return s.stopper.RunTask(func(ctx context.Context) {
-		rt := runtime.ProcessLevelRuntime()
-		v, ok := rt.GetGlobalVariables(runtime.InternalSQLExecutor)
-		if !ok {
-			panic("missing internal sql executor")
-		}
+	rt := runtime.ProcessLevelRuntime()
+	v, ok := rt.GetGlobalVariables(runtime.InternalSQLExecutor)
+	if !ok {
+		panic("missing internal sql executor")
+	}
 
-		ctx, cancel := context.WithTimeout(ctx, time.Second*10)
+	b := bootstrap.NewBootstrapper(
+		&locker{hakeeperClient: s._hakeeperClient},
+		rt.Clock(),
+		s._txnClient,
+		v.(executor.SQLExecutor))
+
+	return s.stopper.RunTask(func(ctx context.Context) {
+		ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 		defer cancel()
-		b := bootstrap.NewBootstrapper(
-			&locker{hakeeperClient: s._hakeeperClient},
-			rt.Clock(),
-			v.(executor.SQLExecutor))
-		// bootstrap can not failed. We panic here to make sure the service can not start.
+		// bootstrap cannot fail. We panic here to make sure the service can not start.
 		// If bootstrap failed, need clean all data to retry.
 		if err := b.Bootstrap(ctx); err != nil {
 			panic(err)

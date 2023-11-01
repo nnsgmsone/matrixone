@@ -25,7 +25,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
-	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -148,19 +147,6 @@ func (h *txnRelation) GetMeta() any { return h.table.entry }
 // Schema return schema in txnTable, not the lastest schema in TableEntry
 func (h *txnRelation) Schema() any { return h.table.GetLocalSchema() }
 
-func (h *txnRelation) Rows() int64 {
-	if h.table.entry.GetDB().IsSystemDB() && h.table.entry.IsVirtual() {
-		if h.table.GetLocalSchema().Name == pkgcatalog.MO_DATABASE {
-			return int64(h.table.entry.GetCatalog().CoarseDBCnt())
-		} else if h.table.GetLocalSchema().Name == pkgcatalog.MO_TABLES {
-			return int64(h.table.entry.GetCatalog().CoarseTableCnt())
-		} else if h.table.GetLocalSchema().Name == pkgcatalog.MO_COLUMNS {
-			return int64(h.table.entry.GetCatalog().CoarseColumnCnt())
-		}
-		panic("logic error")
-	}
-	return int64(h.table.entry.GetRows())
-}
 func (h *txnRelation) GetCardinality(attr string) int64 { return 0 }
 
 func (h *txnRelation) BatchDedup(col containers.Vector) error {
@@ -174,8 +160,9 @@ func (h *txnRelation) Append(ctx context.Context, data *containers.Batch) error 
 	return h.Txn.GetStore().Append(ctx, h.table.entry.GetDB().ID, h.table.entry.GetID(), data)
 }
 
-func (h *txnRelation) AddBlksWithMetaLoc(metaLocs []objectio.Location) error {
+func (h *txnRelation) AddBlksWithMetaLoc(ctx context.Context, metaLocs []objectio.Location) error {
 	return h.Txn.GetStore().AddBlksWithMetaLoc(
+		ctx,
 		h.table.entry.GetDB().ID,
 		h.table.entry.GetID(),
 		metaLocs,
@@ -214,12 +201,12 @@ func (h *txnRelation) MakeBlockIt() handle.BlockIt {
 	return newRelationBlockIt(h)
 }
 
-func (h *txnRelation) GetByFilter(filter *handle.Filter) (*common.ID, uint32, error) {
-	return h.Txn.GetStore().GetByFilter(h.table.entry.GetDB().ID, h.table.entry.GetID(), filter)
+func (h *txnRelation) GetByFilter(ctx context.Context, filter *handle.Filter) (*common.ID, uint32, error) {
+	return h.Txn.GetStore().GetByFilter(ctx, h.table.entry.GetDB().ID, h.table.entry.GetID(), filter)
 }
 
-func (h *txnRelation) GetValueByFilter(filter *handle.Filter, col int) (v any, isNull bool, err error) {
-	id, row, err := h.GetByFilter(filter)
+func (h *txnRelation) GetValueByFilter(ctx context.Context, filter *handle.Filter, col int) (v any, isNull bool, err error) {
+	id, row, err := h.GetByFilter(ctx, filter)
 	if err != nil {
 		return
 	}
@@ -227,12 +214,19 @@ func (h *txnRelation) GetValueByFilter(filter *handle.Filter, col int) (v any, i
 	return
 }
 
-func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any, isNull bool) (err error) {
-	id, row, err := h.table.GetByFilter(filter)
+func (h *txnRelation) UpdateByFilter(ctx context.Context, filter *handle.Filter, col uint16, v any, isNull bool) (err error) {
+	id, row, err := h.table.GetByFilter(ctx, filter)
 	if err != nil {
 		return
 	}
 	schema := h.table.GetLocalSchema()
+	pkDef := schema.GetPrimaryKey()
+	pkVec := containers.MakeVector(pkDef.Type)
+	pkVal, _, err := h.table.GetValue(ctx, id, row, uint16(pkDef.Idx))
+	if err != nil {
+		return err
+	}
+	pkVec.Append(pkVal, false)
 	bat := containers.NewBatch()
 	defer bat.Close()
 	for _, def := range schema.ColDefs {
@@ -245,7 +239,7 @@ func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any, i
 			colVal = v
 			colValIsNull = isNull
 		} else {
-			colVal, colValIsNull, err = h.table.GetValue(context.Background(), id, row, uint16(def.Idx))
+			colVal, colValIsNull, err = h.table.GetValue(ctx, id, row, uint16(def.Idx))
 			if err != nil {
 				return err
 			}
@@ -254,30 +248,39 @@ func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any, i
 		vec.Append(colVal, colValIsNull)
 		bat.AddVector(def.Name, vec)
 	}
-	if err = h.table.RangeDelete(id, row, row, handle.DT_Normal); err != nil {
+	if err = h.table.RangeDelete(id, row, row, pkVec, handle.DT_Normal); err != nil {
 		return
 	}
-	err = h.Append(context.Background(), bat)
+	err = h.Append(ctx, bat)
 	// FIXME!: We need to revert previous delete if append fails.
 	return
 }
 
-func (h *txnRelation) DeleteByFilter(filter *handle.Filter) (err error) {
-	id, row, err := h.GetByFilter(filter)
+func (h *txnRelation) DeleteByFilter(ctx context.Context, filter *handle.Filter) (err error) {
+	id, row, err := h.GetByFilter(ctx, filter)
 	if err != nil {
 		return
 	}
 	return h.RangeDelete(id, row, row, handle.DT_Normal)
 }
 
-func (h *txnRelation) DeleteByPhyAddrKeys(keys containers.Vector) (err error) {
+func (h *txnRelation) DeleteByPhyAddrKeys(keys containers.Vector, pkVec containers.Vector) (err error) {
 	id := h.table.entry.AsCommonID()
 	var row uint32
+	var pk containers.Vector
 	err = containers.ForeachVectorWindow(
 		keys, 0, keys.Length(),
-		func(rid types.Rowid, _ bool, _ int) (err error) {
+		func(rid types.Rowid, _ bool, offset int) (err error) {
 			id.BlockID, row = rid.Decode()
-			err = h.Txn.GetStore().RangeDelete(id, row, row, handle.DT_Normal)
+			if pkVec != nil && pkVec.Length() > 0 {
+				pk = pkVec.Window(offset, 1)
+			}
+			err = h.Txn.GetStore().RangeDelete(
+				id,
+				row,
+				row,
+				pk,
+				handle.DT_Normal)
 			return
 		}, nil, nil)
 	return
@@ -289,11 +292,32 @@ func (h *txnRelation) DeleteByPhyAddrKey(key any) error {
 	bid, row := rid.Decode()
 	id := h.table.entry.AsCommonID()
 	id.BlockID = bid
-	return h.Txn.GetStore().RangeDelete(id, row, row, handle.DT_Normal)
+	schema := h.table.GetLocalSchema()
+	pkDef := schema.GetPrimaryKey()
+	pkVec := containers.MakeVector(pkDef.Type)
+	val, _, err := h.table.GetValue(h.table.store.ctx, id, row, uint16(pkDef.Idx))
+	if err != nil {
+		return err
+	}
+	pkVec.Append(val, false)
+	return h.Txn.GetStore().RangeDelete(id, row, row, pkVec, handle.DT_Normal)
 }
 
 func (h *txnRelation) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) error {
-	return h.Txn.GetStore().RangeDelete(id, start, end, dt)
+	schema := h.table.GetLocalSchema()
+	pkDef := schema.GetPrimaryKey()
+	pkVec := containers.MakeVector(pkDef.Type)
+	for row := start; row <= end; row++ {
+		pkVal, _, err := h.table.GetValue(h.table.store.GetContext(), id, row, uint16(pkDef.Idx))
+		if err != nil {
+			return err
+		}
+		pkVec.Append(pkVal, false)
+	}
+	return h.Txn.GetStore().RangeDelete(id, start, end, pkVec, dt)
+}
+func (h *txnRelation) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Location) (ok bool, err error) {
+	return h.Txn.GetStore().TryDeleteByDeltaloc(id, deltaloc)
 }
 
 // Only used by test.

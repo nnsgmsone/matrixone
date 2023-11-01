@@ -15,6 +15,7 @@
 package db
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -42,15 +43,23 @@ type Replayer struct {
 	wg            sync.WaitGroup
 	applyDuration time.Duration
 	txnCmdChan    chan *txnbase.TxnCmd
+	readCount     int
+	applyCount    int
+
+	lsn            uint64
+	enableLSNCheck bool
 }
 
-func newReplayer(dataFactory *tables.DataFactory, db *DB, ckpedTS types.TS) *Replayer {
+func newReplayer(dataFactory *tables.DataFactory, db *DB, ckpedTS types.TS, lsn uint64, enableLSNCheck bool) *Replayer {
 	return &Replayer{
 		DataFactory: dataFactory,
 		db:          db,
 		ckpedTS:     ckpedTS,
-		wg:          sync.WaitGroup{},
-		txnCmdChan:  make(chan *txnbase.TxnCmd, 100),
+		lsn:         lsn,
+		// for ckp version less than 7, lsn is always 0 and lsnCheck is disable
+		enableLSNCheck: enableLSNCheck,
+		wg:             sync.WaitGroup{},
+		txnCmdChan:     make(chan *txnbase.TxnCmd, 100),
 	}
 }
 
@@ -89,12 +98,17 @@ func (replayer *Replayer) Replay() {
 	replayer.wg.Wait()
 	logutil.Info("open-tae", common.OperationField("replay"),
 		common.OperandField("wal"),
-		common.AnyField("apply logentries cost", replayer.applyDuration))
+		common.AnyField("apply logentries cost", replayer.applyDuration),
+		common.AnyField("read count", replayer.readCount),
+		common.AnyField("apply count", replayer.applyCount))
 }
 
 func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte, typ uint16, info any) {
 	replayer.once.Do(replayer.PreReplayWal)
 	if group != wal.GroupPrepare && group != wal.GroupC {
+		return
+	}
+	if !replayer.checkLSN(lsn) {
 		return
 	}
 	head := objectio.DecodeIOEntryHeader(payload)
@@ -130,24 +144,38 @@ func (replayer *Replayer) OnTimeStamp(ts types.TS) {
 		replayer.maxTs = ts
 	}
 }
-
+func (replayer *Replayer) checkLSN(lsn uint64) (needReplay bool) {
+	if !replayer.enableLSNCheck {
+		return true
+	}
+	if lsn <= replayer.lsn {
+		return false
+	}
+	if lsn == replayer.lsn+1 {
+		replayer.lsn++
+		return true
+	}
+	panic(fmt.Sprintf("invalid lsn %d, current lsn %d", lsn, replayer.lsn))
+}
 func (replayer *Replayer) OnReplayTxn(cmd txnif.TxnCmd, lsn uint64) {
 	var err error
+	replayer.readCount++
 	txnCmd := cmd.(*txnbase.TxnCmd)
 	if txnCmd.PrepareTS.LessEq(replayer.maxTs) {
 		return
 	}
-	txn := txnimpl.MakeReplayTxn(replayer.db.TxnMgr, txnCmd.TxnCtx, lsn,
+	replayer.applyCount++
+	txn := txnimpl.MakeReplayTxn(replayer.db.Runtime.Options.Ctx, replayer.db.TxnMgr, txnCmd.TxnCtx, lsn,
 		txnCmd, replayer, replayer.db.Catalog, replayer.DataFactory, replayer.db.Wal)
 	if err = replayer.db.TxnMgr.OnReplayTxn(txn); err != nil {
 		panic(err)
 	}
 	if txn.Is2PC() {
-		if _, err = txn.Prepare(); err != nil {
+		if _, err = txn.Prepare(replayer.db.Opts.Ctx); err != nil {
 			panic(err)
 		}
 	} else {
-		if err = txn.Commit(); err != nil {
+		if err = txn.Commit(replayer.db.Opts.Ctx); err != nil {
 			panic(err)
 		}
 	}

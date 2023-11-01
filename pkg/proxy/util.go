@@ -18,24 +18,10 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
-	"regexp"
+	"net"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/frontend"
-)
-
-var (
-	begin    = "[bB][eE][gG][iI][nN]"
-	commit   = "[cC][oO][mM][mM][iI][tT]"
-	rollback = "[rR][oO][lL][lL][bB][aA][cC][kK]"
-
-	beginPattern = fmt.Sprintf("^%s(%s)%s%s%s$",
-		spaceAtLeastZero, begin, spaceAtLeastZero, end, spaceAtLeastZero)
-	commitPattern = fmt.Sprintf("^%s(%s)%s%s%s$",
-		spaceAtLeastZero, commit, spaceAtLeastZero, end, spaceAtLeastZero)
-	rollbackPattern = fmt.Sprintf("^%s(%s)%s%s%s$",
-		spaceAtLeastZero, rollback, spaceAtLeastZero, end, spaceAtLeastZero)
 )
 
 // makeOKPacket returns an OK packet
@@ -50,6 +36,13 @@ func makeOKPacket() []byte {
 	return data
 }
 
+func isCmdQuery(p []byte) bool {
+	if len(p) > 4 && p[4] == byte(cmdQuery) {
+		return true
+	}
+	return false
+}
+
 // isOKPacket returns true if []byte is a MySQL OK packet.
 func isOKPacket(p []byte) bool {
 	if len(p) > 4 && p[4] == 0 {
@@ -60,7 +53,7 @@ func isOKPacket(p []byte) bool {
 
 // isOKPacket returns true if []byte is a MySQL EOF packet.
 func isEOFPacket(p []byte) bool {
-	if len(p) > 4 && p[0] == 0xFE {
+	if len(p) > 4 && p[4] == 0xFE {
 		return true
 	}
 	return false
@@ -126,24 +119,6 @@ func pickTunnels(tuns tunnelSet, n int) []*tunnel {
 		}
 	}
 	return ret
-}
-
-// isStmtBegin returns true iff it is begin statement.
-func isStmtBegin(c []byte) bool {
-	matched, _ := regexp.MatchString(beginPattern, string(c))
-	return matched
-}
-
-// isStmtCommit returns true iff it is commit statement.
-func isStmtCommit(c []byte) bool {
-	matched, _ := regexp.MatchString(commitPattern, string(c))
-	return matched
-}
-
-// isStmtRollback returns true iff it is rollback statement.
-func isStmtRollback(c []byte) bool {
-	matched, _ := regexp.MatchString(rollbackPattern, string(c))
-	return matched
 }
 
 // sortMap sorts a complex map instance.
@@ -218,4 +193,14 @@ func rawHash(t any) string {
 	}
 	hash := md5.Sum(sortBytes)
 	return hex.EncodeToString(hash[:])
+}
+
+// containIP returns if the list of net.IPNet contains the IP address.
+func containIP(ipNetList []*net.IPNet, ip net.IP) bool {
+	for _, ipNet := range ipNetList {
+		if ipNet.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }

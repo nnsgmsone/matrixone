@@ -17,13 +17,14 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"testing"
+
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/assert"
-	"testing"
 )
 
 func TestBuildTable_AlterView(t *testing.T) {
@@ -78,8 +79,9 @@ func TestBuildTable_AlterView(t *testing.T) {
 	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
 	ctx.EXPECT().Stats(gomock.Any()).Return(false).AnyTimes()
 	ctx.EXPECT().GetBuildingAlterView().Return(true, "db", "v").AnyTimes()
+	ctx.EXPECT().DatabaseExists(gomock.Any()).Return(true).AnyTimes()
 
-	qb := NewQueryBuilder(plan.Query_SELECT, ctx)
+	qb := NewQueryBuilder(plan.Query_SELECT, ctx, false)
 	tb := &tree.TableName{}
 	tb.SchemaName = "db"
 	tb.ObjectName = "v"

@@ -18,7 +18,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -48,7 +47,7 @@ func NewScheduler(taskServiceGetter func() taskservice.TaskService, cfg hakeeper
 }
 
 func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
-	workingCN, expiredCN := parseCNStores(s.cfg, cnState, currentTick)
+	workingCN := getWorkingCNs(s.cfg, cnState, currentTick)
 
 	runningTasks := s.queryTasks(task.TaskStatus_Running)
 	createdTasks := s.queryTasks(task.TaskStatus_Created)
@@ -62,35 +61,18 @@ func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 		}
 	}
 
-	runtime.ProcessLevelRuntime().Logger().Debug("task schedule query tasks", zap.Int("created", len(createdTasks)),
+	runtime.ProcessLevelRuntime().Logger().Debug("task schedule query tasks",
+		zap.Int("created", len(createdTasks)),
 		zap.Int("running", len(runningTasks)))
 	if len(tasks) == 0 {
 		return
 	}
-	orderedCN := getCNOrdered(runningTasks, workingCN)
-
+	orderedCN, expiredTasks := getCNOrderedAndExpiredTasks(runningTasks, workingCN)
+	runtime.ProcessLevelRuntime().Logger().Info("task schedule query tasks",
+		zap.Int("created", len(createdTasks)),
+		zap.Int("expired", len(expiredTasks)))
 	s.allocateTasks(createdTasks, orderedCN)
-
-	expiredTasks := getExpiredTasks(runningTasks, expiredCN)
 	s.allocateTasks(expiredTasks, orderedCN)
-}
-
-func (s *scheduler) Create(ctx context.Context, tasks []task.TaskMetadata) error {
-	ts := s.taskServiceGetter()
-	if ts == nil {
-		return moerr.NewInternalError(ctx, "failed to get task service")
-	}
-	if err := ts.CreateBatch(ctx, tasks); err != nil {
-		runtime.ProcessLevelRuntime().Logger().Error("failed to create new tasks", zap.Error(err))
-		return err
-	}
-	runtime.ProcessLevelRuntime().Logger().Debug("new tasks created", zap.Int("created", len(tasks)))
-	v, err := ts.QueryTask(ctx)
-	if len(v) == 0 && err == nil {
-		panic("cannot read created tasks")
-	}
-	runtime.ProcessLevelRuntime().Logger().Debug("new tasks created, query", zap.Int("created", len(v)), zap.Error(err))
-	return nil
 }
 
 func (s *scheduler) StartScheduleCronTask() {
@@ -105,15 +87,17 @@ func (s *scheduler) StopScheduleCronTask() {
 	}
 }
 
-func (s *scheduler) queryTasks(status task.TaskStatus) []task.Task {
+func (s *scheduler) queryTasks(status task.TaskStatus) []task.AsyncTask {
 	ts := s.taskServiceGetter()
 	if ts == nil {
+		runtime.ProcessLevelRuntime().Logger().Error("task service is nil",
+			zap.String("status", status.String()))
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), taskSchedulerDefaultTimeout)
 	defer cancel()
 
-	tasks, err := ts.QueryTask(ctx, taskservice.WithTaskStatusCond(taskservice.EQ, status))
+	tasks, err := ts.QueryAsyncTask(ctx, taskservice.WithTaskStatusCond(status))
 	if err != nil {
 		runtime.ProcessLevelRuntime().Logger().Error("failed to query tasks",
 			zap.String("status", status.String()),
@@ -123,7 +107,7 @@ func (s *scheduler) queryTasks(status task.TaskStatus) []task.Task {
 	return tasks
 }
 
-func (s *scheduler) allocateTasks(tasks []task.Task, orderedCN *cnMap) {
+func (s *scheduler) allocateTasks(tasks []task.AsyncTask, orderedCN *cnMap) {
 	ts := s.taskServiceGetter()
 	if ts == nil {
 		return
@@ -134,7 +118,7 @@ func (s *scheduler) allocateTasks(tasks []task.Task, orderedCN *cnMap) {
 	}
 }
 
-func (s *scheduler) allocateTask(ts taskservice.TaskService, t task.Task, orderedCN *cnMap) {
+func (s *scheduler) allocateTask(ts taskservice.TaskService, t task.AsyncTask, orderedCN *cnMap) {
 	runner := orderedCN.min()
 	if runner == "" {
 		runtime.ProcessLevelRuntime().Logger().Warn("no CN available")
@@ -151,25 +135,31 @@ func (s *scheduler) allocateTask(ts taskservice.TaskService, t task.Task, ordere
 			zap.Error(err))
 		return
 	}
+	runtime.ProcessLevelRuntime().Logger().Info("task allocated",
+		zap.Uint64("task-id", t.ID),
+		zap.String("task-metadata-id", t.Metadata.ID),
+		zap.String("task-runner", runner))
 	orderedCN.inc(t.TaskRunner)
 }
 
-func getExpiredTasks(tasks []task.Task, expiredCN []string) (expired []task.Task) {
-	for _, t := range tasks {
-		if contains(expiredCN, t.TaskRunner) {
-			expired = append(expired, t)
-		}
-	}
-	return
-}
-
-func getCNOrdered(tasks []task.Task, workingCN []string) *cnMap {
+func getCNOrderedAndExpiredTasks(tasks []task.AsyncTask, workingCN []string) (*cnMap, []task.AsyncTask) {
 	orderedMap := newOrderedMap(workingCN)
+	n := 0
 	for _, t := range tasks {
 		if contains(workingCN, t.TaskRunner) {
 			orderedMap.inc(t.TaskRunner)
+		} else {
+			n++
 		}
 	}
-
-	return orderedMap
+	if n == 0 {
+		return orderedMap, nil
+	}
+	expired := make([]task.AsyncTask, 0, n)
+	for _, t := range tasks {
+		if !contains(workingCN, t.TaskRunner) {
+			expired = append(expired, t)
+		}
+	}
+	return orderedMap, expired
 }

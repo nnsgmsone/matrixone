@@ -16,8 +16,7 @@ package taestorage
 
 import (
 	"context"
-
-	"go.uber.org/multierr"
+	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -35,7 +34,7 @@ import (
 )
 
 type taeStorage struct {
-	shard         metadata.DNShard
+	shard         metadata.TNShard
 	taeHandler    rpchandle.Handler
 	logtailServer *service.LogtailServer
 }
@@ -45,15 +44,15 @@ var _ storage.TxnStorage = (*taeStorage)(nil)
 func NewTAEStorage(
 	ctx context.Context,
 	dataDir string,
-	shard metadata.DNShard,
+	shard metadata.TNShard,
 	factory logservice.ClientFactory,
 	fs fileservice.FileService,
 	rt runtime.Runtime,
 	ckpCfg *options.CheckpointCfg,
 	logtailServerAddr string,
 	logtailServerCfg *options.LogtailServerCfg,
-	logStore options.LogstoreType,
 	incrementalDedup bool,
+	maxMessageSize uint64,
 ) (*taeStorage, error) {
 	opt := &options.Options{
 		Clock:            rt.Clock(),
@@ -61,12 +60,13 @@ func NewTAEStorage(
 		Lc:               logservicedriver.LogServiceClientFactory(factory),
 		Shard:            shard,
 		CheckpointCfg:    ckpCfg,
-		LogStoreT:        logStore,
+		LogStoreT:        options.LogstoreLogservice,
 		IncrementalDedup: incrementalDedup,
 		Ctx:              ctx,
+		MaxMessageSize:   maxMessageSize,
 	}
 
-	taeHandler := rpc.NewTAEHandle(dataDir, opt)
+	taeHandler := rpc.NewTAEHandle(ctx, dataDir, opt)
 	tae := taeHandler.GetDB()
 	logtailer := logtail.NewLogtailer(ctx, tae.BGCheckpointRunner, tae.LogtailMgr, tae.Catalog)
 	server, err := service.NewLogtailServer(logtailServerAddr, logtailServerCfg, logtailer, rt)
@@ -90,10 +90,7 @@ func (s *taeStorage) Start() error {
 
 // Close implements storage.TxnTAEStorage
 func (s *taeStorage) Close(ctx context.Context) error {
-	if err := s.logtailServer.Close(); err != nil {
-		return multierr.Append(err, s.taeHandler.HandleClose(ctx))
-	}
-	return s.taeHandler.HandleClose(ctx)
+	return errors.Join(s.logtailServer.Close(), s.taeHandler.HandleClose(ctx))
 }
 
 // Commit implements storage.TxnTAEStorage

@@ -30,7 +30,7 @@ import (
 func TestCompactBlockCmd(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	schema := catalog.MockSchema(1, 0)
-	c := catalog.MockCatalog(nil)
+	c := catalog.MockCatalog()
 	defer c.Close()
 
 	db, _ := c.CreateDBEntry("db", "", "", nil)
@@ -62,7 +62,7 @@ func checkAppendCmdIsEqual(t *testing.T, cmd1, cmd2 *UpdateCmd) {
 func TestDeleteNodeCmd(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	schema := catalog.MockSchema(1, 0)
-	c := catalog.MockCatalog(nil)
+	c := catalog.MockCatalog()
 	defer c.Close()
 
 	db, _ := c.CreateDBEntry("db", "", "", nil)
@@ -72,10 +72,11 @@ func TestDeleteNodeCmd(t *testing.T) {
 
 	controller := NewMVCCHandle(blk)
 
-	node := NewDeleteNode(nil, handle.DT_Normal)
+	node := NewDeleteNode(nil, handle.DT_Normal,
+		IOET_WALTxnCommand_DeleteNode_CurrVer)
 	node.mask = roaring.NewBitmap()
 	node.mask.Add(35)
-	node.chain = controller.deletes
+	node.chain.Store(controller.deletes.Load())
 	cmd, err := node.MakeCommand(1)
 	assert.Nil(t, err)
 

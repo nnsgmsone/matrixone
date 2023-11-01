@@ -40,6 +40,8 @@ const (
 
 func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	dir := testutils.InitTestEnv(ModuleName, t)
 	dir = path.Join(dir, "/local")
 	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
@@ -48,7 +50,7 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 		Backend: "DISK",
 		DataDir: dir,
 	}
-	service, err := fileservice.NewFileService(c, nil)
+	service, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
 	writer, _ := NewBlockWriterNew(service, name, 0, nil)
 
@@ -74,6 +76,13 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 	require.True(t, res)
 	res = zm.Contains(int32(40000))
 	require.False(t, res)
+	require.Equal(t, int32(0), zm.GetMin())
+	require.Equal(t, int32(39999), zm.GetMax())
+	sum := int64(0)
+	for i := int64(0); i < 40000; i++ {
+		sum += i
+	}
+	require.Equal(t, sum, zm.GetSum())
 
 	mp := mpool.MustNewZero()
 	metaloc := EncodeLocation(writer.GetName(), blocks[0].GetExtent(), 40000, blocks[0].GetID())
@@ -105,10 +114,23 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 	require.True(t, zm.Contains(int32(40000)))
 	require.True(t, zm.Contains(int32(79999)))
 	require.False(t, zm.Contains(int32(80000)))
+	sum = int64(0)
+	for i := int64(40000); i < 80000; i++ {
+		sum += i
+		if sum < 0 {
+			sum = 0
+			break
+		}
+	}
+	require.Equal(t, int32(40000), zm.GetMin())
+	require.Equal(t, int32(79999), zm.GetMax())
+	require.Equal(t, sum, zm.GetSum())
 }
 
 func TestWriter_WriteBlockAfterAlter(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	dir := testutils.InitTestEnv(ModuleName, t)
 	dir = path.Join(dir, "/local")
 	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
@@ -117,7 +139,7 @@ func TestWriter_WriteBlockAfterAlter(t *testing.T) {
 		Backend: "DISK",
 		DataDir: dir,
 	}
-	service, err := fileservice.NewFileService(c, nil)
+	service, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
 
 	schema := catalog.MockSchemaAll(13, 2)
@@ -187,14 +209,4 @@ func TestWriter_WriteBlockAfterAlter(t *testing.T) {
 	require.True(t, zm.Contains(int32(40000)))
 	require.True(t, zm.Contains(int32(79999)))
 	require.False(t, zm.Contains(int32(80000)))
-}
-
-func TestMergeDeleteRows(t *testing.T) {
-	require.Equal(t, mergeDeleteRows([]int64{1, 2, 3}, nil), []int64{1, 2, 3})
-	require.Equal(t, mergeDeleteRows(nil, []int64{1, 2, 3}), []int64{1, 2, 3})
-	require.Equal(t, mergeDeleteRows([]int64{2, 3, 7, 8, 9}, []int64{1, 2, 3}), []int64{1, 2, 3, 7, 8, 9})
-	require.Equal(t, mergeDeleteRows([]int64{2}, []int64{1, 2, 3}), []int64{1, 2, 3})
-	require.Equal(t, mergeDeleteRows([]int64{1, 2, 3}, []int64{1, 2, 3}), []int64{1, 2, 3})
-	require.Equal(t, mergeDeleteRows([]int64{1, 2, 3}, []int64{1}), []int64{1, 2, 3})
-	require.Equal(t, mergeDeleteRows([]int64{1, 2, 3}, []int64{3}), []int64{1, 2, 3})
 }

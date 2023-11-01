@@ -28,6 +28,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
+const (
+	CatalogVersion_V1 uint32 = 1
+
+	CatalogVersion_Curr uint32 = CatalogVersion_V1
+)
+
 func init() {
 	MoDatabaseTableDefs = make([]engine.TableDef, len(MoDatabaseSchema))
 	for i, name := range MoDatabaseSchema {
@@ -298,12 +304,13 @@ func genTableDefs(row []any) (engine.TableDef, error) {
 	attr.AutoIncrement = row[MO_COLUMNS_ATT_IS_AUTO_INCREMENT_IDX].(int8) == 1
 	attr.Primary = string(row[MO_COLUMNS_ATT_CONSTRAINT_TYPE_IDX].([]byte)) == "p"
 	attr.ClusterBy = row[MO_COLUMNS_ATT_IS_CLUSTERBY].(int8) == 1
+	attr.EnumVlaues = string(row[MO_COLUMNS_ATT_ENUM_IDX].([]byte))
 	return &engine.AttributeDef{Attr: attr}, nil
 }
 
 func GenRows(bat *batch.Batch) [][]any {
-	rows := make([][]any, bat.Length())
-	for i := 0; i < bat.Length(); i++ {
+	rows := make([][]any, bat.RowCount())
+	for i := 0; i < bat.RowCount(); i++ {
 		rows[i] = make([]any, bat.VectorCount())
 	}
 	for i := 0; i < bat.VectorCount(); i++ {
@@ -384,6 +391,11 @@ func GenRows(bat *batch.Batch) [][]any {
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
+		case types.T_enum:
+			col := vector.MustFixedCol[types.Enum](vec)
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = col[j]
+			}
 		case types.T_decimal64:
 			col := vector.MustFixedCol[types.Decimal64](vec)
 			for j := 0; j < vec.Length(); j++ {
@@ -417,6 +429,14 @@ func GenRows(bat *batch.Batch) [][]any {
 		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_json, types.T_text:
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = vec.GetBytesAt(j)
+			}
+		case types.T_array_float32:
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = vector.GetArrayAt[float32](vec, j)
+			}
+		case types.T_array_float64:
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = vector.GetArrayAt[float64](vec, j)
 			}
 		default:
 			panic(fmt.Sprintf("unspported type: %v", vec.GetType()))

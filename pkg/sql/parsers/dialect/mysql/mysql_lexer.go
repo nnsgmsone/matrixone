@@ -27,17 +27,28 @@ import (
 
 func Parse(ctx context.Context, sql string, lower int64) ([]tree.Statement, error) {
 	lexer := NewLexer(dialect.MYSQL, sql, lower)
+	defer PutScanner(lexer.scanner)
 	if yyParse(lexer) != 0 {
 		return nil, lexer.scanner.LastError
 	}
 	if len(lexer.stmts) == 0 {
-		return nil, moerr.NewParseError(ctx, "Query was empty")
+		/**
+		For CORNER CASE like:
+
+		mysql> -- MySQL dump 10.13  Distrib 8.1.0, for macos11.7 (arm64)
+
+		the input will be stripped to empty string, and the parser will return 0 stmts.
+		but, the mysql server responds ok to the client.
+		so, we return an EmptyStmt that does nothing beside responding ok.
+		*/
+		return []tree.Statement{&tree.EmptyStmt{}}, nil
 	}
 	return lexer.stmts, nil
 }
 
 func ParseOne(ctx context.Context, sql string, lower int64) (tree.Statement, error) {
 	lexer := NewLexer(dialect.MYSQL, sql, lower)
+	defer PutScanner(lexer.scanner)
 	if yyParse(lexer) != 0 {
 		return nil, lexer.scanner.LastError
 	}

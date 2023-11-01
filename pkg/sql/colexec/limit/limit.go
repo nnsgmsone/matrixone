@@ -32,15 +32,20 @@ func Prepare(_ *process.Process, _ any) error {
 }
 
 // Call returning only the first n tuples from its input
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	bat := proc.InputBatch()
+
 	if bat == nil {
-		return true, nil
+		return process.ExecStop, nil
 	}
-	if bat.Length() == 0 {
-		bat.Clean(proc.Mp())
+	if bat.Last() {
+		proc.SetInputBatch(bat)
+		return process.ExecNext, nil
+	}
+	if bat.IsEmpty() {
+		proc.PutBatch(bat)
 		proc.SetInputBatch(batch.EmptyBatch)
-		return false, nil
+		return process.ExecNext, nil
 	}
 	ap := arg.(*Argument)
 	anal := proc.GetAnalyze(idx)
@@ -48,20 +53,21 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	defer anal.Stop()
 	anal.Input(bat, isFirst)
 	if ap.Seen >= ap.Limit {
-		proc.Reg.InputBatch = nil
+		proc.SetInputBatch(nil)
 		proc.PutBatch(bat)
-		return true, nil
+		return process.ExecStop, nil
 	}
-	length := bat.Length()
+	length := bat.RowCount()
 	newSeen := ap.Seen + uint64(length)
 	if newSeen >= ap.Limit { // limit - seen
 		batch.SetLength(bat, int(ap.Limit-ap.Seen))
 		ap.Seen = newSeen
 		anal.Output(bat, isLast)
+
 		proc.SetInputBatch(bat)
-		return true, nil
+		return process.ExecStop, nil
 	}
 	anal.Output(bat, isLast)
 	ap.Seen = newSeen
-	return false, nil
+	return process.ExecNext, nil
 }

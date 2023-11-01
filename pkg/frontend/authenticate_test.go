@@ -18,9 +18,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
 	"github.com/stretchr/testify/require"
 
@@ -226,40 +229,6 @@ func Test_checkSysExistsOrNot(t *testing.T) {
 	})
 }
 
-func Test_createTablesInMoCatalog(t *testing.T) {
-	convey.Convey("createTablesInMoCatalog", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-		pu.SV.SetDefaultValues()
-
-		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
-		defer bhStub.Reset()
-
-		tenant := &TenantInfo{
-			Tenant:        sysAccountName,
-			User:          rootName,
-			DefaultRole:   moAdminRoleName,
-			TenantID:      sysAccountID,
-			UserID:        rootID,
-			DefaultRoleID: moAdminRoleID,
-		}
-
-		err := createTablesInMoCatalog(ctx, bh, tenant, pu)
-		convey.So(err, convey.ShouldBeNil)
-
-		err = createTablesInInformationSchema(ctx, bh, tenant, pu)
-		convey.So(err, convey.ShouldBeNil)
-	})
-}
-
 func Test_checkTenantExistsOrNot(t *testing.T) {
 	convey.Convey("check tenant exists or not", t, func() {
 		ctrl := gomock.NewController(t)
@@ -418,7 +387,8 @@ func Test_initFunction(t *testing.T) {
 		}
 
 		ses := &Session{tenant: tenant}
-		err := InitFunction(ctx, ses, tenant, cu)
+		mce := &MysqlCmdExecutor{}
+		err := mce.InitFunction(ctx, ses, tenant, cu)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -5520,7 +5490,7 @@ func Test_doDropFunction(t *testing.T) {
 		}
 
 		ses := &Session{}
-		err := doDropFunction(ctx, ses, cu)
+		err := doDropFunction(ctx, ses, cu, nil)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
@@ -6210,6 +6180,88 @@ func TestDoGrantPrivilegeImplicitly(t *testing.T) {
 		bh.sql2result[sql] = mrs
 
 		err := doGrantPrivilegeImplicitly(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+func TestDoRevokePrivilegeImplicitly(t *testing.T) {
+	convey.Convey("do revoke privilege implicitly for drop database succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.DropDatabase{
+			Name: tree.Identifier("abc"),
+		}
+
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		tenant := &TenantInfo{
+			Tenant:        "test_account",
+			User:          "test_user",
+			DefaultRole:   "role1",
+			TenantID:      3001,
+			UserID:        3,
+			DefaultRoleID: 5,
+		}
+		ses.SetTenantInfo(tenant)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForRevokeOwnershipFromDatabase(string(stmt.Name), ses.GetTenantInfo().GetDefaultRole())
+		mrs := newMrsForSqlForCheckUserHasRole([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err := doRevokePrivilegeImplicitly(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("do grant privilege implicitly for drop table succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.DropTable{
+			Names: tree.TableNames{
+				tree.NewTableName(tree.Identifier("test1"), tree.ObjectNamePrefix{}),
+			},
+		}
+
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		tenant := &TenantInfo{
+			Tenant:        "test_account",
+			User:          "test_user",
+			DefaultRole:   "role1",
+			TenantID:      3001,
+			UserID:        3,
+			DefaultRoleID: 5,
+		}
+		ses.SetTenantInfo(tenant)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForRevokeOwnershipFromTable("abd", "t1", ses.GetTenantInfo().GetDefaultRole())
+		mrs := newMrsForSqlForCheckUserHasRole([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err := doRevokePrivilegeImplicitly(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -7316,7 +7368,7 @@ func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 	ioses.EXPECT().Ref().AnyTimes()
 	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
-	ses := NewSession(proto, nil, pu, GSysVariables, false, nil)
+	ses := NewSession(proto, nil, pu, GSysVariables, true, nil, nil)
 	tenant := &TenantInfo{
 		Tenant:        sysAccountName,
 		User:          rootName,
@@ -7349,6 +7401,21 @@ func newBh(ctrl *gomock.Controller, sql2result map[string]ExecResult) Background
 type backgroundExecTest struct {
 	currentSql string
 	sql2result map[string]ExecResult
+}
+
+func (bt *backgroundExecTest) ExecStmt(ctx context.Context, statement tree.Statement) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (bt *backgroundExecTest) GetExecResultBatches() []*batch.Batch {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (bt *backgroundExecTest) ClearExecResultBatches() {
+	//TODO implement me
+	panic("implement me")
 }
 
 func (bt *backgroundExecTest) init() {
@@ -8516,4 +8583,2000 @@ func TestDoCheckRole(t *testing.T) {
 	ses.SetTenantInfo(tenant)
 	err = doCheckRole(ctx, ses)
 	require.Error(t, err)
+}
+
+func TestGetUserPart(t *testing.T) {
+	user1 := "user1"
+	require.Equal(t, "user1", getUserPart(user1))
+	user1 = "user1?"
+	require.Equal(t, "user1", getUserPart(user1))
+	user1 = "user1?a:b"
+	require.Equal(t, "user1", getUserPart(user1))
+}
+
+func TestCheckRoleWhetherTableOwner(t *testing.T) {
+	convey.Convey("checkRoleWhetherTableOwner success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		sql := getSqlForGetOwnerOfTable("db1", "t1")
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{0},
+		})
+		bh.sql2result[sql] = mrs
+
+		_, err := checkRoleWhetherTableOwner(ses.GetRequestContext(), ses, "db1", "t1", true)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("checkRoleWhetherTableOwner success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:              sysAccountName,
+			User:                rootName,
+			DefaultRole:         moAdminRoleName,
+			TenantID:            sysAccountID,
+			UserID:              rootID,
+			DefaultRoleID:       moAdminRoleID,
+			useAllSecondaryRole: true,
+		}
+		ses.SetTenantInfo(tenant)
+
+		sql := getSqlForGetOwnerOfTable("db1", "t1")
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{0},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql = getSqlForGetRolesOfCurrentUser(int64(ses.GetTenantInfo().GetUserID()))
+		mrs = newMrsForPasswordOfUser([][]interface{}{
+			{0},
+		})
+		bh.sql2result[sql] = mrs
+
+		ok, err := checkRoleWhetherTableOwner(ses.GetRequestContext(), ses, "db1", "t1", true)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("checkRoleWhetherTableOwner fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		sql := getSqlForGetOwnerOfTable("db1", "t1")
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{1},
+		})
+		bh.sql2result[sql] = mrs
+
+		ok, err := checkRoleWhetherTableOwner(ses.GetRequestContext(), ses, "db1", "t1", false)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeFalse)
+	})
+}
+
+func TestCheckRoleWhetherDatabaseOwner(t *testing.T) {
+	convey.Convey("checkRoleWhetherDatabaseOwner success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		sql := getSqlForGetOwnerOfDatabase("db1")
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{0},
+		})
+		bh.sql2result[sql] = mrs
+
+		ok, err := checkRoleWhetherDatabaseOwner(ses.GetRequestContext(), ses, "db1", true)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("checkRoleWhetherDatabaseOwner success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:              sysAccountName,
+			User:                rootName,
+			DefaultRole:         moAdminRoleName,
+			TenantID:            sysAccountID,
+			UserID:              rootID,
+			DefaultRoleID:       moAdminRoleID,
+			useAllSecondaryRole: true,
+		}
+		ses.SetTenantInfo(tenant)
+
+		sql := getSqlForGetOwnerOfDatabase("db1")
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{0},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql = getSqlForGetRolesOfCurrentUser(int64(ses.GetTenantInfo().GetUserID()))
+		mrs = newMrsForPasswordOfUser([][]interface{}{
+			{0},
+		})
+		bh.sql2result[sql] = mrs
+
+		ok, err := checkRoleWhetherDatabaseOwner(ses.GetRequestContext(), ses, "db1", true)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("checkRoleWhetherDatabaseOwner fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		sql := getSqlForGetOwnerOfDatabase("db1")
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{1},
+		})
+		bh.sql2result[sql] = mrs
+
+		ok, err := checkRoleWhetherDatabaseOwner(ses.GetRequestContext(), ses, "db1", false)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeFalse)
+	})
+
+}
+
+func TestGetSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(t *testing.T) {
+	convey.Convey("getetSqlForCheckRoleHasPrivilegeWGODependsOnPrivType", t, func() {
+		out1 := "select distinct role_id from mo_catalog.mo_role_privs where (with_grant_option = true and (privilege_id = 0 or privilege_id = 14)) or privilege_id = 15;"
+		sql := getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(PrivilegeTypeCreateAccount)
+		convey.So(out1, convey.ShouldEqual, sql)
+	})
+
+	convey.Convey("getetSqlForCheckRoleHasPrivilegeWGODependsOnPrivType", t, func() {
+		out2 := "select distinct role_id from mo_catalog.mo_role_privs where (with_grant_option = true and (privilege_id = 18 or privilege_id = 28)) or privilege_id = 29;"
+		sql := getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(PrivilegeTypeShowTables)
+		convey.So(out2, convey.ShouldEqual, sql)
+	})
+
+	convey.Convey("getetSqlForCheckRoleHasPrivilegeWGODependsOnPrivType", t, func() {
+		out3 := "select distinct role_id from mo_catalog.mo_role_privs where (with_grant_option = true and (privilege_id = 30 or privilege_id = 37)) or privilege_id = 38;"
+		sql := getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(PrivilegeTypeSelect)
+		convey.So(out3, convey.ShouldEqual, sql)
+	})
+}
+
+func TestDoAlterDatabaseConfig(t *testing.T) {
+	convey.Convey("doAlterDatabaseConfig success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ad := &tree.AlterDataBaseConfig{
+			AccountName:    sysAccountName,
+			DbName:         "db1",
+			IsAccountLevel: false,
+			UpdateConfig:   "0.7",
+		}
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckDatabaseWithOwner(ctx, ad.DbName, int64(ses.GetTenantInfo().GetTenantID()))
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{0, 0},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql, _ = getSqlForupdateConfigurationByDbNameAndAccountName(ctx, ad.UpdateConfig, ses.GetTenantInfo().GetTenant(), ad.DbName, "version_compatibility")
+		mrs = newMrsForPasswordOfUser([][]interface{}{{}})
+		bh.sql2result[sql] = mrs
+
+		err := doAlterDatabaseConfig(ses.GetRequestContext(), ses, ad)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("doAlterDatabaseConfig fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ad := &tree.AlterDataBaseConfig{
+			AccountName:    sysAccountName,
+			DbName:         "db1",
+			IsAccountLevel: false,
+			UpdateConfig:   "0.7",
+		}
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckDatabaseWithOwner(ctx, ad.DbName, int64(ses.GetTenantInfo().GetTenantID()))
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{0, 1},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql, _ = getSqlForupdateConfigurationByDbNameAndAccountName(ctx, ad.UpdateConfig, ses.GetTenantInfo().GetTenant(), ad.DbName, "version_compatibility")
+		mrs = newMrsForPasswordOfUser([][]interface{}{{}})
+		bh.sql2result[sql] = mrs
+
+		err := doAlterDatabaseConfig(ses.GetRequestContext(), ses, ad)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+}
+
+func TestDoAlterAccountConfig(t *testing.T) {
+	convey.Convey("doAlterAccountConfig success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ad := &tree.AlterDataBaseConfig{
+			AccountName:    sysAccountName,
+			IsAccountLevel: true,
+			UpdateConfig:   "0.7",
+		}
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckTenant(ctx, ad.AccountName)
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{0, 0},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql, _ = getSqlForupdateConfigurationByAccount(ctx, ad.UpdateConfig, ses.GetTenantInfo().GetTenant(), "version_compatibility")
+		mrs = newMrsForPasswordOfUser([][]interface{}{{}})
+		bh.sql2result[sql] = mrs
+
+		err := doAlterAccountConfig(ctx, ses, ad)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+func TestInsertRecordToMoMysqlCompatibilityMode(t *testing.T) {
+	convey.Convey("insertRecordToMoMysqlCompatibilityMode success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		stmt := &tree.CreateDatabase{
+			Name: tree.Identifier("abc"),
+		}
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := fmt.Sprintf(initMoMysqlCompatbilityModeFormat, tenant.TenantID, tenant.GetTenant(), "abc", "", "", false)
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{0, 0},
+		})
+		bh.sql2result[sql] = mrs
+
+		err := insertRecordToMoMysqlCompatibilityMode(ctx, ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+func TestDeleteRecordToMoMysqlCompatbilityMode(t *testing.T) {
+	convey.Convey("insertRecordToMoMysqlCompatibilityMode success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		stmt := &tree.DropDatabase{
+			Name: tree.Identifier("abc"),
+		}
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForDeleteMysqlCompatbilityMode("abc")
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{0, 0},
+		})
+		bh.sql2result[sql] = mrs
+
+		err := deleteRecordToMoMysqlCompatbilityMode(ctx, ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+func TestGetVersionCompatibility(t *testing.T) {
+	convey.Convey("getVersionCompatibility success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForGetSystemVariableValueWithDatabase("db1", "version_compatibility")
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{0, 0},
+		})
+		bh.sql2result[sql] = mrs
+
+		_, err := GetVersionCompatibility(ctx, ses, "db1")
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+func TestCheckStageExistOrNot(t *testing.T) {
+	convey.Convey("checkStageExistOrNot success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckStage(ctx, "my_stage_test")
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{0, 0},
+		})
+		bh.sql2result[sql] = mrs
+
+		rst, err := checkStageExistOrNot(ctx, bh, "my_stage_test")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(rst, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("checkStageExistOrNot success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckStage(ctx, "my_stage_test")
+		mrs := newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		rst, err := checkStageExistOrNot(ctx, bh, "my_stage_test")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(rst, convey.ShouldBeFalse)
+	})
+}
+
+func TestFormatCredentials(t *testing.T) {
+	convey.Convey("formatCredentials success", t, func() {
+		ta := tree.StageCredentials{
+			Exist: false,
+		}
+		rstr := formatCredentials(ta)
+		testRstr := ""
+		convey.So(rstr, convey.ShouldEqual, testRstr)
+	})
+
+	convey.Convey("formatCredentials success", t, func() {
+		ta := tree.StageCredentials{
+			Exist:       true,
+			Credentials: []string{"AWS_KEY_ID", "1a2b3c"},
+		}
+		rstr := formatCredentials(ta)
+		testRstr := "AWS_KEY_ID=1a2b3c"
+		convey.So(rstr, convey.ShouldEqual, testRstr)
+	})
+
+	convey.Convey("formatCredentials success", t, func() {
+		ta := tree.StageCredentials{
+			Exist:       true,
+			Credentials: []string{"AWS_KEY_ID", "1a2b3c", "AWS_SECRET_KEY", "4x5y6z"},
+		}
+		rstr := formatCredentials(ta)
+		testRstr := "AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z"
+		convey.So(rstr, convey.ShouldEqual, testRstr)
+	})
+}
+
+func TestDoDropStage(t *testing.T) {
+	convey.Convey("doDropStage success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ds := &tree.DropStage{
+			IfNotExists: false,
+			Name:        tree.Identifier("my_stage_test"),
+		}
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckStage(ctx, "my_stage_test")
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{0, 0},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql = getSqlForDropStage(string(ds.Name))
+		mrs = newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err := doDropStage(ctx, ses, ds)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("doDropStage success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ds := &tree.DropStage{
+			IfNotExists: true,
+			Name:        tree.Identifier("my_stage_test"),
+		}
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckStage(ctx, "my_stage_test")
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{0, 0},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql = getSqlForDropStage(string(ds.Name))
+		mrs = newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err := doDropStage(ctx, ses, ds)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("doDropStage fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ds := &tree.DropStage{
+			IfNotExists: false,
+			Name:        tree.Identifier("my_stage_test"),
+		}
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckStage(ctx, "my_stage_test")
+		mrs := newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = getSqlForDropStage(string(ds.Name))
+		mrs = newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err := doDropStage(ctx, ses, ds)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+
+	convey.Convey("doDropStage fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        "test_account",
+			User:          rootName,
+			DefaultRole:   "test_role",
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ds := &tree.DropStage{
+			IfNotExists: true,
+			Name:        tree.Identifier("my_stage_test"),
+		}
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckStage(ctx, "my_stage_test")
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{0, 0},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql = getSqlForDropStage(string(ds.Name))
+		mrs = newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err := doDropStage(ctx, ses, ds)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+}
+
+func TestDoCreateStage(t *testing.T) {
+	convey.Convey("doCreateStage success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		cs := &tree.CreateStage{
+			IfNotExists: false,
+			Name:        tree.Identifier("my_stage_test"),
+			Url:         "'s3://load/files/'",
+			Credentials: tree.StageCredentials{
+				Exist: false,
+			},
+			Status: tree.StageStatus{
+				Exist: false,
+			},
+			Comment: tree.StageComment{
+				Exist: false,
+			},
+		}
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckStage(ctx, "my_stage_test")
+		mrs := newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err := doCreateStage(ctx, ses, cs)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("doCreateStage fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		cs := &tree.CreateStage{
+			IfNotExists: false,
+			Name:        tree.Identifier("my_stage_test"),
+			Url:         "'s3://load/files/'",
+			Credentials: tree.StageCredentials{
+				Exist: false,
+			},
+			Status: tree.StageStatus{
+				Exist: false,
+			},
+			Comment: tree.StageComment{
+				Exist: false,
+			},
+		}
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckStage(ctx, "my_stage_test")
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{0, 0},
+		})
+		bh.sql2result[sql] = mrs
+
+		err := doCreateStage(ctx, ses, cs)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+
+	convey.Convey("doCreateStage success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		cs := &tree.CreateStage{
+			IfNotExists: true,
+			Name:        tree.Identifier("my_stage_test"),
+			Url:         "'s3://load/files/'",
+			Credentials: tree.StageCredentials{
+				Exist: false,
+			},
+			Status: tree.StageStatus{
+				Exist: false,
+			},
+			Comment: tree.StageComment{
+				Exist: false,
+			},
+		}
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckStage(ctx, "my_stage_test")
+		mrs := newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err := doCreateStage(ctx, ses, cs)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("doCreateStage success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		cs := &tree.CreateStage{
+			IfNotExists: false,
+			Name:        tree.Identifier("my_stage_test"),
+			Url:         "'s3://load/files/'",
+			Credentials: tree.StageCredentials{
+				Exist:       true,
+				Credentials: []string{"'AWS_KEY_ID'", "'1a2b3c'", "'AWS_SECRET_KEY'", "'4x5y6z'"},
+			},
+			Status: tree.StageStatus{
+				Exist:  true,
+				Option: tree.StageStatusEnabled,
+			},
+			Comment: tree.StageComment{
+				Exist: false,
+			},
+		}
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckStage(ctx, "my_stage_test")
+		mrs := newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err := doCreateStage(ctx, ses, cs)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("doCreateStage fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        "test_account",
+			User:          rootName,
+			DefaultRole:   "test_role",
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		cs := &tree.CreateStage{
+			IfNotExists: false,
+			Name:        tree.Identifier("my_stage_test"),
+			Url:         "'s3://load/files/'",
+			Credentials: tree.StageCredentials{
+				Exist: false,
+			},
+			Status: tree.StageStatus{
+				Exist: false,
+			},
+			Comment: tree.StageComment{
+				Exist: false,
+			},
+		}
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckStage(ctx, "my_stage_test")
+		mrs := newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err := doCreateStage(ctx, ses, cs)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+}
+
+func TestDoAlterStage(t *testing.T) {
+	convey.Convey("doAlterStage success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		as := &tree.AlterStage{
+			IfNotExists: false,
+			Name:        tree.Identifier("my_stage_test"),
+			UrlOption: tree.StageUrl{
+				Exist: true,
+				Url:   "'s3://load/files/'",
+			},
+			CredentialsOption: tree.StageCredentials{
+				Exist: false,
+			},
+			StatusOption: tree.StageStatus{
+				Exist: false,
+			},
+			Comment: tree.StageComment{
+				Exist: false,
+			},
+		}
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckStage(ctx, "my_stage_test")
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{0, 0},
+		})
+		bh.sql2result[sql] = mrs
+
+		err := doAlterStage(ctx, ses, as)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("doAlterStage success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		as := &tree.AlterStage{
+			IfNotExists: false,
+			Name:        tree.Identifier("my_stage_test"),
+			UrlOption: tree.StageUrl{
+				Exist: false,
+			},
+			CredentialsOption: tree.StageCredentials{
+				Exist:       true,
+				Credentials: []string{"'AWS_KEY_ID'", "'1a2b3c'", "'AWS_SECRET_KEY'", "'4x5y6z'"},
+			},
+			StatusOption: tree.StageStatus{
+				Exist: false,
+			},
+			Comment: tree.StageComment{
+				Exist: false,
+			},
+		}
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckStage(ctx, "my_stage_test")
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{0, 0},
+		})
+		bh.sql2result[sql] = mrs
+
+		err := doAlterStage(ctx, ses, as)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("doAlterStage success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		as := &tree.AlterStage{
+			IfNotExists: true,
+			Name:        tree.Identifier("my_stage_test"),
+			UrlOption: tree.StageUrl{
+				Exist: true,
+				Url:   "'s3://load/files/'",
+			},
+			CredentialsOption: tree.StageCredentials{
+				Exist: false,
+			},
+			StatusOption: tree.StageStatus{
+				Exist: false,
+			},
+			Comment: tree.StageComment{
+				Exist: false,
+			},
+		}
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckStage(ctx, "my_stage_test")
+		mrs := newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err := doAlterStage(ctx, ses, as)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("doAlterStage fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		as := &tree.AlterStage{
+			IfNotExists: false,
+			Name:        tree.Identifier("my_stage_test"),
+			UrlOption: tree.StageUrl{
+				Exist: true,
+				Url:   "'s3://load/files/'",
+			},
+			CredentialsOption: tree.StageCredentials{
+				Exist: false,
+			},
+			StatusOption: tree.StageStatus{
+				Exist: false,
+			},
+			Comment: tree.StageComment{
+				Exist: false,
+			},
+		}
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckStage(ctx, "my_stage_test")
+		mrs := newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err := doAlterStage(ctx, ses, as)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+
+	convey.Convey("doAlterStage fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		as := &tree.AlterStage{
+			IfNotExists: true,
+			Name:        tree.Identifier("my_stage_test"),
+			UrlOption: tree.StageUrl{
+				Exist: true,
+				Url:   "'s3://load/files/'",
+			},
+			CredentialsOption: tree.StageCredentials{
+				Exist:       true,
+				Credentials: []string{"'AWS_KEY_ID'", "'1a2b3c'", "'AWS_SECRET_KEY'", "'4x5y6z'"},
+			},
+			StatusOption: tree.StageStatus{
+				Exist: false,
+			},
+			Comment: tree.StageComment{
+				Exist: false,
+			},
+		}
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckStage(ctx, "my_stage_test")
+		mrs := newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err := doAlterStage(ctx, ses, as)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+
+	convey.Convey("doAlterStage fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        "test_account",
+			User:          rootName,
+			DefaultRole:   "test_role",
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		as := &tree.AlterStage{
+			IfNotExists: false,
+			Name:        tree.Identifier("my_stage_test"),
+			UrlOption: tree.StageUrl{
+				Exist: false,
+			},
+			CredentialsOption: tree.StageCredentials{
+				Exist:       true,
+				Credentials: []string{"'AWS_KEY_ID'", "'1a2b3c'", "'AWS_SECRET_KEY'", "'4x5y6z'"},
+			},
+			StatusOption: tree.StageStatus{
+				Exist: false,
+			},
+			Comment: tree.StageComment{
+				Exist: false,
+			},
+		}
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckStage(ctx, "my_stage_test")
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{0, 0},
+		})
+		bh.sql2result[sql] = mrs
+
+		err := doAlterStage(ctx, ses, as)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+
+}
+
+func TestDoCheckFilePath(t *testing.T) {
+	convey.Convey("doCheckFilePath success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		cs := &tree.Select{}
+		ses.InitExportConfig(cs.Ep)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		err := doCheckFilePath(ctx, ses, cs.Ep)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("doCheckFilePath success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		cs := &tree.Select{
+			Ep: &tree.ExportParam{
+				FilePath: "/mnt/disk1/t1.csv",
+			},
+		}
+		ses.InitExportConfig(cs.Ep)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForCheckStageStatus(ctx, "enabled")
+		mrs := newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err := doCheckFilePath(ctx, ses, cs.Ep)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("doCheckFilePath success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		cs := &tree.Select{
+			Ep: &tree.ExportParam{
+				FilePath: "/mnt/disk1/t1.csv",
+			},
+		}
+		ses.InitExportConfig(cs.Ep)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForCheckStageStatus(ctx, "enabled")
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{0, 0},
+		})
+		bh.sql2result[sql] = mrs
+
+		err := doCheckFilePath(ctx, ses, cs.Ep)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+
+	convey.Convey("doCheckFilePath fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		cs := &tree.Select{
+			Ep: &tree.ExportParam{
+				FilePath: "stage1:/t1.csv",
+			},
+		}
+		ses.InitExportConfig(cs.Ep)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckStageStatusWithStageName(ctx, "stage1")
+		mrs := newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err := doCheckFilePath(ctx, ses, cs.Ep)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+
+	convey.Convey("doCheckFilePath fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		cs := &tree.Select{
+			Ep: &tree.ExportParam{
+				FilePath: "stage1:/t1.csv",
+			},
+		}
+		ses.InitExportConfig(cs.Ep)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckStageStatusWithStageName(ctx, "stage1")
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{"/tmp", "disabled"},
+		})
+		bh.sql2result[sql] = mrs
+
+		err := doCheckFilePath(ctx, ses, cs.Ep)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+
+	convey.Convey("doCheckFilePath success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		cs := &tree.Select{
+			Ep: &tree.ExportParam{
+				FilePath: "stage1:/t1.csv",
+			},
+		}
+		ses.InitExportConfig(cs.Ep)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckStageStatusWithStageName(ctx, "stage1")
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{"/tmp", "enabled"},
+		})
+		bh.sql2result[sql] = mrs
+
+		err := doCheckFilePath(ctx, ses, cs.Ep)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(cs.Ep.FilePath, convey.ShouldEqual, "stage1:/t1.csv")
+	})
+}
+
+func TestGetLabelPart(t *testing.T) {
+	user1 := "user1"
+	require.Equal(t, "", getLabelPart(user1))
+	user1 = "user1?"
+	require.Equal(t, "", getLabelPart(user1))
+	user1 = "user1?a:b"
+	require.Equal(t, "a:b", getLabelPart(user1))
+}
+
+func TestParseLabel(t *testing.T) {
+	cases := []struct {
+		str string
+		ret map[string]string
+		err bool
+	}{
+		{
+			str: "",
+			ret: map[string]string{},
+			err: false,
+		},
+		{
+			str: "a=1",
+			ret: map[string]string{"a": "1"},
+			err: false,
+		},
+		{
+			str: "a=1,",
+			err: true,
+		},
+		{
+			str: "a=1,b=2",
+			ret: map[string]string{"b": "2", "a": "1"},
+			err: false,
+		},
+		{
+			str: "a=1,b",
+			err: true,
+		},
+		{
+			str: "a=1,b=",
+			err: true,
+		},
+		{
+			str: "a=1,=2",
+			err: true,
+		},
+		{
+			str: "a=1,=",
+			err: true,
+		},
+		{
+			str: "a",
+			err: true,
+		},
+		{
+			str: "a=1,b:2",
+			err: true,
+		},
+	}
+
+	for _, item := range cases {
+		lb, err := ParseLabel(item.str)
+		if item.err {
+			require.Error(t, err)
+		} else {
+			require.True(t, reflect.DeepEqual(item.ret, lb))
+			require.NoError(t, err)
+		}
+	}
 }

@@ -19,25 +19,30 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
+	"io"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
-	"io"
-	"os"
-	"strconv"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-type ExportParam struct {
-	*tree.ExportParam
+type ExportConfig struct {
+	// configs from user input
+	userConfig *tree.ExportParam
 	// file handler
 	File *os.File
 	// bufio.writer
@@ -102,7 +107,12 @@ func (cld *CloseExportData) Close() {
 	})
 }
 
-func initExportFileParam(ep *ExportParam, mrs *MysqlResultSet) {
+// needExportToFile checks needing to export into file or not
+func (ec *ExportConfig) needExportToFile() bool {
+	return ec != nil && ec.userConfig != nil && ec.userConfig.Outfile
+}
+
+func initExportFileParam(ep *ExportConfig, mrs *MysqlResultSet) {
 	ep.DefaultBufSize *= 1024 * 1024
 	n := (int)(mrs.GetColumnCount())
 	if n <= 0 {
@@ -110,24 +120,29 @@ func initExportFileParam(ep *ExportParam, mrs *MysqlResultSet) {
 	}
 	ep.Symbol = make([][]byte, n)
 	for i := 0; i < n-1; i++ {
-		ep.Symbol[i] = []byte(ep.Fields.Terminated)
+		ep.Symbol[i] = []byte(ep.userConfig.Fields.Terminated)
 	}
-	ep.Symbol[n-1] = []byte(ep.Lines.TerminatedBy)
+	ep.Symbol[n-1] = []byte(ep.userConfig.Lines.TerminatedBy)
 	ep.ColumnFlag = make([]bool, len(mrs.Name2Index))
-	for i := 0; i < len(ep.ForceQuote); i++ {
-		col, ok := mrs.Name2Index[ep.ForceQuote[i]]
+	for i := 0; i < len(ep.userConfig.ForceQuote); i++ {
+		col, ok := mrs.Name2Index[ep.userConfig.ForceQuote[i]]
 		if ok {
 			ep.ColumnFlag[col] = true
 		}
 	}
 }
 
-var openNewFile = func(ctx context.Context, ep *ExportParam, mrs *MysqlResultSet) error {
+var openNewFile = func(ctx context.Context, ep *ExportConfig, mrs *MysqlResultSet) error {
 	lineSize := ep.LineSize
 	var err error
 	ep.CurFileSize = 0
 	if !ep.UseFileService {
-		filePath := getExportFilePath(ep.FilePath, ep.FileCnt)
+		var filePath string
+		if len(ep.userConfig.StageFilePath) != 0 {
+			filePath = getExportFilePath(ep.userConfig.StageFilePath, ep.FileCnt)
+		} else {
+			filePath = getExportFilePath(ep.userConfig.FilePath, ep.FileCnt)
+		}
 		ep.File, err = OpenFile(filePath, os.O_RDWR|os.O_EXCL|os.O_CREATE, 0o666)
 		if err != nil {
 			return err
@@ -141,7 +156,7 @@ var openNewFile = func(ctx context.Context, ep *ExportParam, mrs *MysqlResultSet
 			ep.LineBuffer.Reset()
 		}
 		ep.AsyncReader, ep.AsyncWriter = io.Pipe()
-		filePath := getExportFilePath(ep.FilePath, ep.FileCnt)
+		filePath := getExportFilePath(ep.userConfig.FilePath, ep.FileCnt)
 
 		asyncWriteFunc := func() error {
 			vec := fileservice.IOVector{
@@ -166,17 +181,17 @@ var openNewFile = func(ctx context.Context, ep *ExportParam, mrs *MysqlResultSet
 		ep.AsyncGroup, _ = errgroup.WithContext(ctx)
 		ep.AsyncGroup.Go(asyncWriteFunc)
 	}
-	if ep.Header {
+	if ep.userConfig.Header {
 		var header string
 		n := len(mrs.Columns)
 		if n == 0 {
 			return nil
 		}
 		for i := 0; i < n-1; i++ {
-			header += mrs.Columns[i].Name() + ep.Fields.Terminated
+			header += mrs.Columns[i].Name() + ep.userConfig.Fields.Terminated
 		}
-		header += mrs.Columns[n-1].Name() + ep.Lines.TerminatedBy
-		if ep.MaxFileSize != 0 && uint64(len(header)) >= ep.MaxFileSize {
+		header += mrs.Columns[n-1].Name() + ep.userConfig.Lines.TerminatedBy
+		if ep.userConfig.MaxFileSize != 0 && uint64(len(header)) >= ep.userConfig.MaxFileSize {
 			return moerr.NewInternalError(ctx, "the header line size is over the maxFileSize")
 		}
 		if err := writeDataToCSVFile(ep, []byte(header)); err != nil {
@@ -225,21 +240,21 @@ var formatOutputString = func(oq *outputQueue, tmp, symbol []byte, enclosed byte
 	return nil
 }
 
-var Flush = func(ep *ExportParam) error {
+var Flush = func(ep *ExportConfig) error {
 	if !ep.UseFileService {
 		return ep.Writer.Flush()
 	}
 	return nil
 }
 
-var Seek = func(ep *ExportParam) (int64, error) {
+var Seek = func(ep *ExportConfig) (int64, error) {
 	if !ep.UseFileService {
 		return ep.File.Seek(int64(ep.CurFileSize-ep.LineSize), io.SeekStart)
 	}
 	return 0, nil
 }
 
-var Read = func(ep *ExportParam) (int, error) {
+var Read = func(ep *ExportConfig) (int, error) {
 	if !ep.UseFileService {
 		ep.OutputStr = make([]byte, ep.LineSize)
 		return ep.File.Read(ep.OutputStr)
@@ -251,7 +266,7 @@ var Read = func(ep *ExportParam) (int, error) {
 	}
 }
 
-var Truncate = func(ep *ExportParam) error {
+var Truncate = func(ep *ExportConfig) error {
 	if !ep.UseFileService {
 		return ep.File.Truncate(int64(ep.CurFileSize - ep.LineSize))
 	} else {
@@ -259,7 +274,7 @@ var Truncate = func(ep *ExportParam) error {
 	}
 }
 
-var Close = func(ep *ExportParam) error {
+var Close = func(ep *ExportConfig) error {
 	if !ep.UseFileService {
 		ep.FileCnt++
 		return ep.File.Close()
@@ -284,7 +299,7 @@ var Close = func(ep *ExportParam) error {
 	}
 }
 
-var Write = func(ep *ExportParam, output []byte) (int, error) {
+var Write = func(ep *ExportConfig, output []byte) (int, error) {
 	if !ep.UseFileService {
 		return ep.Writer.Write(output)
 	} else {
@@ -292,7 +307,7 @@ var Write = func(ep *ExportParam, output []byte) (int, error) {
 	}
 }
 
-var EndOfLine = func(ep *ExportParam) (int, error) {
+var EndOfLine = func(ep *ExportConfig) (int, error) {
 	if ep.UseFileService {
 		n, err := ep.AsyncWriter.Write(ep.LineBuffer.Bytes())
 		if err != nil {
@@ -308,7 +323,7 @@ var EndOfLine = func(ep *ExportParam) (int, error) {
 }
 
 func writeToCSVFile(oq *outputQueue, output []byte) error {
-	if oq.ep.MaxFileSize != 0 && oq.ep.CurFileSize+uint64(len(output)) > oq.ep.MaxFileSize {
+	if oq.ep.userConfig.MaxFileSize != 0 && oq.ep.CurFileSize+uint64(len(output)) > oq.ep.userConfig.MaxFileSize {
 		if err := Flush(oq.ep); err != nil {
 			return err
 		}
@@ -341,7 +356,7 @@ func writeToCSVFile(oq *outputQueue, output []byte) error {
 	return nil
 }
 
-var writeDataToCSVFile = func(ep *ExportParam, output []byte) error {
+var writeDataToCSVFile = func(ep *ExportConfig, output []byte) error {
 	for {
 		if n, err := Write(ep, output); err != nil {
 			return err
@@ -368,17 +383,11 @@ func appendBytes(writeByte, tmp, symbol []byte, enclosed byte, flag bool) []byte
 
 func preCopyBat(obj interface{}, bat *batch.Batch) *batch.Batch {
 	ses := obj.(*Session)
-	bat2 := &batch.Batch{}
-	for _, vec := range bat.Vecs {
-		// XXX should we free the old vec here ?
-		tmp, _ := vec.Dup(ses.GetMemPool())
-		bat2.Vecs = append(bat2.Vecs, tmp)
+	bat2 := batch.NewWithSize(len(bat.Vecs))
+	for i, vec := range bat.Vecs {
+		bat2.Vecs[i], _ = vec.Dup(ses.GetMemPool())
 	}
-	bat2.Zs = make([]int64, bat.Vecs[0].Length())
-	for k := 0; k < bat.Vecs[0].Length(); k++ {
-		bat2.Zs[k] = 1
-	}
-	bat2.Cnt = 1
+	bat2.SetRowCount(bat.RowCount())
 	return bat2
 }
 
@@ -393,13 +402,24 @@ func initExportFirst(oq *outputQueue) {
 	oq.ep.Index++
 }
 
+func formatJsonString(str string, flag bool) string {
+	if len(str) < 2 {
+		return "\"" + str + "\""
+	}
+	tmp := strings.ReplaceAll(str, "\",", "\"\",")
+	if tmp[0] != '"' && tmp[len(tmp)-1] != '"' && !flag {
+		return "\"" + tmp + "\""
+	}
+	return tmp
+}
+
 func constructByte(obj interface{}, bat *batch.Batch, index int32, ByteChan chan *BatchByte, oq *outputQueue) {
 	ses := obj.(*Session)
 	symbol := oq.ep.Symbol
-	closeby := oq.ep.Fields.EnclosedBy
+	closeby := oq.ep.userConfig.Fields.EnclosedBy
 	flag := oq.ep.ColumnFlag
 	writeByte := make([]byte, 0)
-	for i := 0; i < bat.Length(); i++ {
+	for i := 0; i < bat.RowCount(); i++ {
 		for j, vec := range bat.Vecs {
 			if vec.GetNulls().Contains(uint64(i)) {
 				writeByte = appendBytes(writeByte, []byte("\\N"), symbol[j], closeby, flag[j])
@@ -408,7 +428,7 @@ func constructByte(obj interface{}, bat *batch.Batch, index int32, ByteChan chan
 			switch vec.GetType().Oid { //get col
 			case types.T_json:
 				val := types.DecodeJson(vec.GetBytesAt(i))
-				writeByte = appendBytes(writeByte, []byte(val.String()), symbol[j], closeby, flag[j])
+				writeByte = appendBytes(writeByte, []byte(formatJsonString(val.String(), flag[j])), symbol[j], closeby, flag[j])
 			case types.T_bool:
 				val := vector.GetFixedAt[bool](vec, i)
 				if val {
@@ -457,6 +477,14 @@ func constructByte(obj interface{}, bat *batch.Batch, index int32, ByteChan chan
 			case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 				value := addEscapeToString(vec.GetBytesAt(i))
 				writeByte = appendBytes(writeByte, value, symbol[j], closeby, true)
+			case types.T_array_float32:
+				arrStr := types.BytesToArrayToString[float32](vec.GetBytesAt(i))
+				value := addEscapeToString(util2.UnsafeStringToBytes(arrStr))
+				writeByte = appendBytes(writeByte, value, symbol[j], closeby, true)
+			case types.T_array_float64:
+				arrStr := types.BytesToArrayToString[float64](vec.GetBytesAt(i))
+				value := addEscapeToString(util2.UnsafeStringToBytes(arrStr))
+				writeByte = appendBytes(writeByte, value, symbol[j], closeby, true)
 			case types.T_date:
 				val := vector.GetFixedAt[types.Date](vec, i)
 				writeByte = appendBytes(writeByte, []byte(val.String()), symbol[j], closeby, flag[j])
@@ -490,8 +518,13 @@ func constructByte(obj interface{}, bat *batch.Batch, index int32, ByteChan chan
 			case types.T_Blockid:
 				val := vector.GetFixedAt[types.Blockid](vec, i)
 				writeByte = appendBytes(writeByte, []byte(val.String()), symbol[j], closeby, flag[j])
+			case types.T_enum:
+				val := vector.GetFixedAt[types.Blockid](vec, i)
+				writeByte = appendBytes(writeByte, []byte(val.String()), symbol[j], closeby, flag[j])
 			default:
-				logErrorf(ses.GetDebugString(), "constructByte : unsupported type %d", vec.GetType().Oid)
+				logError(ses, ses.GetDebugString(),
+					"Failed to construct byte due to unsupported type",
+					zap.Int("typeOid", int(vec.GetType().Oid)))
 				ByteChan <- &BatchByte{
 					err: moerr.NewInternalError(ses.requestCtx, "constructByte : unsupported type %d", vec.GetType().Oid),
 				}
@@ -506,6 +539,7 @@ func constructByte(obj interface{}, bat *batch.Batch, index int32, ByteChan chan
 		writeByte: writeByte,
 		err:       nil,
 	}
+	ses.writeCsvBytes.Add(int64(len(writeByte))) // statistic out traffic, CASE 2: select into
 	bat.Clean(ses.GetMemPool())
 }
 
@@ -537,7 +571,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 	oq.ep.LineSize = 0
 
 	symbol := oq.ep.Symbol
-	closeby := oq.ep.Fields.EnclosedBy
+	closeby := oq.ep.userConfig.Fields.EnclosedBy
 	flag := oq.ep.ColumnFlag
 	for i := uint64(0); i < oq.mrs.GetColumnCount(); i++ {
 		column, err := oq.mrs.GetColumn(oq.ctx, i)

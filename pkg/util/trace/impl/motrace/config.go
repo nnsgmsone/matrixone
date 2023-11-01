@@ -26,11 +26,6 @@ import (
 )
 
 const (
-	InternalExecutor = "InternalExecutor"
-	FileService      = "FileService"
-)
-
-const (
 	MOStatementType = "statement"
 	MOSpanType      = "span"
 	MOLogType       = "log"
@@ -55,14 +50,23 @@ type tracerProviderConfig struct {
 	// resource contains attributes representing an entity that produces telemetry.
 	resource *trace.Resource // withMOVersion, WithNode,
 
+	// disableSpan
+	disableSpan bool
 	// debugMode used in Tracer.Debug
 	debugMode bool // DebugMode
 
-	batchProcessMode string         // WithBatchProcessMode
-	batchProcessor   BatchProcessor // WithBatchProcessor
+	batchProcessor BatchProcessor // WithBatchProcessor
 
 	// writerFactory gen writer for CSV output
 	writerFactory table.WriterFactory // WithFSWriterFactory, default from export.GetFSWriterFactory4Trace
+	// disableSqlWriter
+	disableSqlWriter bool // set by WithSQLWriterDisable
+
+	// stmt aggregation
+	disableStmtAggregation bool          // set by WithStmtAggregationDisable
+	enableStmtMerge        bool          // set by WithStmtMergeDisable
+	aggregationWindow      time.Duration // WithAggregationWindow
+	selectAggrThreshold    time.Duration // WithSelectThreshold
 
 	sqlExecutor func() ie.InternalExecutor // WithSQLExecutor
 	// needInit control table schema create
@@ -71,6 +75,10 @@ type tracerProviderConfig struct {
 	exportInterval time.Duration //  WithExportInterval
 	// longQueryTime unit ns
 	longQueryTime int64 //  WithLongQueryTime
+	// longSpanTime
+	longSpanTime time.Duration
+	// skipRunningStmt
+	skipRunningStmt bool // set by WithSkipRunningStmt
 
 	bufferSizeThreshold int64 // WithBufferSizeThreshold
 
@@ -156,6 +164,54 @@ func WithLongQueryTime(secs float64) tracerProviderOption {
 	})
 }
 
+func WithLongSpanTime(d time.Duration) tracerProviderOption {
+	return tracerProviderOption(func(cfg *tracerProviderConfig) {
+		cfg.longSpanTime = d
+	})
+}
+
+func WithSpanDisable(disable bool) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.disableSpan = disable
+	}
+}
+
+func WithSkipRunningStmt(skip bool) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.skipRunningStmt = skip
+	}
+}
+
+func WithSQLWriterDisable(disable bool) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.disableSqlWriter = disable
+	}
+}
+
+func WithAggregatorDisable(disable bool) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.disableStmtAggregation = disable
+	}
+}
+
+func WithStmtMergeEnable(enable bool) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.enableStmtMerge = enable
+	}
+}
+
+func WithAggregatorWindow(window time.Duration) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.aggregationWindow = window
+	}
+}
+
+func WithSelectThreshold(window time.Duration) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.selectAggrThreshold = window
+	}
+}
+
 func WithBufferSizeThreshold(size int64) tracerProviderOption {
 	return tracerProviderOption(func(cfg *tracerProviderConfig) {
 		cfg.bufferSizeThreshold = size
@@ -168,11 +224,6 @@ func DebugMode(debug bool) tracerProviderOption {
 	}
 }
 
-func WithBatchProcessMode(mode string) tracerProviderOption {
-	return func(cfg *tracerProviderConfig) {
-		cfg.batchProcessMode = mode
-	}
-}
 func WithBatchProcessor(p BatchProcessor) tracerProviderOption {
 	return func(cfg *tracerProviderConfig) {
 		cfg.batchProcessor = p

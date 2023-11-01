@@ -17,15 +17,23 @@ package frontend
 import (
 	"context"
 
+	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util"
+)
+
+const (
+	DefaultRpcBufferSize = 1 << 10
 )
 
 type (
@@ -35,7 +43,7 @@ type (
 )
 
 type ComputationRunner interface {
-	Run(ts uint64) (err error)
+	Run(ts uint64) (*util.RunResult, error)
 }
 
 // ComputationWrapper is the wrapper of the computation
@@ -49,7 +57,7 @@ type ComputationWrapper interface {
 
 	GetColumns() ([]interface{}, error)
 
-	GetAffectedRows() uint64
+	// GetAffectedRows() uint64
 
 	Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error)
 
@@ -58,6 +66,8 @@ type ComputationWrapper interface {
 	RecordExecPlan(ctx context.Context) error
 
 	GetLoadTag() bool
+
+	GetServerStatus() uint16
 }
 
 type ColumnInfo interface {
@@ -91,23 +101,24 @@ type PrepareStmt struct {
 	PrepareStmt    tree.Statement
 	ParamTypes     []byte
 	IsInsertValues bool
+	InsertBat      *batch.Batch
+	proc           *process.Process
 
-	mp        *mpool.MPool
-	InsertBat *batch.Batch
-	ufs       []func(*vector.Vector, *vector.Vector, int64) error // function pointers for type conversion
+	exprList [][]colexec.ExpressionExecutor
+
+	params              *vector.Vector
+	getFromSendLongData map[int]struct{}
 }
 
 /*
 Disguise the COMMAND CMD_FIELD_LIST as sql query.
 */
 const (
-	cmdFieldListSql = "__++__internal_cmd_field_list"
-	intereSql       = "internal_sql"
-	cloudUserSql    = "cloud_user_sql"
-	cloudNoUserSql  = "cloud_nonuser_sql"
-	externSql       = "external_sql"
-	cloudUserTag    = "cloud_user"
-	cloudNoUserTag  = "cloud_nonuser"
+	cmdFieldListSql    = "__++__internal_cmd_field_list"
+	cmdFieldListSqlLen = len(cmdFieldListSql)
+	cloudUserTag       = "cloud_user"
+	cloudNoUserTag     = "cloud_nonuser"
+	saveResultTag      = "save_result"
 )
 
 var _ tree.Statement = &InternalCmdFieldList{}
@@ -147,8 +158,12 @@ func execResultArrayHasData(arr []ExecResult) bool {
 type BackgroundExec interface {
 	Close()
 	Exec(context.Context, string) error
+	ExecStmt(context.Context, tree.Statement) error
 	GetExecResultSet() []interface{}
 	ClearExecResultSet()
+
+	GetExecResultBatches() []*batch.Batch
+	ClearExecResultBatches()
 }
 
 var _ BackgroundExec = &BackgroundHandler{}
@@ -187,8 +202,46 @@ type outputPool interface {
 }
 
 func (prepareStmt *PrepareStmt) Close() {
+	if prepareStmt.params != nil {
+		prepareStmt.params.Free(prepareStmt.proc.Mp())
+	}
 	if prepareStmt.InsertBat != nil {
-		prepareStmt.InsertBat.Clean(prepareStmt.mp)
+		prepareStmt.InsertBat.SetCnt(1)
+		prepareStmt.InsertBat.Clean(prepareStmt.proc.Mp())
 		prepareStmt.InsertBat = nil
 	}
+	if prepareStmt.exprList != nil {
+		for _, exprs := range prepareStmt.exprList {
+			for _, expr := range exprs {
+				expr.Free()
+			}
+		}
+	}
+}
+
+var _ buf.Allocator = &SessionAllocator{}
+
+type SessionAllocator struct {
+	mp *mpool.MPool
+}
+
+func NewSessionAllocator(pu *config.ParameterUnit) *SessionAllocator {
+	pool, err := mpool.NewMPool("frontend-goetty-pool-cn-level", pu.SV.GuestMmuLimitation, mpool.NoFixed)
+	if err != nil {
+		panic(err)
+	}
+	ret := &SessionAllocator{mp: pool}
+	return ret
+}
+
+func (s *SessionAllocator) Alloc(capacity int) []byte {
+	alloc, err := s.mp.Alloc(capacity)
+	if err != nil {
+		panic(err)
+	}
+	return alloc
+}
+
+func (s SessionAllocator) Free(bs []byte) {
+	s.mp.Free(bs)
 }

@@ -76,16 +76,16 @@ func TestIntersect(t *testing.T) {
 	err := Prepare(c.proc, c.arg)
 	require.NoError(t, err)
 	cnt := 0
-	end := false
+	var end process.ExecStatus
 	for {
 		end, err = Call(0, c.proc, c.arg, false, false)
-		if end {
+		if end == process.ExecStop {
 			break
 		}
 		require.NoError(t, err)
 		result := c.proc.InputBatch()
-		if result != nil && len(result.Zs) != 0 {
-			cnt += result.Length()
+		if result != nil && !result.IsEmpty() {
+			cnt += result.RowCount()
 			require.Equal(t, 3, len(result.Vecs)) // 3 column
 			c.proc.InputBatch().Clean(c.proc.Mp())
 		}
@@ -93,7 +93,7 @@ func TestIntersect(t *testing.T) {
 	require.Equal(t, 1, cnt) // 1 row
 	c.proc.Reg.MergeReceivers[0].Ch <- nil
 	c.proc.Reg.MergeReceivers[1].Ch <- nil
-	c.arg.Free(c.proc, false)
+	c.arg.Free(c.proc, false, nil)
 	require.Equal(t, int64(0), c.proc.Mp().CurrNB())
 }
 

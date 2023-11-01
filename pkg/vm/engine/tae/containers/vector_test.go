@@ -21,6 +21,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -28,12 +29,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDnConst(t *testing.T) {
+func TestTnConst(t *testing.T) {
 	m := mpool.MustNewZero()
 	v := movec.NewConstNull(types.T_int32.ToType(), 20, m)
 	v.IsConstNull()
-	dnv := ToDNVector(v)
-	require.True(t, dnv.IsNull(2))
+	tnv := ToTNVector(v)
+	require.True(t, tnv.IsNull(2))
 }
 
 func withAllocator(opt Options) Options {
@@ -179,8 +180,9 @@ func TestVector3(t *testing.T) {
 
 func TestVector5(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	vecTypes := types.MockColTypes(17)
-	sels := roaring.BitmapOf(2, 6)
+	vecTypes := types.MockColTypes(23)
+	sels := nulls.NewWithSize(1)
+	sels.Add(uint64(2), uint64(6))
 	for _, vecType := range vecTypes {
 		vec := MockVector(vecType, 10, false, nil)
 		rows := make([]int, 0)
@@ -220,8 +222,9 @@ func TestVector5(t *testing.T) {
 
 func TestVector6(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	vecTypes := types.MockColTypes(17)
-	sels := roaring.BitmapOf(2, 6)
+	vecTypes := types.MockColTypes(23)
+	sels := nulls.NewWithSize(1)
+	sels.Add(uint64(2), uint64(6))
 	f := func(vecType types.Type, nullable bool) {
 		vec := MockVector(vecType, 10, false, nil)
 		if nullable {
@@ -306,7 +309,7 @@ func TestVector6(t *testing.T) {
 
 func TestVector7(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	vecTypes := types.MockColTypes(17)
+	vecTypes := types.MockColTypes(23)
 	testF := func(typ types.Type, nullable bool) {
 		vec := MockVector(typ, 10, false, nil)
 		if nullable {
@@ -467,7 +470,7 @@ func TestForeachWindowFixed(t *testing.T) {
 		}
 		return
 	}
-	ForeachWindowFixed(vec1, 0, vec1.Length(), op, nil, nil)
+	ForeachWindowFixed(vec1.GetDownstreamVector(), 0, vec1.Length(), op, nil, nil)
 	assert.Equal(t, vec1.Length(), cnt)
 }
 
@@ -487,7 +490,7 @@ func TestForeachWindowBytes(t *testing.T) {
 		}
 		return
 	}
-	ForeachWindowVarlen(vec1, 0, vec1.Length(), op, nil, nil)
+	ForeachWindowVarlen(vec1.GetDownstreamVector(), 0, vec1.Length(), op, nil, nil)
 	assert.Equal(t, vec1.Length(), cnt)
 }
 
@@ -539,7 +542,7 @@ func BenchmarkForeachVectorBytes(b *testing.B) {
 	b.Run("int64-bytes", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			ForeachWindowBytes(vec, 0, vec.Length(), func(v []byte, isNull bool, row int) (err error) {
+			ForeachWindowBytes(vec.GetDownstreamVector(), 0, vec.Length(), func(v []byte, isNull bool, row int) (err error) {
 				return
 			}, nil)
 		}
@@ -630,7 +633,10 @@ func getOverload(typ types.T, t *testing.T, rows *roaring.Bitmap, vec Vector) an
 		return overLoadFactory[types.Blockid](t, rows, vec)
 	case types.T_uuid:
 		return overLoadFactory[types.Uuid](t, rows, vec)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary, types.T_json, types.T_text:
+	case types.T_enum:
+		return overLoadFactory[types.Enum](t, rows, vec)
+	case types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary, types.T_json, types.T_text,
+		types.T_array_float32, types.T_array_float64:
 		return overLoadFactory[[]byte](t, rows, vec)
 	default:
 		panic("unsupport")
@@ -647,8 +653,9 @@ func overLoadFactory[T any](t *testing.T, rows *roaring.Bitmap, vec Vector) func
 
 func TestForeachSelectBitmap(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	vecTypes := types.MockColTypes(17)
-	sels := roaring.BitmapOf(2, 6)
+	vecTypes := types.MockColTypes(23)
+	sels := nulls.NewWithSize(1)
+	sels.Add(uint64(2), uint64(6))
 	f := func(vecType types.Type, nullable bool) {
 		vec := MockVector(vecType, 10, false, nil)
 		rows := roaring.New()
@@ -669,4 +676,184 @@ func TestForeachSelectBitmap(t *testing.T) {
 	_ = ForeachVectorWindow(vec2, 0, 5, nil, func(_ any, _ bool, _ int) (err error) {
 		return
 	}, nil)
+}
+
+func TestVectorPool(t *testing.T) {
+	cnt := 10
+	pool := NewVectorPool(t.Name(), cnt)
+	assert.Equal(t, cnt, len(pool.fixSizedPool)+len(pool.varlenPool))
+
+	allTypes := []types.Type{
+		types.T_bool.ToType(),
+		types.T_int32.ToType(),
+		types.T_uint8.ToType(),
+		types.T_float32.ToType(),
+		types.T_datetime.ToType(),
+		types.T_date.ToType(),
+		types.T_decimal64.ToType(),
+		types.T_char.ToType(),
+		types.T_char.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+		types.T_json.ToType(),
+	}
+	vecs := make([]*vectorWrapper, 0, len(allTypes))
+	for _, typ := range allTypes {
+		vec := pool.GetVector(&typ)
+		assert.Equal(t, *vec.GetType(), typ)
+		vecs = append(vecs, vec)
+	}
+
+	assert.Equal(t, 0, pool.Allocated())
+
+	for _, vec := range vecs {
+		vec.PreExtend(100)
+	}
+
+	allocated := pool.Allocated()
+
+	if pool.ratio >= 0.6 && pool.ratio < 0.7 {
+		t.Log(pool.String())
+		usedCnt, _ := pool.FixedSizeUsed(false)
+		assert.GreaterOrEqual(t, 6, usedCnt)
+		usedCnt, _ = pool.VarlenUsed(false)
+		assert.GreaterOrEqual(t, 4, usedCnt)
+		usedCnt, _ = pool.Used(false)
+		assert.GreaterOrEqual(t, 10, usedCnt)
+	}
+
+	for _, vec := range vecs {
+		vec.Close()
+	}
+
+	t.Log(pool.String())
+	assert.Equal(t, allocated, pool.Allocated())
+}
+
+func TestVectorPool2(t *testing.T) {
+	pool := NewVectorPool(t.Name(), 10, WithAllocationLimit(1024))
+	typ := types.T_int32.ToType()
+	vec := pool.GetVector(&typ)
+	vec.PreExtend(300)
+	t.Log(pool.String())
+	assert.Less(t, 1024, pool.Allocated())
+	vec.Close()
+	assert.Equal(t, 0, pool.Allocated())
+}
+
+func TestVectorPool3(t *testing.T) {
+	pool := NewVectorPool(t.Name(), 10)
+	typ := types.T_int32.ToType()
+	vec1 := NewVector(typ)
+	vec1.Append(int32(1), false)
+	vec1.Append(int32(2), false)
+	vec1.Append(int32(3), false)
+
+	vec2 := vec1.CloneWindowWithPool(0, 3, pool)
+	t.Log(vec2.PPString(0))
+	vec1.Close()
+	vec2.Close()
+}
+
+func TestConstNullVector(t *testing.T) {
+	vec := NewConstNullVector(types.T_int32.ToType(), 10)
+	defer vec.Close()
+	assert.Equal(t, 10, vec.Length())
+	assert.True(t, vec.IsConstNull())
+
+	for i := 0; i < vec.Length(); i++ {
+		assert.True(t, vec.IsNull(i))
+	}
+
+	var w bytes.Buffer
+	_, err := vec.WriteTo(&w)
+	assert.NoError(t, err)
+
+	vec2 := MakeVector(types.T_int32.ToType())
+	defer vec2.Close()
+	_, err = vec2.ReadFrom(&w)
+	assert.NoError(t, err)
+	assert.Equal(t, 10, vec2.Length())
+	assert.True(t, vec2.IsConstNull())
+	for i := 0; i < vec2.Length(); i++ {
+		assert.True(t, vec2.IsNull(i))
+	}
+
+	vecw := vec.Window(0, 5)
+	assert.Equal(t, 5, vecw.Length())
+	assert.True(t, vecw.IsConstNull())
+	for i := 0; i < vecw.Length(); i++ {
+		assert.True(t, vecw.IsNull(i))
+	}
+}
+
+func TestConstVector(t *testing.T) {
+	vec := NewConstFixed[int32](types.T_int32.ToType(), int32(1), 10)
+	defer vec.Close()
+
+	assert.Equal(t, 10, vec.Length())
+	assert.True(t, vec.IsConst())
+	assert.False(t, vec.IsConstNull())
+
+	for i := 0; i < vec.Length(); i++ {
+		v := vec.Get(i).(int32)
+		assert.Equal(t, int32(1), v)
+	}
+
+	vec2 := NewConstBytes(types.T_char.ToType(), []byte("abc"), 10)
+	defer vec2.Close()
+	assert.Equal(t, 10, vec2.Length())
+	assert.True(t, vec2.IsConst())
+	assert.False(t, vec2.IsConstNull())
+
+	for i := 0; i < vec2.Length(); i++ {
+		assert.Equal(t, []byte("abc"), vec2.Get(i).([]byte))
+	}
+
+	var w bytes.Buffer
+	_, err := vec.WriteTo(&w)
+	assert.NoError(t, err)
+
+	vec3 := MakeVector(types.T_int32.ToType())
+	defer vec3.Close()
+	_, err = vec3.ReadFrom(&w)
+	assert.NoError(t, err)
+	assert.True(t, vec3.IsConst())
+	assert.False(t, vec3.IsConstNull())
+	assert.Equal(t, 10, vec3.Length())
+	for i := 0; i < vec3.Length(); i++ {
+		assert.Equal(t, int32(1), vec3.Get(i).(int32))
+	}
+
+	w.Reset()
+	_, err = vec2.WriteTo(&w)
+	assert.NoError(t, err)
+
+	vec4 := MakeVector(types.T_char.ToType())
+	defer vec4.Close()
+	_, err = vec4.ReadFrom(&w)
+	assert.NoError(t, err)
+	assert.True(t, vec4.IsConst())
+	assert.False(t, vec4.IsConstNull())
+	assert.Equal(t, 10, vec4.Length())
+	for i := 0; i < vec4.Length(); i++ {
+		assert.Equal(t, []byte("abc"), vec4.Get(i).([]byte))
+	}
+
+	vecw := vec.Window(0, 5)
+	assert.Equal(t, 5, vecw.Length())
+	assert.True(t, vecw.IsConst())
+	assert.False(t, vecw.IsConstNull())
+	for i := 0; i < vecw.Length(); i++ {
+		assert.Equal(t, int32(1), vecw.Get(i).(int32))
+	}
+
+	vecw4 := vec4.Window(0, 5)
+	assert.Equal(t, 5, vecw4.Length())
+	assert.True(t, vecw4.IsConst())
+	assert.False(t, vecw4.IsConstNull())
+	for i := 0; i < vecw4.Length(); i++ {
+		assert.Equal(t, []byte("abc"), vecw4.Get(i).([]byte))
+	}
+
 }

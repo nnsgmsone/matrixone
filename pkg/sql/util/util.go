@@ -21,9 +21,27 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func CopyBatch(bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
+	rbat := batch.NewWithSize(len(bat.Vecs))
+	rbat.Attrs = append(rbat.Attrs, bat.Attrs...)
+	for i, srcVec := range bat.Vecs {
+		vec := proc.GetVector(*srcVec.GetType())
+		if err := vector.GetUnionAllFunction(*srcVec.GetType(), proc.Mp())(vec, srcVec); err != nil {
+			rbat.Clean(proc.Mp())
+			return nil, err
+		}
+		rbat.SetVector(int32(i), vec)
+	}
+	rbat.SetRowCount(bat.RowCount())
+	return rbat, nil
+}
 
 func SplitTableAndColumn(name string) (string, string) {
 	var schema string
@@ -42,6 +60,15 @@ func SplitTableAndColumn(name string) (string, string) {
 		schema += xs[i]
 	}
 	return schema, xs[len(xs)-1]
+}
+
+func TableIsLoggingTable(dbName string, tableName string) bool {
+	if tableName == "statement_info" && dbName == "system" {
+		return true
+	} else if tableName == "metric" && dbName == "system_metrics" {
+		return true
+	}
+	return false
 }
 
 // TableIsClusterTable check the table type is cluster table
@@ -103,6 +130,16 @@ func BuildMoDataBaseFilter(curAccountId uint64) tree.Expr {
 	return tree.NewOrExpr(left, right)
 }
 
+func BuildSysStatementInfoFilter(acctName string) tree.Expr {
+	equalAccount := makeStringEqualAst("account", strings.Split(acctName, ":")[0])
+	return tree.NewAndExpr(equalAccount, equalAccount)
+}
+
+func BuildSysMetricFilter(acctName string) tree.Expr {
+	equalAccount := makeStringEqualAst("account", strings.Split(acctName, ":")[0])
+	return tree.NewAndExpr(equalAccount, equalAccount)
+}
+
 // Build the filter condition AST expression for mo_tables, as follows:
 // account_id = cur_account_id or (account_id = 0 and (relname in ('mo_tables','mo_database','mo_columns') or relkind = 'cluster'))
 func BuildMoTablesFilter(curAccountId uint64) tree.Expr {
@@ -141,7 +178,7 @@ func BuildMoTablesFilter(curAccountId uint64) tree.Expr {
 }
 
 // Build the filter condition AST expression for mo_columns, as follows:
-// account_id = current_id or (account_id = 0 and (att_relname in ('mo_database','mo_tables','mo_columns')))
+// account_id = current_id or (account_id = 0 and attr_databse in mo_catalog and att_relname not in other tables)
 func BuildMoColumnsFilter(curAccountId uint64) tree.Expr {
 	// left is: account_id = cur_accountId
 	left := makeAccountIdEqualAst(curAccountId)
@@ -151,13 +188,15 @@ func BuildMoColumnsFilter(curAccountId uint64) tree.Expr {
 		Parts:    tree.NameParts{catalog.SystemColAttr_RelName},
 	}
 
-	mo_databaseConst := tree.NewNumValWithType(constant.MakeString(catalog.MO_DATABASE), catalog.MO_DATABASE, false, tree.P_char)
-	mo_tablesConst := tree.NewNumValWithType(constant.MakeString(catalog.MO_TABLES), catalog.MO_TABLES, false, tree.P_char)
-	mo_columnsConst := tree.NewNumValWithType(constant.MakeString(catalog.MO_COLUMNS), catalog.MO_COLUMNS, false, tree.P_char)
+	att_dblnameColName := &tree.UnresolvedName{
+		NumParts: 1,
+		Parts:    tree.NameParts{catalog.SystemColAttr_DBName},
+	}
 
-	inValues := tree.NewTuple(tree.Exprs{mo_databaseConst, mo_tablesConst, mo_columnsConst})
-	// att_relname in ('mo_database','mo_tables','mo_columns')
-	inExpr := tree.NewComparisonExpr(tree.IN, att_relnameColName, inValues)
+	mo_catalogConst := tree.NewNumValWithType(constant.MakeString(catalog.MO_CATALOG), catalog.MO_CATALOG, false, tree.P_char)
+	inValues := tree.NewTuple(tree.Exprs{mo_catalogConst})
+	// datname in ('mo_catalog')
+	inExpr := tree.NewComparisonExpr(tree.IN, att_dblnameColName, inValues)
 
 	mo_userConst := tree.NewNumValWithType(constant.MakeString("mo_user"), "mo_user", false, tree.P_char)
 	mo_roleConst := tree.NewNumValWithType(constant.MakeString("mo_role"), "mo_role", false, tree.P_char)
@@ -167,29 +206,25 @@ func BuildMoColumnsFilter(curAccountId uint64) tree.Expr {
 	mo_user_defined_functionConst := tree.NewNumValWithType(constant.MakeString("mo_user_defined_function"), "mo_user_defined_function", false, tree.P_char)
 	mo_mysql_compatibility_modeConst := tree.NewNumValWithType(constant.MakeString("mo_mysql_compatibility_mode"), "mo_mysql_compatibility_mode", false, tree.P_char)
 	mo_indexes := tree.NewNumValWithType(constant.MakeString("mo_indexes"), "mo_indexes", false, tree.P_char)
+	mo_table_partitions := tree.NewNumValWithType(constant.MakeString("mo_table_partitions"), "mo_table_partitions", false, tree.P_char)
 	mo_pubs := tree.NewNumValWithType(constant.MakeString("mo_pubs"), "mo_pubs", false, tree.P_char)
 	mo_stored_procedure := tree.NewNumValWithType(constant.MakeString("mo_stored_procedure"), "mo_stored_procedure", false, tree.P_char)
+	mo_stages := tree.NewNumValWithType(constant.MakeString("mo_stages"), "mo_stages", false, tree.P_char)
 
-	notInValues := tree.NewTuple(tree.Exprs{mo_databaseConst, mo_tablesConst, mo_columnsConst, mo_userConst, mo_roleConst, mo_user_grantConst, mo_role_grantConst, mo_role_privsConst, mo_user_defined_functionConst, mo_mysql_compatibility_modeConst, mo_indexes, mo_pubs, mo_stored_procedure})
+	notInValues := tree.NewTuple(tree.Exprs{mo_userConst, mo_roleConst, mo_user_grantConst, mo_role_grantConst, mo_role_privsConst,
+		mo_user_defined_functionConst, mo_mysql_compatibility_modeConst, mo_indexes, mo_table_partitions, mo_pubs, mo_stored_procedure, mo_stages})
+
 	notInexpr := tree.NewComparisonExpr(tree.NOT_IN, att_relnameColName, notInValues)
-
-	dbNameEqualAst := makeStringEqualAst(catalog.SystemColAttr_DBName, "mo_catalog")
-
-	// (relname in ('mo_tables','mo_database','mo_columns') or (att_database = 'mo_catalog' and att_relname != system table in mo_database))
-	innerAndExpr := tree.NewAndExpr(notInexpr, dbNameEqualAst)
-	innerParentExpr := tree.NewParenExpr(innerAndExpr)
-
-	tempExpr := tree.NewOrExpr(inExpr, innerParentExpr)
-	tempExpr2 := tree.NewParenExpr(tempExpr)
 
 	// account_id = 0
 	accountIdEqulZero := makeAccountIdEqualAst(0)
-	// andExpr is: account_id = 0 and (att_relname in ('mo_database','mo_tables','mo_columns'))
-	andExpr := tree.NewAndExpr(accountIdEqulZero, tempExpr2)
+	// andExpr is:account_id = 0 and datname in ('mo_catalog')
+	andExpr := tree.NewAndExpr(accountIdEqulZero, inExpr)
+	andExpr = tree.NewAndExpr(andExpr, notInexpr)
 
-	// right is: (account_id = 0 and (att_relname in ('mo_database','mo_tables','mo_columns')))
+	// right is:(account_id = 0 and datname in ('mo_catalog'))
 	right := tree.NewParenExpr(andExpr)
-	// return is: account_id = current_id or (account_id = 0 and (att_relname in ('mo_database','mo_tables','mo_columns')))
+	// return is: account_id = cur_accountId or (account_id = 0 and datname in ('mo_catalog'))
 	return tree.NewOrExpr(left, right)
 }
 

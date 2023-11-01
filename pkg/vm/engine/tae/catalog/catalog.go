@@ -19,9 +19,9 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"go.uber.org/zap"
 
 	// "time"
 
@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -51,6 +50,8 @@ const (
 	SnapshotAttr_BlockMaxRow     = "block_max_row"
 	SnapshotAttr_SegmentMaxBlock = "segment_max_block"
 	SnapshotAttr_SchemaExtra     = "schema_extra"
+	AccountIDDbNameTblName       = "account_id_db_name_tbl_name"
+	AccountIDDbName              = "account_id_db_name"
 )
 
 type DataFactory interface {
@@ -63,16 +64,11 @@ type Catalog struct {
 	*IDAlloctor
 	*sync.RWMutex
 
-	scheduler tasks.TaskScheduler
-
 	entries   map[uint64]*common.GenericDLNode[*DBEntry]
 	nameNodes map[string]*nodeList[*DBEntry]
 	link      *common.GenericSortedDList[*DBEntry]
 
 	nodesMu sync.RWMutex
-
-	tableCnt  atomic.Int32
-	columnCnt atomic.Int32
 }
 
 func genDBFullName(tenantID uint32, name string) string {
@@ -82,14 +78,13 @@ func genDBFullName(tenantID uint32, name string) string {
 	return fmt.Sprintf("%d-%s", tenantID, name)
 }
 
-func MockCatalog(scheduler tasks.TaskScheduler) *Catalog {
+func MockCatalog() *Catalog {
 	catalog := &Catalog{
 		RWMutex:    new(sync.RWMutex),
 		IDAlloctor: NewIDAllocator(),
 		entries:    make(map[uint64]*common.GenericDLNode[*DBEntry]),
 		nameNodes:  make(map[string]*nodeList[*DBEntry]),
 		link:       common.NewGenericSortedDList((*DBEntry).Less),
-		scheduler:  scheduler,
 	}
 	catalog.InitSystemDB()
 	return catalog
@@ -102,18 +97,16 @@ func NewEmptyCatalog() *Catalog {
 		entries:    make(map[uint64]*common.GenericDLNode[*DBEntry]),
 		nameNodes:  make(map[string]*nodeList[*DBEntry]),
 		link:       common.NewGenericSortedDList((*DBEntry).Less),
-		scheduler:  nil,
 	}
 }
 
-func OpenCatalog(scheduler tasks.TaskScheduler, dataFactory DataFactory) (*Catalog, error) {
+func OpenCatalog() (*Catalog, error) {
 	catalog := &Catalog{
 		RWMutex:    new(sync.RWMutex),
 		IDAlloctor: NewIDAllocator(),
 		entries:    make(map[uint64]*common.GenericDLNode[*DBEntry]),
 		nameNodes:  make(map[string]*nodeList[*DBEntry]),
 		link:       common.NewGenericSortedDList((*DBEntry).Less),
-		scheduler:  scheduler,
 	}
 	catalog.InitSystemDB()
 	return catalog, nil
@@ -271,7 +264,7 @@ func (catalog *Catalog) onReplayCreateDB(
 	catalog.OnReplayDBID(dbid)
 	db, _ := catalog.GetDatabaseByID(dbid)
 	if db != nil {
-		dbCreatedAt := db.GetCreatedAt()
+		dbCreatedAt := db.GetCreatedAtLocked()
 		if !dbCreatedAt.Equal(txnNode.End) {
 			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s",
 				txnNode.End.ToString(), dbCreatedAt.ToString()))
@@ -305,8 +298,7 @@ func (catalog *Catalog) onReplayDeleteDB(dbid uint64, txnNode *txnbase.TxnMVCCNo
 	catalog.OnReplayDBID(dbid)
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
-		logutil.Infof("delete %d", dbid)
-		logutil.Info(catalog.SimplePPString(common.PPL3))
+		logutil.Info("delete %d", zap.Uint64("dbid", dbid), zap.String("catalog pp", catalog.SimplePPString(common.PPL3)))
 		panic(err)
 	}
 	dbDeleteAt := db.GetDeleteAt()
@@ -319,7 +311,7 @@ func (catalog *Catalog) onReplayDeleteDB(dbid uint64, txnNode *txnbase.TxnMVCCNo
 	prev := db.MVCCChain.GetLatestNodeLocked()
 	un := &MVCCNode[*EmptyMVCCNode]{
 		EntryMVCCNode: &EntryMVCCNode{
-			CreatedAt: db.GetCreatedAt(),
+			CreatedAt: db.GetCreatedAtLocked(),
 			DeletedAt: txnNode.End,
 		},
 		TxnMVCCNode: txnNode,
@@ -357,7 +349,7 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *T
 		tbl.TableNode = cmd.node
 		tbl.TableNode.schema.Store(un.BaseNode.Schema)
 		tbl.Insert(un)
-		err = db.AddEntryLocked(tbl, un.GetTxn(), false)
+		err = db.AddEntryLocked(tbl, un.GetTxn(), true)
 		if err != nil {
 			logutil.Warn(catalog.SimplePPString(common.PPL3))
 			panic(err)
@@ -373,7 +365,7 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *T
 		schema := un.BaseNode.Schema
 		tbl.TableNode.schema.Store(schema)
 		// alter table rename
-		if schema.Extra.OldName != "" {
+		if schema.Extra.OldName != "" && un.DeletedAt.IsEmpty() {
 			err := tbl.db.RenameTableInTxn(schema.Extra.OldName, schema.Name, tbl.ID, schema.AcInfo.TenantID, un.GetTxn(), true)
 			if err != nil {
 				logutil.Warn(schema.String())
@@ -394,6 +386,7 @@ func (catalog *Catalog) OnReplayTableBatch(ins, insTxn, insCol, del, delTxn *con
 		schemaOffset = schema.ReadFromBatch(insCol, schemaOffset, tid)
 		schema.Comment = string(ins.GetVectorByName(pkgcatalog.SystemRelAttr_Comment).Get(i).([]byte))
 		schema.Version = ins.GetVectorByName(pkgcatalog.SystemRelAttr_Version).Get(i).(uint32)
+		schema.CatalogVersion = ins.GetVectorByName(pkgcatalog.SystemRelAttr_CatalogVersion).Get(i).(uint32)
 		schema.Partitioned = ins.GetVectorByName(pkgcatalog.SystemRelAttr_Partitioned).Get(i).(int8)
 		schema.Partition = string(ins.GetVectorByName(pkgcatalog.SystemRelAttr_Partition).Get(i).([]byte))
 		schema.Relkind = string(ins.GetVectorByName(pkgcatalog.SystemRelAttr_Kind).Get(i).([]byte))
@@ -409,6 +402,7 @@ func (catalog *Catalog) OnReplayTableBatch(ins, insTxn, insCol, del, delTxn *con
 		schema.SegmentMaxBlocks = insTxn.GetVectorByName(SnapshotAttr_SegmentMaxBlock).Get(i).(uint16)
 		extra := insTxn.GetVectorByName(SnapshotAttr_SchemaExtra).Get(i).([]byte)
 		schema.MustRestoreExtra(extra)
+		schema.Finalize(true)
 		txnNode := txnbase.ReadTuple(insTxn, i)
 		catalog.onReplayCreateTable(dbid, tid, schema, txnNode, dataFactory)
 	}
@@ -429,7 +423,7 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 	}
 	tbl, _ := db.GetTableEntryByID(tid)
 	if tbl != nil {
-		tblCreatedAt := tbl.GetCreatedAt()
+		tblCreatedAt := tbl.GetCreatedAtLocked()
 		if tblCreatedAt.Greater(txnNode.End) {
 			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), tblCreatedAt.ToString()))
 		}
@@ -449,6 +443,7 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 		}
 		tbl.TableNode.schema.Store(schema)
 		if schema.Extra.OldName != "" {
+			logutil.Infof("replay rename %v from %v -> %v", tid, schema.Extra.OldName, schema.Name)
 			err := tbl.db.RenameTableInTxn(schema.Extra.OldName, schema.Name, tbl.ID, schema.AcInfo.TenantID, un.GetTxn(), true)
 			if err != nil {
 				logutil.Warn(schema.String())
@@ -519,7 +514,7 @@ func (catalog *Catalog) onReplayUpdateSegment(
 	}
 	tbl, err := db.GetTableEntryByID(cmd.ID.TableID)
 	if err != nil {
-		logutil.Infof("tbl %d-%d", cmd.ID.DbID, cmd.ID.TableID)
+		logutil.Debugf("tbl %d-%d", cmd.ID.DbID, cmd.ID.TableID)
 		logutil.Info(catalog.SimplePPString(3))
 		panic(err)
 	}
@@ -592,7 +587,7 @@ func (catalog *Catalog) onReplayCreateSegment(
 	}
 	seg, _ := rel.GetSegmentByID(segid)
 	if seg != nil {
-		segCreatedAt := seg.GetCreatedAt()
+		segCreatedAt := seg.GetCreatedAtLocked()
 		if !segCreatedAt.Equal(txnNode.End) {
 			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), segCreatedAt.ToString()))
 		}
@@ -677,6 +672,11 @@ func (catalog *Catalog) onReplayUpdateBlock(
 			panic(err)
 		}
 	}
+	if !un.BaseNode.DeltaLoc.IsEmpty() {
+		name := un.BaseNode.DeltaLoc.Name()
+		objn := name.Num()
+		seg.replayNextObjectIdx(objn)
+	}
 	if err == nil {
 		blkun := blk.SearchNode(un)
 		if blkun != nil {
@@ -685,6 +685,7 @@ func (catalog *Catalog) onReplayUpdateBlock(
 			blk.Insert(un)
 			blk.location = un.BaseNode.MetaLoc
 		}
+		blk.blkData.TryUpgrade()
 		return
 	}
 	blk = NewReplayBlockEntry()
@@ -693,7 +694,11 @@ func (catalog *Catalog) onReplayUpdateBlock(
 	blk.BaseEntryImpl.Insert(un)
 	blk.location = un.BaseNode.MetaLoc
 	blk.segment = seg
-	blk.blkData = dataFactory.MakeBlockFactory()(blk)
+	if blk.blkData == nil {
+		blk.blkData = dataFactory.MakeBlockFactory()(blk)
+	} else {
+		blk.blkData.TryUpgrade()
+	}
 	if observer != nil {
 		observer.OnTimeStamp(prepareTS)
 	}
@@ -752,6 +757,11 @@ func (catalog *Catalog) onReplayCreateBlock(
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
+	if !deltaloc.IsEmpty() {
+		name := deltaloc.Name()
+		objn := name.Num()
+		seg.replayNextObjectIdx(objn)
+	}
 	blk, _ := seg.GetBlockEntryByID(blkid)
 	var un *MVCCNode[*MetadataMVCCNode]
 	if blk == nil {
@@ -760,7 +770,6 @@ func (catalog *Catalog) onReplayCreateBlock(
 		blk.segment = seg
 		blk.ID = *blkid
 		blk.state = state
-		blk.blkData = dataFactory.MakeBlockFactory()(blk)
 		seg.ReplayAddEntryLocked(blk)
 		un = &MVCCNode[*MetadataMVCCNode]{
 			EntryMVCCNode: &EntryMVCCNode{
@@ -791,6 +800,7 @@ func (catalog *Catalog) onReplayCreateBlock(
 	}
 	blk.Insert(un)
 	blk.location = un.BaseNode.MetaLoc
+	blk.blkData = dataFactory.MakeBlockFactory()(blk)
 }
 func (catalog *Catalog) onReplayDeleteBlock(
 	dbid, tid uint64,
@@ -816,18 +826,17 @@ func (catalog *Catalog) onReplayDeleteBlock(
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
+	if !deltaloc.IsEmpty() {
+		name := deltaloc.Name()
+		objn := name.Num()
+		seg.replayNextObjectIdx(objn)
+	}
 	blk, err := seg.GetBlockEntryByID(blkid)
 	if err != nil {
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
-	blkDeleteAt := blk.GetDeleteAt()
-	if !blkDeleteAt.IsEmpty() {
-		if !blkDeleteAt.Equal(txnNode.End) {
-			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), blkDeleteAt.ToString()))
-		}
-		return
-	}
+
 	prevUn := blk.MVCCChain.GetLatestNodeLocked()
 	un := &MVCCNode[*MetadataMVCCNode]{
 		EntryMVCCNode: &EntryMVCCNode{
@@ -842,6 +851,7 @@ func (catalog *Catalog) onReplayDeleteBlock(
 	}
 	blk.Insert(un)
 	blk.location = un.BaseNode.MetaLoc
+	blk.blkData.TryUpgrade()
 }
 func (catalog *Catalog) ReplayTableRows() {
 	rows := uint64(0)
@@ -881,31 +891,10 @@ func (catalog *Catalog) CoarseDBCnt() int {
 	return len(catalog.entries)
 }
 
-func (catalog *Catalog) CoarseTableCnt() int {
-	return int(catalog.tableCnt.Load())
-}
-
-func (catalog *Catalog) CoarseColumnCnt() int {
-	return int(catalog.columnCnt.Load())
-}
-
-func (catalog *Catalog) AddTableCnt(cnt int) {
-	if catalog.tableCnt.Add(int32(cnt)) < 0 {
-		panic("logic error")
-	}
-}
-
-func (catalog *Catalog) AddColumnCnt(cnt int) {
-	if catalog.columnCnt.Add(int32(cnt)) < 0 {
-		panic("logic error")
-	}
-}
-
 func (catalog *Catalog) GetItemNodeByIDLocked(id uint64) *common.GenericDLNode[*DBEntry] {
 	return catalog.entries[id]
 }
 
-func (catalog *Catalog) GetScheduler() tasks.TaskScheduler { return catalog.scheduler }
 func (catalog *Catalog) GetDatabaseByID(id uint64) (db *DBEntry, err error) {
 	catalog.RLock()
 	defer catalog.RUnlock()
@@ -1051,11 +1040,11 @@ func (catalog *Catalog) DropDBEntry(
 		err = moerr.NewTAEErrorNoCtx("not permitted")
 		return
 	}
-	dn, err := catalog.txnGetNodeByName(txn.GetTenantID(), name, txn)
+	tn, err := catalog.txnGetNodeByName(txn.GetTenantID(), name, txn)
 	if err != nil {
 		return
 	}
-	entry := dn.GetPayload()
+	entry := tn.GetPayload()
 	entry.Lock()
 	defer entry.Unlock()
 	if newEntry, err = entry.DropEntryLocked(txn); err == nil {
@@ -1126,6 +1115,9 @@ func (catalog *Catalog) RecurLoop(processor Processor) (err error) {
 		}
 		if err = dbEntry.RecurLoop(processor); err != nil {
 			return
+		}
+		if err = processor.OnPostDatabase(dbEntry); err != nil {
+			break
 		}
 		dbIt.Next()
 	}

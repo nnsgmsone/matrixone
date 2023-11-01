@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
+func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
 	aliasMap := make(map[string][2]string)
 	for _, tbl := range stmt.TableRefs {
 		getAliasToName(ctx, tbl, "", aliasMap)
@@ -28,7 +28,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	if err != nil {
 		return nil, err
 	}
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt)
 
 	queryBindCtx := NewBindContext(builder, nil)
 	lastNodeId, err := deleteToSelect(builder, queryBindCtx, stmt, true, tblInfo)
@@ -43,12 +43,9 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
 
 	// append sink node
-	sinkNode := &Node{
-		NodeType: plan.Node_SINK,
-		Children: []int32{lastNodeId},
-	}
-	lastNodeId = builder.appendNode(sinkNode, queryBindCtx)
+	lastNodeId = appendSinkNode(builder, queryBindCtx, lastNodeId)
 	sourceStep = builder.appendStep(lastNodeId)
+
 	allDelTableIDs := make(map[uint64]struct{})
 	for _, tableDef := range tblInfo.tableDefs {
 		allDelTableIDs[tableDef.TblId] = struct{}{}
@@ -67,17 +64,20 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 		delPlanCtx.beginIdx = beginIdx
 		delPlanCtx.sourceStep = sourceStep
 		delPlanCtx.isMulti = tblInfo.isMulti
+		delPlanCtx.needAggFilter = tblInfo.needAggFilter
 		delPlanCtx.updateColLength = 0
 		delPlanCtx.rowIdPos = getRowIdPos(tableDef)
 		delPlanCtx.allDelTableIDs = allDelTableIDs
 		delPlanCtx.lockTable = needLockTable
 
-		nextSourceStep, err := makePreUpdateDeletePlan(ctx, builder, deleteBindCtx, delPlanCtx)
+		lastNodeId = appendSinkScanNode(builder, deleteBindCtx, sourceStep)
+		lastNodeId, err = makePreUpdateDeletePlan(ctx, builder, deleteBindCtx, delPlanCtx, lastNodeId)
 		if err != nil {
 			return nil, err
 		}
+		lastNodeId = appendSinkNode(builder, deleteBindCtx, lastNodeId)
+		nextSourceStep := builder.appendStep(lastNodeId)
 		delPlanCtx.sourceStep = nextSourceStep
-
 		err = buildDeletePlans(ctx, builder, deleteBindCtx, delPlanCtx)
 		if err != nil {
 			return nil, err
@@ -86,6 +86,8 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 		putDmlPlanCtx(delPlanCtx)
 	}
 
+	reduceSinkSinkScanNodes(query)
+	ReCalcQueryStats(builder, query)
 	query.StmtType = plan.Query_DELETE
 	return &Plan{
 		Plan: &plan.Plan_Query{

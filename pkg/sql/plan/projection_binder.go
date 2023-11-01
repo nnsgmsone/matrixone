@@ -76,6 +76,21 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 		}, nil
 	}
 
+	if colPos, ok := b.ctx.timeByAst[astStr]; ok {
+		if astStr != TimeWindowEnd && astStr != TimeWindowStart {
+			b.ctx.timeAsts = append(b.ctx.timeAsts, astExpr)
+		}
+		return &plan.Expr{
+			Typ: b.ctx.times[colPos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: b.ctx.timeTag,
+					ColPos: colPos,
+				},
+			},
+		}, nil
+	}
+
 	return b.baseBindExpr(astExpr, depth, isRoot)
 }
 
@@ -147,16 +162,21 @@ func (b *ProjectionBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, 
 	}
 	// preceding and following
 	switch ws.Frame.Start.Type {
-	case tree.Preceding:
+	case tree.Following:
+		if ws.Frame.Start.UnBounded {
+			return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>': frame start cannot be UNBOUNDED FOLLOWING.")
+		}
+		if ws.Frame.End.Type == tree.Preceding || ws.Frame.End.Type == tree.CurrentRow {
+			return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>': frame start or end is negative, NULL or of non-integral type")
+		}
+	case tree.CurrentRow:
 		if ws.Frame.End.Type == tree.Preceding {
 			return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>': frame start or end is negative, NULL or of non-integral type")
 		}
-	case tree.Following:
-		return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>': frame start or end is negative, NULL or of non-integral type")
-	case tree.CurrentRow:
-		if ws.Frame.End.Type != tree.CurrentRow {
-			return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>': frame start or end is negative, NULL or of non-integral type")
-		}
+	}
+
+	if ws.Frame.End.Type == tree.Preceding && ws.Frame.End.UnBounded {
+		return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>': frame end cannot be UNBOUNDED PRECEDING.")
 	}
 
 	w.Frame = &plan.FrameClause{
@@ -243,18 +263,16 @@ func (b *ProjectionBinder) makeFrameConstValue(expr tree.Expr, typ *plan.Type) (
 		return nil, err
 	}
 
-	bat := batch.NewWithSize(0)
-	bat.Zs = []int64{1}
 	executor, err := colexec.NewExpressionExecutor(b.builder.compCtx.GetProcess(), e)
 	if err != nil {
 		return nil, err
 	}
 	defer executor.Free()
-	vec, err := executor.Eval(b.builder.compCtx.GetProcess(), []*batch.Batch{bat})
+	vec, err := executor.Eval(b.builder.compCtx.GetProcess(), []*batch.Batch{batch.EmptyForConstFoldBatch})
 	if err != nil {
 		return nil, err
 	}
-	c := rule.GetConstantValue(vec, false)
+	c := rule.GetConstantValue(vec, false, 0)
 
 	return &plan.Expr{
 		Typ:  typ,
@@ -290,18 +308,16 @@ func (b *ProjectionBinder) resetInterval(e *Expr) (*Expr, error) {
 		return nil, err
 	}
 
-	bat := batch.NewWithSize(0)
-	bat.Zs = []int64{1}
 	executor, err := colexec.NewExpressionExecutor(b.builder.compCtx.GetProcess(), numberExpr)
 	if err != nil {
 		return nil, err
 	}
 	defer executor.Free()
-	vec, err := executor.Eval(b.builder.compCtx.GetProcess(), []*batch.Batch{bat})
+	vec, err := executor.Eval(b.builder.compCtx.GetProcess(), []*batch.Batch{batch.EmptyForConstFoldBatch})
 	if err != nil {
 		return nil, err
 	}
-	c := rule.GetConstantValue(vec, false)
+	c := rule.GetConstantValue(vec, false, 0)
 
 	e.Expr.(*plan.Expr_List).List.List[0] = &plan.Expr{Typ: typ, Expr: &plan.Expr_C{C: c}}
 	e.Expr.(*plan.Expr_List).List.List[1] = makePlan2Int64ConstExprWithType(int64(intervalType))
@@ -311,4 +327,9 @@ func (b *ProjectionBinder) resetInterval(e *Expr) (*Expr, error) {
 
 func (b *ProjectionBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
 	return b.baseBindSubquery(astExpr, isRoot)
+}
+
+func (b *ProjectionBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
+	b.ctx.timeAsts = append(b.ctx.timeAsts, astExpr)
+	return b.havingBinder.BindTimeWindowFunc(funcName, astExpr, depth, isRoot)
 }

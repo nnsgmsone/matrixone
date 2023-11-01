@@ -17,20 +17,28 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"sync"
 	"testing"
+	"time"
 
-	"github.com/stretchr/testify/require"
-
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func makeColExprForTest(idx int32, typ types.T) *plan.Expr {
@@ -258,8 +266,8 @@ func TestEvalZonemapFilter(t *testing.T) {
 				}),
 			},
 			meta: func() objectio.BlockObject {
-				objMeta := objectio.BuildMetaData(1, 4)
-				meta := objMeta.GetBlockMeta(0)
+				objDataMeta := objectio.BuildMetaData(1, 4)
+				meta := objDataMeta.GetBlockMeta(0)
 				meta.MustGetColumn(0).SetZoneMap(zm0)
 				meta.MustGetColumn(1).SetZoneMap(zm1)
 				meta.MustGetColumn(2).SetZoneMap(zm2)
@@ -280,11 +288,187 @@ func TestEvalZonemapFilter(t *testing.T) {
 			cnt := plan2.AssignAuxIdForExpr(expr, 0)
 			zms := make([]objectio.ZoneMap, cnt)
 			vecs := make([]*vector.Vector, cnt)
-			zm := evalFilterExprWithZonemap(context.Background(), tc.meta, expr, zms, vecs, columnMap, proc)
+			zm := colexec.EvaluateFilterByZoneMap(context.Background(), proc, expr, tc.meta, columnMap, zms, vecs)
 			require.Equal(t, tc.expect[i], zm, tc.desc[i])
 		}
 	}
 	require.Zero(t, m.CurrNB())
+}
+
+func TestGetCompositePkValueByExpr(t *testing.T) {
+	type myCase struct {
+		desc    []string
+		exprs   []*plan.Expr
+		expect  []int
+		hasNull []bool
+	}
+	// a, b, c, d are columns of table t1
+	// d,c,b are composite primary key
+	tc := myCase{
+		desc: []string{
+			"a=10", "a=20 and b=10", "a=20 and d=10", "b=20 and c=10",
+			"b=10 and d=20", "b=10 and c=20 and d=30",
+			"c=10 and d=20", "d=10 or a=10", "d=10 or c=20 and a=30",
+			"d=10 or c=20 and d=30", "d=10 and c=20 or d=30",
+			"d=null", "c=null", "b=null", "null=b", "c=null and a=10",
+		},
+		hasNull: []bool{
+			false, false, false, false, false, false, false, false, false, false, false,
+			true, true, true, true, true,
+		},
+		expect: []int{
+			0, 0, 1, 0, 1, 3, 2, 0, 0, 1, 0,
+			0, 0, 0, 0, 0,
+		},
+		exprs: []*plan.Expr{
+			makeFunctionExprForTest("=", []*plan.Expr{
+				makeColExprForTest(0, types.T_float64),
+				plan2.MakePlan2Float64ConstExprWithType(10),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(20),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(1, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(10),
+				}),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(20),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(3, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(10),
+				}),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(1, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(20),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(2, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(10),
+				}),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(1, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(10),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(3, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(20),
+				}),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(1, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(10),
+				}),
+				makeFunctionExprForTest("and", []*plan.Expr{
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(2, types.T_float64),
+						plan2.MakePlan2Float64ConstExprWithType(20),
+					}),
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(3, types.T_float64),
+						plan2.MakePlan2Float64ConstExprWithType(30),
+					}),
+				}),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(2, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(10),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(3, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(20),
+				}),
+			}),
+			makeFunctionExprForTest("or", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(2, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(20),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(0),
+				}),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("or", []*plan.Expr{
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(3, types.T_float64),
+						plan2.MakePlan2Float64ConstExprWithType(10),
+					}),
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(2, types.T_float64),
+						plan2.MakePlan2Float64ConstExprWithType(20),
+					}),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(30),
+				}),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("or", []*plan.Expr{
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(3, types.T_float64),
+						plan2.MakePlan2Float64ConstExprWithType(10),
+					}),
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(2, types.T_float64),
+						plan2.MakePlan2Float64ConstExprWithType(20),
+					}),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(3, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(30),
+				}),
+			}),
+			makeFunctionExprForTest("or", []*plan.Expr{
+				makeFunctionExprForTest("and", []*plan.Expr{
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(3, types.T_float64),
+						plan2.MakePlan2Float64ConstExprWithType(10),
+					}),
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(2, types.T_float64),
+						plan2.MakePlan2Float64ConstExprWithType(20),
+					}),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(3, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(30),
+				}),
+			}),
+		},
+	}
+	pks := []string{"d", "c", "b"}
+	for i, expr := range tc.exprs {
+		vals := make([]*plan.Const, len(pks))
+		ok, hasNull := getCompositPKVals(expr, pks, vals, nil)
+		cnt := 0
+		require.Equal(t, tc.hasNull[i], hasNull)
+		if hasNull {
+			require.False(t, ok)
+			continue
+		}
+		if ok {
+			for _, val := range vals {
+				t.Logf("val: %v", val)
+			}
+			cnt = getValidCompositePKCnt(vals)
+		}
+		require.Equal(t, tc.expect[i], cnt)
+	}
 }
 
 func TestGetNonIntPkValueByExpr(t *testing.T) {
@@ -323,7 +507,7 @@ func TestGetNonIntPkValueByExpr(t *testing.T) {
 
 	t.Run("test getPkValueByExpr", func(t *testing.T) {
 		for i, testCase := range testCases {
-			result, data := getPkValueByExpr(testCase.expr, "a", testCase.typ)
+			result, _, data := getPkValueByExpr(testCase.expr, "a", testCase.typ, nil)
 			if result != testCase.result {
 				t.Fatalf("test getPkValueByExpr at cases[%d], get result is different with expected", i)
 			}
@@ -610,31 +794,371 @@ func TestComputeRangeByIntPk(t *testing.T) {
 	})
 }
 
-// func TestGetListByRange(t *testing.T) {
-// 	type asserts = struct {
-// 		result []DNStore
-// 		list   []DNStore
-// 		r      [][2]int64
-// 	}
+type mockHAKeeperClient struct {
+	sync.RWMutex
+	value logpb.ClusterDetails
+	err   error
+}
 
-// 	testCases := []asserts{
-// 		{[]DNStore{{UUID: "1"}, {UUID: "2"}}, []DNStore{{UUID: "1"}, {UUID: "2"}}, [][2]int64{{14, 32324234234234}}},
-// 		{[]DNStore{{UUID: "1"}}, []DNStore{{UUID: "1"}, {UUID: "2"}}, [][2]int64{{14, 14}}},
-// 	}
+func (c *mockHAKeeperClient) updateCN(uuid string, labels map[string]metadata.LabelList) {
+	c.Lock()
+	defer c.Unlock()
+	var cs *logpb.CNStore
+	for i := range c.value.CNStores {
+		if c.value.CNStores[i].UUID == uuid {
+			cs = &c.value.CNStores[i]
+			break
+		}
+	}
+	if cs != nil {
+		cs.Labels = labels
+		return
+	}
+	cs = &logpb.CNStore{
+		UUID:      uuid,
+		Labels:    labels,
+		WorkState: metadata.WorkState_Working,
+	}
+	c.value.CNStores = append(c.value.CNStores, *cs)
+}
 
-// 	t.Run("test getListByRange", func(t *testing.T) {
-// 		for i, testCase := range testCases {
-// 			result := getListByRange(testCase.list, testCase.r)
-// 			if len(result) != len(testCase.result) {
-// 				t.Fatalf("test getListByRange at cases[%d], data length is not match", i)
-// 			}
-// 			/*
-// 				for j, r := range testCase.result {
-// 					if r.UUID != result[j].UUID {
-// 						t.Fatalf("test getListByRange at cases[%d], result[%d] is not match", i, j)
-// 					}
-// 				}
-// 			*/
-// 		}
-// 	})
-// }
+func (c *mockHAKeeperClient) GetClusterDetails(ctx context.Context) (logpb.ClusterDetails, error) {
+	c.RLock()
+	defer c.RUnlock()
+	return c.value, c.err
+}
+
+func runTestWithMOCluster(t *testing.T, fn func(t *testing.T, hc *mockHAKeeperClient, c clusterservice.MOCluster)) {
+	defer leaktest.AfterTest(t)()
+	rt := runtime.DefaultRuntime()
+	runtime.SetupProcessLevelRuntime(rt)
+	hc := &mockHAKeeperClient{}
+	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
+	defer mc.Close()
+	rt.SetGlobalVariables(runtime.ClusterService, mc)
+
+	fn(t, hc, mc)
+}
+
+func TestSelectForSuperTenant_C0(t *testing.T) {
+	runTestWithMOCluster(t, func(t *testing.T, hc *mockHAKeeperClient, c clusterservice.MOCluster) {
+		cnLabels1 := map[string]metadata.LabelList{}
+		hc.updateCN("cn1", cnLabels1)
+
+		cnLabels2 := map[string]metadata.LabelList{}
+		hc.updateCN("cn2", cnLabels2)
+		c.ForceRefresh(true)
+
+		var cns []*metadata.CNService
+
+		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
+			"account": "sys",
+		}, clusterservice.EQ)
+		SelectForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
+			cns = append(cns, s)
+		})
+		assert.Equal(t, 2, len(cns))
+	})
+}
+
+func TestSelectForSuperTenant_C1(t *testing.T) {
+	runTestWithMOCluster(t, func(t *testing.T, hc *mockHAKeeperClient, c clusterservice.MOCluster) {
+		cnLabels1 := map[string]metadata.LabelList{
+			"account": {
+				Labels: []string{"sys"},
+			},
+			"k1": {
+				Labels: []string{"v1"},
+			},
+		}
+		hc.updateCN("cn1", cnLabels1)
+
+		cnLabels2 := map[string]metadata.LabelList{
+			"k2": {
+				Labels: []string{"v2"},
+			},
+		}
+		hc.updateCN("cn2", cnLabels2)
+		c.ForceRefresh(true)
+
+		var cns []*metadata.CNService
+
+		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
+			"account": "sys",
+			"k1":      "v1",
+		}, clusterservice.EQ)
+		SelectForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
+			cns = append(cns, s)
+		})
+		assert.Equal(t, 1, len(cns))
+		assert.Equal(t, "cn1", cns[0].ServiceID)
+	})
+}
+
+func TestSelectForSuperTenant_C2(t *testing.T) {
+	runTestWithMOCluster(t, func(t *testing.T, hc *mockHAKeeperClient, c clusterservice.MOCluster) {
+		cnLabels1 := map[string]metadata.LabelList{
+			"k1": {
+				Labels: []string{"v1"},
+			},
+		}
+		hc.updateCN("cn1", cnLabels1)
+
+		cnLabels2 := map[string]metadata.LabelList{
+			"k2": {
+				Labels: []string{"v2"},
+			},
+		}
+		hc.updateCN("cn2", cnLabels2)
+		c.ForceRefresh(true)
+
+		var cns []*metadata.CNService
+
+		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
+			"account": "sys",
+			"k2":      "v2",
+		}, clusterservice.EQ)
+		SelectForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
+			cns = append(cns, s)
+		})
+		assert.Equal(t, 1, len(cns))
+		assert.Equal(t, "cn2", cns[0].ServiceID)
+	})
+}
+
+func TestSelectForSuperTenant_C3(t *testing.T) {
+	runTestWithMOCluster(t, func(t *testing.T, hc *mockHAKeeperClient, c clusterservice.MOCluster) {
+		cnLabels1 := map[string]metadata.LabelList{
+			"account": {
+				Labels: []string{"sys"},
+			},
+		}
+		hc.updateCN("cn1", cnLabels1)
+
+		cnLabels2 := map[string]metadata.LabelList{
+			"k2": {
+				Labels: []string{"v2"},
+			},
+		}
+		hc.updateCN("cn2", cnLabels2)
+		c.ForceRefresh(true)
+
+		var cns []*metadata.CNService
+
+		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
+			"account": "sys",
+		}, clusterservice.EQ)
+		SelectForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
+			cns = append(cns, s)
+		})
+		assert.Equal(t, 1, len(cns))
+		assert.Equal(t, "cn1", cns[0].ServiceID)
+	})
+}
+
+func TestSelectForSuperTenant_C4(t *testing.T) {
+	runTestWithMOCluster(t, func(t *testing.T, hc *mockHAKeeperClient, c clusterservice.MOCluster) {
+		cnLabels1 := map[string]metadata.LabelList{
+			"k1": {
+				Labels: []string{"v1"},
+			},
+		}
+		hc.updateCN("cn1", cnLabels1)
+
+		cnLabels2 := map[string]metadata.LabelList{
+			"k2": {
+				Labels: []string{"v2"},
+			},
+		}
+		hc.updateCN("cn2", cnLabels2)
+		c.ForceRefresh(true)
+
+		var cns []*metadata.CNService
+
+		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
+			"account": "sys",
+		}, clusterservice.EQ)
+		SelectForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
+			cns = append(cns, s)
+		})
+		assert.Equal(t, 2, len(cns))
+	})
+}
+
+func TestSelectForSuperTenant_C5(t *testing.T) {
+	runTestWithMOCluster(t, func(t *testing.T, hc *mockHAKeeperClient, c clusterservice.MOCluster) {
+		cnLabels1 := map[string]metadata.LabelList{
+			"k1": {
+				Labels: []string{"v1"},
+			},
+		}
+		hc.updateCN("cn1", cnLabels1)
+
+		cnLabels2 := map[string]metadata.LabelList{}
+		hc.updateCN("cn2", cnLabels2)
+		c.ForceRefresh(true)
+
+		var cns []*metadata.CNService
+
+		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
+			"account": "sys",
+		}, clusterservice.EQ)
+		SelectForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
+			cns = append(cns, s)
+		})
+		assert.Equal(t, 1, len(cns))
+		assert.Equal(t, "cn1", cns[0].ServiceID)
+	})
+}
+
+func TestSelectForSuperTenant_C6(t *testing.T) {
+	runTestWithMOCluster(t, func(t *testing.T, hc *mockHAKeeperClient, c clusterservice.MOCluster) {
+		cnLabels1 := map[string]metadata.LabelList{
+			"account": {
+				Labels: []string{"sys"},
+			},
+		}
+		hc.updateCN("cn1", cnLabels1)
+
+		cnLabels2 := map[string]metadata.LabelList{}
+		hc.updateCN("cn2", cnLabels2)
+		c.ForceRefresh(true)
+
+		var cns []*metadata.CNService
+
+		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
+			"account": "sys",
+		}, clusterservice.EQ)
+		SelectForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
+			cns = append(cns, s)
+		})
+		assert.Equal(t, 1, len(cns))
+		assert.Equal(t, "cn1", cns[0].ServiceID)
+	})
+}
+
+func TestSelectForSuperTenant_C7(t *testing.T) {
+	runTestWithMOCluster(t, func(t *testing.T, hc *mockHAKeeperClient, c clusterservice.MOCluster) {
+		cnLabels1 := map[string]metadata.LabelList{
+			"account": {
+				Labels: []string{"sys"},
+			},
+		}
+		hc.updateCN("cn1", cnLabels1)
+
+		cnLabels2 := map[string]metadata.LabelList{
+			"k2": {
+				Labels: []string{"v2"},
+			},
+			"k3": {
+				Labels: []string{"v3"},
+			},
+		}
+		hc.updateCN("cn2", cnLabels2)
+		c.ForceRefresh(true)
+
+		var cns []*metadata.CNService
+
+		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
+			"account": "sys",
+			"k3":      "v3",
+		}, clusterservice.EQ)
+		SelectForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
+			cns = append(cns, s)
+		})
+		assert.Equal(t, 1, len(cns))
+		assert.Equal(t, "cn2", cns[0].ServiceID)
+	})
+}
+
+func TestSelectForSuperTenant_C8(t *testing.T) {
+	runTestWithMOCluster(t, func(t *testing.T, hc *mockHAKeeperClient, c clusterservice.MOCluster) {
+		cnLabels1 := map[string]metadata.LabelList{
+			"account": {
+				Labels: []string{"sys"},
+			},
+		}
+		hc.updateCN("cn1", cnLabels1)
+
+		cnLabels2 := map[string]metadata.LabelList{
+			"k2": {
+				Labels: []string{"v2"},
+			},
+		}
+		hc.updateCN("cn2", cnLabels2)
+		c.ForceRefresh(true)
+
+		var cns []*metadata.CNService
+
+		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
+			"account": "sys",
+			"k1":      "v1",
+		}, clusterservice.EQ)
+		SelectForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
+			cns = append(cns, s)
+		})
+		assert.Equal(t, 2, len(cns))
+	})
+}
+
+func TestSelectForCommonTenant_C1(t *testing.T) {
+	runTestWithMOCluster(t, func(t *testing.T, hc *mockHAKeeperClient, c clusterservice.MOCluster) {
+		cnLabels1 := map[string]metadata.LabelList{
+			"k1": {
+				Labels: []string{"v1"},
+			},
+		}
+		hc.updateCN("cn1", cnLabels1)
+
+		cnLabels2 := map[string]metadata.LabelList{}
+		hc.updateCN("cn2", cnLabels2)
+		c.ForceRefresh(true)
+
+		var cns []*metadata.CNService
+
+		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
+			"account": "t1",
+		}, clusterservice.EQ)
+		SelectForCommonTenant(s, nil, func(s *metadata.CNService) {
+			cns = append(cns, s)
+		})
+		assert.Equal(t, 1, len(cns))
+		assert.Equal(t, "cn2", cns[0].ServiceID)
+	})
+}
+
+func TestSelectForCommonTenant_C2(t *testing.T) {
+	runTestWithMOCluster(t, func(t *testing.T, hc *mockHAKeeperClient, c clusterservice.MOCluster) {
+		cnLabels1 := map[string]metadata.LabelList{
+			"account": {
+				Labels: []string{"t1"},
+			},
+			"k1": {
+				Labels: []string{"v1"},
+			},
+		}
+		hc.updateCN("cn1", cnLabels1)
+
+		cnLabels2 := map[string]metadata.LabelList{
+			"account": {
+				Labels: []string{"t2"},
+			},
+			"k1": {
+				Labels: []string{"v1"},
+			},
+		}
+		hc.updateCN("cn2", cnLabels2)
+		c.ForceRefresh(true)
+
+		var cns []*metadata.CNService
+
+		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
+			"account": "t1",
+		}, clusterservice.EQ)
+		SelectForCommonTenant(s, nil, func(s *metadata.CNService) {
+			cns = append(cns, s)
+		})
+		assert.Equal(t, 1, len(cns))
+		assert.Equal(t, "cn1", cns[0].ServiceID)
+	})
+}

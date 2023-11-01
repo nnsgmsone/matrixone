@@ -15,6 +15,9 @@
 package plan
 
 import (
+	"context"
+	gotrace "runtime/trace"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -22,8 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func runBuildSelectByBinder(stmtType plan.Query_StatementType, ctx CompilerContext, stmt *tree.Select) (*Plan, error) {
-	builder := NewQueryBuilder(stmtType, ctx)
+func runBuildSelectByBinder(stmtType plan.Query_StatementType, ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool) (*Plan, error) {
+	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt)
 	bindCtx := NewBindContext(builder, nil)
 	rootId, err := builder.buildSelect(stmt, bindCtx, true)
 	builder.qry.Steps = append(builder.qry.Steps, rootId)
@@ -41,9 +44,9 @@ func runBuildSelectByBinder(stmtType plan.Query_StatementType, ctx CompilerConte
 	}, err
 }
 
-func buildExplainAnalyze(ctx CompilerContext, stmt *tree.ExplainAnalyze) (*Plan, error) {
+func buildExplainAnalyze(ctx CompilerContext, stmt *tree.ExplainAnalyze, isPrepareStmt bool) (*Plan, error) {
 	//get query optimizer and execute Optimize
-	plan, err := BuildPlan(ctx, stmt.Statement)
+	plan, err := BuildPlan(ctx, stmt.Statement, isPrepareStmt)
 	if err != nil {
 		return nil, err
 	}
@@ -53,22 +56,24 @@ func buildExplainAnalyze(ctx CompilerContext, stmt *tree.ExplainAnalyze) (*Plan,
 	return plan, nil
 }
 
-func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
+func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*Plan, error) {
+	_, task := gotrace.NewTask(context.TODO(), "plan.BuildPlan")
+	defer task.End()
 	switch stmt := stmt.(type) {
 	case *tree.Select:
-		return runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt)
+		return runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt, isPrepareStmt)
 	case *tree.ParenSelect:
-		return runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt.Select)
+		return runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt.Select, isPrepareStmt)
 	case *tree.ExplainAnalyze:
-		return buildExplainAnalyze(ctx, stmt)
+		return buildExplainAnalyze(ctx, stmt, isPrepareStmt)
 	case *tree.Insert:
-		return buildInsert(stmt, ctx, false)
+		return buildInsert(stmt, ctx, false, isPrepareStmt)
 	case *tree.Replace:
-		return buildReplace(stmt, ctx)
+		return buildReplace(stmt, ctx, isPrepareStmt)
 	case *tree.Update:
-		return buildTableUpdate(stmt, ctx)
+		return buildTableUpdate(stmt, ctx, isPrepareStmt)
 	case *tree.Delete:
-		return buildDelete(stmt, ctx)
+		return buildDelete(stmt, ctx, isPrepareStmt)
 	case *tree.BeginTransaction:
 		return buildBeginTransaction(stmt, ctx)
 	case *tree.CommitTransaction:
@@ -89,10 +94,14 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		return buildCreateSequence(stmt, ctx)
 	case *tree.DropSequence:
 		return buildDropSequence(stmt, ctx)
+	case *tree.AlterSequence:
+		return buildAlterSequence(stmt, ctx)
 	case *tree.DropView:
 		return buildDropView(stmt, ctx)
 	case *tree.CreateView:
 		return buildCreateView(stmt, ctx)
+	case *tree.CreateStream:
+		return buildCreateStream(stmt, ctx)
 	case *tree.AlterView:
 		return buildAlterView(stmt, ctx)
 	case *tree.AlterTable:
@@ -130,7 +139,7 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 	case *tree.ShowStatus:
 		return buildShowStatus(stmt, ctx)
 	case *tree.ShowProcessList:
-		return buildShowProcessList(stmt, ctx)
+		return buildShowProcessList(ctx)
 	case *tree.ShowLocks:
 		return buildShowLocks(stmt, ctx)
 	case *tree.ShowNodeList:
@@ -152,13 +161,13 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 	case *tree.Deallocate:
 		return buildDeallocate(stmt, ctx)
 	case *tree.Load:
-		return buildLoad(stmt, ctx)
+		return buildLoad(stmt, ctx, isPrepareStmt)
 	case *tree.PrepareStmt, *tree.PrepareString:
 		return buildPrepare(stmt, ctx)
 	case *tree.Do, *tree.Declare:
 		return nil, moerr.NewNotSupported(ctx.GetContext(), tree.String(stmt, dialect.MYSQL))
 	case *tree.ValuesStatement:
-		return buildValues(stmt, ctx)
+		return buildValues(stmt, ctx, isPrepareStmt)
 	case *tree.LockTableStmt:
 		return buildLockTables(stmt, ctx)
 	case *tree.UnLockTableStmt:
@@ -167,6 +176,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		return buildShowPublication(stmt, ctx)
 	case *tree.ShowCreatePublications:
 		return buildShowCreatePublications(stmt, ctx)
+	case *tree.ShowStages:
+		return buildShowStages(stmt, ctx)
 	default:
 		return nil, moerr.NewInternalError(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	}

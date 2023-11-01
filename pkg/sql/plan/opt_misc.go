@@ -18,17 +18,21 @@ import "github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 // removeSimpleProjections On top of each subquery or view it has a PROJECT node, which interrupts optimizer rules such as join order.
 func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType plan.Node_NodeType, flag bool, colRefCnt map[[2]int32]int) (int32, map[[2]int32]*plan.Expr) {
-	projMap := make(map[[2]int32]*plan.Expr)
 	node := builder.qry.Nodes[nodeID]
+	if node.NodeType == plan.Node_SINK {
+		return builder.removeSimpleProjections(node.Children[0], plan.Node_UNKNOWN, flag, colRefCnt)
+	}
+	projMap := make(map[[2]int32]*plan.Expr)
 
-	increaseRefCntForExprList(node.ProjectList, colRefCnt)
-	increaseRefCntForExprList(node.OnList, colRefCnt)
-	increaseRefCntForExprList(node.FilterList, colRefCnt)
-	increaseRefCntForExprList(node.GroupBy, colRefCnt)
-	increaseRefCntForExprList(node.GroupingSet, colRefCnt)
-	increaseRefCntForExprList(node.AggList, colRefCnt)
+	increaseRefCntForExprList(node.ProjectList, 1, colRefCnt)
+	increaseRefCntForExprList(node.OnList, 1, colRefCnt)
+	increaseRefCntForExprList(node.FilterList, 1, colRefCnt)
+	increaseRefCntForExprList(node.GroupBy, 1, colRefCnt)
+	increaseRefCntForExprList(node.GroupingSet, 1, colRefCnt)
+	increaseRefCntForExprList(node.AggList, 1, colRefCnt)
+	increaseRefCntForExprList(node.WinSpecList, 1, colRefCnt)
 	for i := range node.OrderBy {
-		increaseRefCnt(node.OrderBy[i].Expr, colRefCnt)
+		increaseRefCnt(node.OrderBy[i].Expr, 1, colRefCnt)
 	}
 
 	switch node.NodeType {
@@ -48,7 +52,7 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 			projMap[ref] = expr
 		}
 
-	case plan.Node_AGG, plan.Node_PROJECT:
+	case plan.Node_AGG, plan.Node_PROJECT, plan.Node_WINDOW, plan.Node_TIME_WINDOW, plan.Node_Fill:
 		for i, childID := range node.Children {
 			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, false, colRefCnt)
 			node.Children[i] = newChildID
@@ -73,6 +77,7 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 	removeProjectionsForExprList(node.GroupBy, projMap)
 	removeProjectionsForExprList(node.GroupingSet, projMap)
 	removeProjectionsForExprList(node.AggList, projMap)
+	removeProjectionsForExprList(node.WinSpecList, projMap)
 	for i := range node.OrderBy {
 		node.OrderBy[i].Expr = removeProjectionsForExpr(node.OrderBy[i].Expr, projMap)
 	}
@@ -104,9 +109,9 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 	return nodeID, projMap
 }
 
-func increaseRefCntForExprList(exprs []*plan.Expr, colRefCnt map[[2]int32]int) {
+func increaseRefCntForExprList(exprs []*plan.Expr, inc int, colRefCnt map[[2]int32]int) {
 	for _, expr := range exprs {
-		increaseRefCnt(expr, colRefCnt)
+		increaseRefCnt(expr, inc, colRefCnt)
 	}
 }
 
@@ -134,7 +139,7 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 	if parentType == plan.Node_DELETE {
 		return false
 	}
-	if parentType == plan.Node_INSERT || parentType == plan.Node_PRE_INSERT || parentType == plan.Node_PRE_INSERT_UK {
+	if parentType == plan.Node_INSERT || parentType == plan.Node_PRE_INSERT || parentType == plan.Node_PRE_INSERT_UK || parentType == plan.Node_PRE_INSERT_SK {
 		return false
 	}
 
@@ -171,8 +176,16 @@ func removeProjectionsForExpr(expr *plan.Expr, projMap map[[2]int32]*plan.Expr) 
 		for i, arg := range ne.F.Args {
 			ne.F.Args[i] = removeProjectionsForExpr(arg, projMap)
 		}
-	}
 
+	case *plan.Expr_W:
+		ne.W.WindowFunc = removeProjectionsForExpr(ne.W.WindowFunc, projMap)
+		for i, arg := range ne.W.PartitionBy {
+			ne.W.PartitionBy[i] = removeProjectionsForExpr(arg, projMap)
+		}
+		for i, order := range ne.W.OrderBy {
+			ne.W.OrderBy[i].Expr = removeProjectionsForExpr(order.Expr, projMap)
+		}
+	}
 	return expr
 }
 
@@ -206,6 +219,52 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 		node.Children[0] = childID
 
+	case plan.Node_WINDOW:
+		windowTag := node.BindingTags[0]
+
+		for _, filter := range filters {
+			if !containsTag(filter, windowTag) {
+				canPushdown = append(canPushdown, replaceColRefs(filter, windowTag, node.WinSpecList))
+			} else {
+				node.FilterList = append(node.FilterList, filter)
+			}
+		}
+
+		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown, separateNonEquiConds)
+
+		if len(cantPushdownChild) > 0 {
+			childID = builder.appendNode(&plan.Node{
+				NodeType:   plan.Node_FILTER,
+				Children:   []int32{node.Children[0]},
+				FilterList: cantPushdownChild,
+			}, nil)
+		}
+
+		node.Children[0] = childID
+
+	case plan.Node_TIME_WINDOW:
+		windowTag := node.BindingTags[0]
+
+		for _, filter := range filters {
+			if !containsTag(filter, windowTag) {
+				canPushdown = append(canPushdown, replaceColRefs(filter, windowTag, node.WinSpecList))
+			} else {
+				node.FilterList = append(node.FilterList, filter)
+			}
+		}
+
+		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown, separateNonEquiConds)
+
+		if len(cantPushdownChild) > 0 {
+			childID = builder.appendNode(&plan.Node{
+				NodeType:   plan.Node_FILTER,
+				Children:   []int32{node.Children[0]},
+				FilterList: cantPushdownChild,
+			}, nil)
+		}
+
+		node.Children[0] = childID
+
 	case plan.Node_FILTER:
 		canPushdown = filters
 		for _, filter := range node.FilterList {
@@ -222,12 +281,12 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		}
 
 	case plan.Node_JOIN:
-		leftTags := make(map[int32]*Binding)
+		leftTags := make(map[int32]any)
 		for _, tag := range builder.enumerateTags(node.Children[0]) {
 			leftTags[tag] = nil
 		}
 
-		rightTags := make(map[int32]*Binding)
+		rightTags := make(map[int32]any)
 		for _, tag := range builder.enumerateTags(node.Children[1]) {
 			rightTags[tag] = nil
 		}
@@ -414,7 +473,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		//when onlist is empty, it will be a cross join, performance will be very poor
 		//in this situation, we put the non equal conds in the onlist and go loop join
 		//todo: when equal conds and non equal conds both exists, put them in the on list and go hash equal join
-		if len(node.OnList) == 0 {
+		if node.JoinType == plan.Node_INNER && len(node.OnList) == 0 {
 			// for tpch q22, do not change the plan for now. will fix in the future
 			leftStats := builder.qry.Nodes[node.Children[0]].Stats
 			rightStats := builder.qry.Nodes[node.Children[1]].Stats
@@ -602,4 +661,238 @@ func (builder *QueryBuilder) remapHavingClause(expr *plan.Expr, groupTag, aggreg
 			builder.remapHavingClause(arg, groupTag, aggregateTag, groupSize)
 		}
 	}
+}
+
+func (builder *QueryBuilder) remapWindowClause(expr *plan.Expr, windowTag int32, projectionSize int32) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if exprImpl.Col.RelPos == windowTag {
+			exprImpl.Col.Name = builder.nameByColRef[[2]int32{windowTag, exprImpl.Col.ColPos}]
+			exprImpl.Col.RelPos = -1
+			exprImpl.Col.ColPos += projectionSize
+		}
+
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			builder.remapWindowClause(arg, windowTag, projectionSize)
+		}
+	}
+}
+
+func getJoinCondLeftCol(cond *Expr, leftTags map[int32]any) *plan.Expr_Col {
+	fun, ok := cond.Expr.(*plan.Expr_F)
+	if !ok || fun.F.Func.ObjName != "=" {
+		return nil
+	}
+	leftCol, ok := fun.F.Args[0].Expr.(*plan.Expr_Col)
+	if !ok {
+		return nil
+	}
+	rightCol, ok := fun.F.Args[1].Expr.(*plan.Expr_Col)
+	if !ok {
+		return nil
+	}
+	if _, ok := leftTags[leftCol.Col.RelPos]; ok {
+		return leftCol
+	}
+	if _, ok := leftTags[rightCol.Col.RelPos]; ok {
+		return rightCol
+	}
+	return nil
+}
+
+// if join cond is a=b and a=c, we can remove a=c to improve join performance
+func (builder *QueryBuilder) removeRedundantJoinCond(nodeID int32) int32 {
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) > 0 {
+		for i, child := range node.Children {
+			node.Children[i] = builder.removeRedundantJoinCond(child)
+		}
+	} else {
+		return nodeID
+	}
+	if !builder.IsEquiJoin(node) {
+		return nodeID
+	}
+
+	leftTags := make(map[int32]any)
+	for _, tag := range builder.enumerateTags(node.Children[0]) {
+		leftTags[tag] = nil
+	}
+
+	rightTags := make(map[int32]any)
+	for _, tag := range builder.enumerateTags(node.Children[1]) {
+		rightTags[tag] = nil
+	}
+
+	newOnList := make([]*Expr, 0, len(node.OnList))
+	colMap := make(map[[2]int32]int32)
+	for _, expr := range node.OnList {
+		if equi := isEquiCond(expr, leftTags, rightTags); equi {
+			col := getJoinCondLeftCol(expr, leftTags)
+			if col != nil {
+				if _, ok := colMap[[2]int32{col.Col.RelPos, col.Col.ColPos}]; ok {
+					continue
+				} else {
+					colMap[[2]int32{col.Col.RelPos, col.Col.ColPos}] = 0
+				}
+			}
+		}
+		newOnList = append(newOnList, expr)
+	}
+
+	node.OnList = newOnList
+	return nodeID
+}
+
+func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[int32]int) int32 {
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) == 0 {
+		return nodeID
+	}
+
+	increaseTagCntForExprList(node.ProjectList, 1, tagCnt)
+	increaseTagCntForExprList(node.OnList, 1, tagCnt)
+	increaseTagCntForExprList(node.FilterList, 1, tagCnt)
+	increaseTagCntForExprList(node.GroupBy, 1, tagCnt)
+	increaseTagCntForExprList(node.GroupingSet, 1, tagCnt)
+	increaseTagCntForExprList(node.AggList, 1, tagCnt)
+	increaseTagCntForExprList(node.WinSpecList, 1, tagCnt)
+	for i := range node.OrderBy {
+		increaseTagCnt(node.OrderBy[i].Expr, 1, tagCnt)
+	}
+	for i, childID := range node.Children {
+		node.Children[i] = builder.removeEffectlessLeftJoins(childID, tagCnt)
+	}
+	increaseTagCntForExprList(node.OnList, -1, tagCnt)
+
+	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_LEFT {
+		goto END
+	}
+
+	// if output column is in right, can not optimize this one
+	for _, tag := range builder.enumerateTags(node.Children[1]) {
+		if tagCnt[tag] > 0 {
+			goto END
+		}
+	}
+
+	//reuse hash on primary key logic
+	if !node.Stats.HashmapStats.HashOnPK {
+		goto END
+	}
+
+	nodeID = node.Children[0]
+
+END:
+	increaseTagCntForExprList(node.ProjectList, -1, tagCnt)
+	increaseTagCntForExprList(node.FilterList, -1, tagCnt)
+	increaseTagCntForExprList(node.GroupBy, -1, tagCnt)
+	increaseTagCntForExprList(node.GroupingSet, -1, tagCnt)
+	increaseTagCntForExprList(node.AggList, -1, tagCnt)
+	increaseTagCntForExprList(node.WinSpecList, -1, tagCnt)
+	for i := range node.OrderBy {
+		increaseTagCnt(node.OrderBy[i].Expr, -1, tagCnt)
+	}
+
+	return nodeID
+}
+
+func increaseTagCntForExprList(exprs []*plan.Expr, inc int, tagCnt map[int32]int) {
+	for _, expr := range exprs {
+		increaseTagCnt(expr, inc, tagCnt)
+	}
+}
+
+func increaseTagCnt(expr *plan.Expr, inc int, tagCnt map[int32]int) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		tagCnt[exprImpl.Col.RelPos] += inc
+
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			increaseTagCnt(arg, inc, tagCnt)
+		}
+	case *plan.Expr_W:
+		increaseTagCnt(exprImpl.W.WindowFunc, inc, tagCnt)
+		for _, arg := range exprImpl.W.PartitionBy {
+			increaseTagCnt(arg, inc, tagCnt)
+		}
+		for _, order := range exprImpl.W.OrderBy {
+			increaseTagCnt(order.Expr, inc, tagCnt)
+		}
+	}
+}
+
+func findHashOnPKTable(nodeID, tag int32, builder *QueryBuilder) *plan.TableDef {
+	node := builder.qry.Nodes[nodeID]
+	if node.NodeType == plan.Node_TABLE_SCAN {
+		if node.BindingTags[0] == tag {
+			return node.TableDef
+		}
+	} else if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_INNER {
+		if node.Stats.HashmapStats.HashOnPK {
+			return findHashOnPKTable(node.Children[0], tag, builder)
+		}
+	}
+	return nil
+}
+
+func determineHashOnPK(nodeID int32, builder *QueryBuilder) {
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) > 0 {
+		for _, child := range node.Children {
+			determineHashOnPK(child, builder)
+		}
+	}
+
+	if node.NodeType != plan.Node_JOIN {
+		return
+	}
+
+	leftTags := make(map[int32]any)
+	for _, tag := range builder.enumerateTags(node.Children[0]) {
+		leftTags[tag] = nil
+	}
+
+	rightTags := make(map[int32]any)
+	for _, tag := range builder.enumerateTags(node.Children[1]) {
+		rightTags[tag] = nil
+	}
+
+	exprs := make([]*plan.Expr, 0)
+	for _, expr := range node.OnList {
+		if equi := isEquiCond(expr, leftTags, rightTags); equi {
+			exprs = append(exprs, expr)
+		}
+	}
+
+	hashCols := make([]*plan.ColRef, 0)
+	for _, cond := range exprs {
+		switch condImpl := cond.Expr.(type) {
+		case *plan.Expr_F:
+			expr := condImpl.F.Args[1]
+			switch exprImpl := expr.Expr.(type) {
+			case *plan.Expr_Col:
+				hashCols = append(hashCols, exprImpl.Col)
+			}
+		}
+	}
+
+	if len(hashCols) == 0 {
+		return
+	}
+
+	tableDef := findHashOnPKTable(node.Children[1], hashCols[0].RelPos, builder)
+	if tableDef == nil {
+		return
+	}
+	hashColPos := make([]int32, len(hashCols))
+	for i := range hashCols {
+		hashColPos[i] = hashCols[i].ColPos
+	}
+	if containsAllPKs(hashColPos, tableDef) {
+		node.Stats.HashmapStats.HashOnPK = true
+	}
+
 }

@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 type ClientOption func(*LogtailClient)
@@ -139,9 +140,12 @@ func (c *LogtailClient) Unsubscribe(
 // 2. response for subscription: *LogtailResponse.GetSubscribeResponse() != nil
 // 3. response for unsubscription: *LogtailResponse.GetUnsubscribeResponse() != nil
 // 3. response for incremental logtail: *LogtailResponse.GetUpdateResponse() != nil
-func (c *LogtailClient) Receive() (*LogtailResponse, error) {
+func (c *LogtailClient) Receive(ctx context.Context) (*LogtailResponse, error) {
 	recvFunc := func() (*LogtailResponseSegment, error) {
 		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+
 		case <-c.broken:
 			return nil, moerr.NewStreamClosedNoCtx()
 
@@ -156,6 +160,7 @@ func (c *LogtailClient) Receive() (*LogtailResponse, error) {
 				c.once.Do(func() { close(c.broken) })
 				return nil, moerr.NewStreamClosedNoCtx()
 			}
+			v2.LogTailReceiveQueueSizeGauge.Set(float64(len(c.recvChan)))
 			return message.(*LogtailResponseSegment), nil
 		}
 	}

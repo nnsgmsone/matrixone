@@ -144,6 +144,42 @@ func NewSysBlockEntry(segment *SegmentEntry, id types.Blockid) *BlockEntry {
 	return e
 }
 
+func (entry *BlockEntry) BuildDeleteObjectName() objectio.ObjectName {
+	entry.segment.Lock()
+	id := entry.segment.nextObjectIdx
+	entry.segment.nextObjectIdx++
+	entry.segment.Unlock()
+	return objectio.BuildObjectName(entry.ID.Segment(), id)
+}
+
+func (entry *BlockEntry) GetDeltaPersistedTSByTxn(txn txnif.TxnReader) types.TS {
+	entry.RLock()
+	defer entry.RUnlock()
+	persisted := types.TS{}
+	entry.LoopChain(func(m *MVCCNode[*MetadataMVCCNode]) bool {
+		if !m.BaseNode.DeltaLoc.IsEmpty() && m.IsVisible(txn) {
+			persisted = m.GetStart()
+			return false
+		}
+		return true
+	})
+	return persisted
+}
+
+func (entry *BlockEntry) GetDeltaPersistedTS() types.TS {
+	entry.RLock()
+	defer entry.RUnlock()
+	persisted := types.TS{}
+	entry.LoopChain(func(m *MVCCNode[*MetadataMVCCNode]) bool {
+		if !m.BaseNode.DeltaLoc.IsEmpty() && m.IsCommitted() {
+			persisted = m.GetStart()
+			return false
+		}
+		return true
+	})
+	return persisted
+}
+
 func (entry *BlockEntry) Less(b *BlockEntry) int {
 	return entry.ID.Compare(b.ID)
 }
@@ -200,7 +236,7 @@ func (entry *BlockEntry) StringWithLevel(level common.PPLevel) string {
 func (entry *BlockEntry) StringWithLevelLocked(level common.PPLevel) string {
 	if level <= common.PPL1 {
 		return fmt.Sprintf("[%s]BLK[%s][C@%s,D@%s]",
-			entry.state.Repr(), entry.ID.ShortString(), entry.GetCreatedAt().ToString(), entry.GetDeleteAt().ToString())
+			entry.state.Repr(), entry.ID.ShortString(), entry.GetCreatedAtLocked().ToString(), entry.GetDeleteAt().ToString())
 	}
 	return fmt.Sprintf("[%s]BLK[%s]%s", entry.state.Repr(), entry.ID.String(), entry.BaseEntryImpl.StringLocked())
 }
@@ -326,6 +362,18 @@ func (entry *BlockEntry) GetDeltaLoc() objectio.Location {
 	return str
 }
 
+func (entry *BlockEntry) GetDeltaLocAndCommitTS() (objectio.Location, types.TS) {
+	entry.RLock()
+	defer entry.RUnlock()
+	if entry.GetLatestNodeLocked() == nil {
+		return nil, types.TS{}
+	}
+	node := entry.GetLatestNodeLocked()
+	str := node.BaseNode.DeltaLoc
+	ts := node.End
+	return str, ts
+}
+
 func (entry *BlockEntry) GetVisibleMetaLoc(txn txnif.TxnReader) objectio.Location {
 	entry.RLock()
 	defer entry.RUnlock()
@@ -421,17 +469,18 @@ func (entry *BlockEntry) GetPKZoneMap(
 	ctx context.Context,
 	fs fileservice.FileService,
 ) (zm *index.ZM, err error) {
+
 	zm = entry.pkZM.Load()
 	if zm != nil {
 		return
 	}
 	location := entry.GetMetaLoc()
 	var meta objectio.ObjectMeta
-	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
+	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 		return
 	}
 	seqnum := entry.GetSchema().GetSingleSortKeyIdx()
-	cloned := meta.GetBlockMeta(uint32(location.ID())).MustGetColumn(uint16(seqnum)).ZoneMap().Clone()
+	cloned := meta.MustDataMeta().GetBlockMeta(uint32(location.ID())).MustGetColumn(uint16(seqnum)).ZoneMap().Clone()
 	zm = &cloned
 	entry.pkZM.Store(zm)
 	return

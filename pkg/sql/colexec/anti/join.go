@@ -46,7 +46,7 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	return err
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
@@ -56,34 +56,39 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		switch ctr.state {
 		case Build:
 			if err := ctr.build(ap, proc, anal); err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 			ctr.state = Probe
 
 		case Probe:
 			bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
 			if err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 
 			if bat == nil {
 				ctr.state = End
 				continue
 			}
-			if bat.Length() == 0 {
-				bat.Clean(proc.Mp())
+			if bat.Last() {
+				proc.SetInputBatch(bat)
+				return process.ExecNext, nil
+			}
+			if bat.IsEmpty() {
+				proc.PutBatch(bat)
 				continue
 			}
-			if ctr.bat == nil || ctr.bat.Length() == 0 {
+
+			if ctr.bat == nil || ctr.bat.IsEmpty() {
 				err = ctr.emptyProbe(bat, ap, proc, anal, isFirst, isLast)
 			} else {
 				err = ctr.probe(bat, ap, proc, anal, isFirst, isLast)
 			}
-			return false, err
+			return process.ExecNext, err
 
 		default:
 			proc.SetInputBatch(nil)
-			return true, nil
+			return process.ExecStop, nil
 		}
 	}
 }
@@ -96,9 +101,9 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 
 	if bat != nil {
 		ctr.bat = bat
-		ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
+		ctr.mp = bat.DupJmAuxData()
 		ctr.hasNull = ctr.mp.HasNull()
-		anal.Alloc(ctr.mp.Map().Size())
+		anal.Alloc(ctr.mp.Size())
 	}
 	return nil
 }
@@ -107,11 +112,12 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 	defer proc.PutBatch(bat)
 	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
-	rbat.Zs = proc.Mp().GetSels()
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = proc.GetVector(*bat.Vecs[pos].GetType())
+		// for anti join, if left batch is sorted , then output batch is sorted
+		rbat.Vecs[i].SetSorted(bat.Vecs[pos].GetSorted())
 	}
-	count := bat.Length()
+	count := bat.RowCount()
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
@@ -124,8 +130,8 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 					return err
 				}
 			}
-			rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
 		}
+		rbat.AddRowCount(n)
 	}
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
@@ -136,11 +142,12 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	defer proc.PutBatch(bat)
 	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
-	rbat.Zs = proc.Mp().GetSels()
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = proc.GetVector(*bat.Vecs[pos].GetType())
+		// for anti join, if left batch is sorted , then output batch is sorted
+		rbat.Vecs[i].SetSorted(bat.Vecs[pos].GetSorted())
 	}
-	if (ctr.bat.Length() == 1 && ctr.hasNull) || ctr.bat.Length() == 0 {
+	if (ctr.bat.RowCount() == 1 && ctr.hasNull) || ctr.bat.RowCount() == 0 {
 		anal.Output(rbat, isLast)
 		proc.SetInputBatch(rbat)
 		return nil
@@ -157,9 +164,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.bat, proc.Mp())
 	}
 
-	count := bat.Length()
+	count := bat.RowCount()
 	mSels := ctr.mp.Sels()
-	itr := ctr.mp.Map().NewIterator()
+	itr := ctr.mp.NewIterator()
 	eligible := make([]int32, 0, hashmap.UnitLimit)
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
@@ -168,24 +175,24 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		}
 		copy(ctr.inBuckets, hashmap.OneUInt8s)
 		vals, zvals := itr.Find(i, n, ctr.vecs, ctr.inBuckets)
+
+		rowCountIncrease := 0
 		for k := 0; k < n; k++ {
 			if ctr.inBuckets[k] == 0 || zvals[k] == 0 {
 				continue
 			}
 			if vals[k] == 0 {
 				eligible = append(eligible, int32(i+k))
-				rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
+				rowCountIncrease++
 				continue
 			}
 			if ap.Cond != nil {
-				matched := false // mark if any tuple satisfies the condition
-				sels := mSels[vals[k]-1]
-				for _, sel := range sels {
+				if ap.HashOnPK {
 					if err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, int64(i+k),
 						1, ctr.cfs1); err != nil {
 						return err
 					}
-					if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.bat, int64(sel),
+					if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.bat, int64(vals[k]-1),
 						1, ctr.cfs2); err != nil {
 						return err
 					}
@@ -198,17 +205,43 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					}
 					bs := vector.MustFixedCol[bool](vec)
 					if bs[0] {
-						matched = true
-						break
+						continue
+					}
+				} else {
+					matched := false // mark if any tuple satisfies the condition
+					sels := mSels[vals[k]-1]
+					for _, sel := range sels {
+						if err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, int64(i+k),
+							1, ctr.cfs1); err != nil {
+							return err
+						}
+						if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.bat, int64(sel),
+							1, ctr.cfs2); err != nil {
+							return err
+						}
+						vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2})
+						if err != nil {
+							return err
+						}
+						if vec.IsConstNull() || vec.GetNulls().Contains(0) {
+							continue
+						}
+						bs := vector.MustFixedCol[bool](vec)
+						if bs[0] {
+							matched = true
+							break
+						}
+					}
+					if matched {
+						continue
 					}
 				}
-				if matched {
-					continue
-				}
 				eligible = append(eligible, int32(i+k))
-				rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
+				rowCountIncrease++
 			}
 		}
+		rbat.SetRowCount(rbat.RowCount() + rowCountIncrease)
+
 		for j, pos := range ap.Result {
 			if err := rbat.Vecs[j].Union(bat.Vecs[pos], eligible, proc.Mp()); err != nil {
 				rbat.Clean(proc.Mp())

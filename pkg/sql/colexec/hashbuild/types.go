@@ -26,7 +26,8 @@ import (
 )
 
 const (
-	Build = iota
+	BuildHashMap = iota
+	HandleRuntimeFilter
 	Eval
 	End
 )
@@ -41,16 +42,20 @@ type container struct {
 
 	state int
 
-	hasNull bool
-
-	sels [][]int32
-
-	bat *batch.Batch
+	hasNull            bool
+	isMerge            bool
+	multiSels          [][]int32
+	bat                *batch.Batch
+	inputBatchRowCount int
 
 	evecs []evalVector
 	vecs  []*vector.Vector
 
-	mp *hashmap.StrHashMap
+	intHashMap *hashmap.IntHashMap
+	strHashMap *hashmap.StrHashMap
+	keyWidth   int // keyWidth is the width of hash columns, it determines which hash map to use.
+
+	uniqueJoinKeys []*vector.Vector
 }
 
 type Argument struct {
@@ -58,13 +63,18 @@ type Argument struct {
 	// need to generate a push-down filter expression
 	NeedExpr    bool
 	NeedHashMap bool
+	IsDup       bool
 	Ibucket     uint64
 	Nbucket     uint64
 	Typs        []types.Type
 	Conditions  []*plan.Expr
+
+	HashOnPK             bool
+	NeedMergedBatch      bool
+	RuntimeFilterSenders []*colexec.RuntimeFilterChan
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
 		mp := proc.Mp()
@@ -73,7 +83,12 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		if !arg.NeedHashMap {
 			ctr.cleanHashMap()
 		}
-		ctr.FreeAllReg()
+		ctr.FreeMergeTypeOperator(pipelineFailed)
+		if ctr.isMerge {
+			ctr.FreeMergeTypeOperator(pipelineFailed)
+		} else {
+			ctr.FreeAllReg()
+		}
 	}
 }
 
@@ -93,8 +108,12 @@ func (ctr *container) cleanEvalVectors(mp *mpool.MPool) {
 }
 
 func (ctr *container) cleanHashMap() {
-	if ctr.mp != nil {
-		ctr.mp.Free()
-		ctr.mp = nil
+	if ctr.intHashMap != nil {
+		ctr.intHashMap.Free()
+		ctr.intHashMap = nil
+	}
+	if ctr.strHashMap != nil {
+		ctr.strHashMap.Free()
+		ctr.strHashMap = nil
 	}
 }

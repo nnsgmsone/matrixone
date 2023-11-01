@@ -17,7 +17,14 @@ package executor
 import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"time"
 )
+
+// WithDisableIncrStatement disable incr statement
+func (opts Options) WithDisableIncrStatement() Options {
+	opts.disableIncrStatement = true
+	return opts
+}
 
 // WithTxn exec sql in a exists txn
 func (opts Options) WithTxn(txnOp client.TxnOperator) Options {
@@ -32,8 +39,13 @@ func (opts Options) WithDatabase(database string) Options {
 }
 
 // WithAccountID execute sql in account
-func (opts Options) WithAccountID(accoundID uint32) Options {
-	opts.accoundID = accoundID
+func (opts Options) WithAccountID(accountID uint32) Options {
+	opts.accountID = accountID
+	return opts
+}
+
+func (opts Options) WithTimeZone(timeZone *time.Location) Options {
+	opts.timeZone = timeZone
 	return opts
 }
 
@@ -45,24 +57,36 @@ func (opts Options) WithMinCommittedTS(ts timestamp.Timestamp) Options {
 	return opts
 }
 
+// WithWaitCommittedLogApplied if set, the executor will wait all committed log applied
+// for the txn.
+func (opts Options) WithWaitCommittedLogApplied() Options {
+	opts.waitCommittedLogApplied = true
+	return opts
+}
+
 // Database returns default database
 func (opts Options) Database() string {
 	return opts.database
 }
 
-// AccoundID returns account id
-func (opts Options) AccoundID() uint32 {
-	return opts.accoundID
+// AccountID returns account id
+func (opts Options) AccountID() uint32 {
+	return opts.accountID
 }
 
-// HasAccoundID returns true if account is set
-func (opts Options) HasAccoundID() bool {
-	return opts.accoundID > 0
+// HasAccountID returns true if account is set
+func (opts Options) HasAccountID() bool {
+	return opts.accountID > 0
 }
 
 // MinCommittedTS returns min committed ts
 func (opts Options) MinCommittedTS() timestamp.Timestamp {
 	return opts.minCommittedTS
+}
+
+// WaitCommittedLogApplied return true means need wait committed log applied in current cn.
+func (opts Options) WaitCommittedLogApplied() bool {
+	return opts.waitCommittedLogApplied
 }
 
 // HasExistsTxn return true if a exists txn is set
@@ -85,4 +109,14 @@ func (opts Options) SetupNewTxn(txnOp client.TxnOperator) Options {
 // Txn returns the txn operator
 func (opts Options) Txn() client.TxnOperator {
 	return opts.txnOp
+}
+
+// DisableIncrStatement returns the txn operator need incr a new input statement
+func (opts Options) DisableIncrStatement() bool {
+	return opts.disableIncrStatement
+}
+
+// GetTimeZone return the time zone of original session
+func (opts Options) GetTimeZone() *time.Location {
+	return opts.timeZone
 }

@@ -20,43 +20,31 @@ import (
 	"fmt"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/shuffle"
 )
 
 func New(ro bool, attrs []string) *Batch {
 	return &Batch{
-		Ro:    ro,
-		Cnt:   1,
-		Attrs: attrs,
-		Vecs:  make([]*vector.Vector, len(attrs)),
+		Ro:       ro,
+		Cnt:      1,
+		Attrs:    attrs,
+		Vecs:     make([]*vector.Vector, len(attrs)),
+		rowCount: 0,
 	}
 }
 
 func NewWithSize(n int) *Batch {
 	return &Batch{
-		Cnt:  1,
-		Vecs: make([]*vector.Vector, n),
-	}
-}
-
-func Reorder(bat *Batch, attrs []string) {
-	if bat.Ro {
-		Cow(bat)
-	}
-	for i, name := range attrs {
-		for j, attr := range bat.Attrs {
-			if name == attr {
-				bat.Vecs[i], bat.Vecs[j] = bat.Vecs[j], bat.Vecs[i]
-				bat.Attrs[i], bat.Attrs[j] = bat.Attrs[j], bat.Attrs[i]
-			}
-		}
+		Cnt:      1,
+		Vecs:     make([]*vector.Vector, n),
+		rowCount: 0,
 	}
 }
 
@@ -64,24 +52,12 @@ func SetLength(bat *Batch, n int) {
 	for _, vec := range bat.Vecs {
 		vec.SetLength(n)
 	}
-	bat.Zs = bat.Zs[:n]
-}
-
-func Length(bat *Batch) int {
-	return len(bat.Zs)
-}
-
-func Cow(bat *Batch) {
-	attrs := make([]string, len(bat.Attrs))
-	copy(attrs, bat.Attrs)
-	bat.Ro = false
-	bat.Attrs = attrs
+	bat.rowCount = n
 }
 
 func (info *aggInfo) MarshalBinary() ([]byte, error) {
 	var buf bytes.Buffer
-	i32 := int32(info.Op)
-	buf.Write(types.EncodeInt32(&i32))
+	buf.Write(types.EncodeInt64(&info.Op))
 	buf.Write(types.EncodeBool(&info.Dist))
 	buf.Write(types.EncodeType(&info.inputTypes))
 	data, err := types.Encode(info.Agg)
@@ -93,13 +69,13 @@ func (info *aggInfo) MarshalBinary() ([]byte, error) {
 }
 
 func (info *aggInfo) UnmarshalBinary(data []byte) error {
-	info.Op = int(types.DecodeInt32(data[:4]))
-	data = data[4:]
+	info.Op = types.DecodeInt64(data[:8])
+	data = data[8:]
 	info.Dist = types.DecodeBool(data[:1])
 	data = data[1:]
 	info.inputTypes = types.DecodeType(data[:types.TSize])
 	data = data[types.TSize:]
-	aggregate, err := agg.New(info.Op, info.Dist, info.inputTypes)
+	aggregate, err := agg.NewAgg(info.Op, info.Dist, []types.Type{info.inputTypes})
 	if err != nil {
 		return err
 	}
@@ -108,18 +84,19 @@ func (info *aggInfo) UnmarshalBinary(data []byte) error {
 }
 
 func (bat *Batch) MarshalBinary() ([]byte, error) {
-	aggInfo := make([]aggInfo, len(bat.Aggs))
-	for i := range aggInfo {
-		aggInfo[i].Op = bat.Aggs[i].GetOperatorId()
-		aggInfo[i].inputTypes = bat.Aggs[i].GetInputTypes()[0]
-		aggInfo[i].Dist = bat.Aggs[i].IsDistinct()
-		aggInfo[i].Agg = bat.Aggs[i]
+	aggInfos := make([]aggInfo, len(bat.Aggs))
+	for i := range aggInfos {
+		aggInfos[i].Op = bat.Aggs[i].GetOperatorId()
+		aggInfos[i].inputTypes = bat.Aggs[i].InputTypes()[0]
+		aggInfos[i].Dist = bat.Aggs[i].IsDistinct()
+		aggInfos[i].Agg = bat.Aggs[i]
 	}
 	return types.Encode(&EncodeBatch{
-		Zs:       bat.Zs,
-		Vecs:     bat.Vecs,
-		Attrs:    bat.Attrs,
-		AggInfos: aggInfo,
+		rowCount:  int64(bat.rowCount),
+		Vecs:      bat.Vecs,
+		Attrs:     bat.Attrs,
+		AggInfos:  aggInfos,
+		Recursive: bat.Recursive,
 	})
 }
 
@@ -129,8 +106,9 @@ func (bat *Batch) UnmarshalBinary(data []byte) error {
 	if err := types.Decode(data, rbat); err != nil {
 		return err
 	}
+	bat.Recursive = rbat.Recursive
 	bat.Cnt = 1
-	bat.Zs = append(bat.Zs[:0], rbat.Zs...)
+	bat.rowCount = int(rbat.rowCount)
 	bat.Vecs = rbat.Vecs
 	bat.Attrs = append(bat.Attrs, rbat.Attrs...)
 	// initialize bat.Aggs only if necessary
@@ -143,16 +121,14 @@ func (bat *Batch) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-// I think Shrink should have a mpool!!!
 func (bat *Batch) Shrink(sels []int64) {
+	if len(sels) == bat.rowCount {
+		return
+	}
 	for _, vec := range bat.Vecs {
 		vec.Shrink(sels, false)
 	}
-	vs := bat.Zs
-	for i, sel := range sels {
-		vs[i] = vs[sel]
-	}
-	bat.Zs = bat.Zs[:len(sels)]
+	bat.rowCount = len(sels)
 }
 
 func (bat *Batch) Shuffle(sels []int64, m *mpool.MPool) error {
@@ -167,9 +143,7 @@ func (bat *Batch) Shuffle(sels []int64, m *mpool.MPool) error {
 				return err
 			}
 		}
-
-		ws := make([]int64, len(sels))
-		bat.Zs = shuffle.FixedLengthShuffle(bat.Zs, ws, sels)
+		bat.rowCount = len(sels)
 	}
 	return nil
 }
@@ -183,8 +157,8 @@ func (bat *Batch) Size() int {
 	return size
 }
 
-func (bat *Batch) Length() int {
-	return len(bat.Zs)
+func (bat *Batch) RowCount() int {
+	return bat.rowCount
 }
 
 func (bat *Batch) VectorCount() int {
@@ -218,12 +192,11 @@ func (bat *Batch) GetSubBatch(cols []string) *Batch {
 	for i, col := range cols {
 		rbat.Vecs[i] = bat.Vecs[mp[col]]
 	}
-	rbat.Zs = append([]int64{}, bat.Zs...)
+	rbat.rowCount = bat.rowCount
 	return rbat
 }
 
 func (bat *Batch) Clean(m *mpool.MPool) {
-	// xxx todo maybe some bug here
 	if bat == EmptyBatch {
 		return
 	}
@@ -244,12 +217,25 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 			agg.Free(m)
 		}
 	}
-	if len(bat.Zs) != 0 {
-		m.PutSels(bat.Zs)
-	}
 	bat.Attrs = nil
-	bat.Zs = nil
+	bat.rowCount = 0
 	bat.Vecs = nil
+}
+
+func (bat *Batch) Last() bool {
+	return bat.Recursive > 0
+}
+
+func (bat *Batch) SetEnd() {
+	bat.Recursive = 2
+}
+
+func (bat *Batch) SetLast() {
+	bat.Recursive = 1
+}
+
+func (bat *Batch) End() bool {
+	return bat.Recursive == 2
 }
 
 func (bat *Batch) CleanOnlyData() {
@@ -258,26 +244,29 @@ func (bat *Batch) CleanOnlyData() {
 			vec.CleanOnlyData()
 		}
 	}
-	if len(bat.Zs) != 0 {
-		bat.Zs = bat.Zs[:0]
-	}
+	bat.rowCount = 0
 }
 
 func (bat *Batch) String() string {
 	var buf bytes.Buffer
 
 	for i, vec := range bat.Vecs {
-		buf.WriteString(fmt.Sprintf("%v\n", i))
-		if len(bat.Zs) > 0 {
-			buf.WriteString(fmt.Sprintf("\t%s\n", vec))
-		}
+		buf.WriteString(fmt.Sprintf("%d : %s\n", i, vec.String()))
 	}
 	return buf.String()
+}
+
+func (bat *Batch) Log(tag string) {
+	if bat == nil || bat.rowCount < 1 {
+		return
+	}
+	logutil.Infof("\n" + tag + "\n" + bat.String())
 }
 
 func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 	rbat := NewWithSize(len(bat.Vecs))
 	rbat.SetAttributes(bat.Attrs)
+	rbat.Recursive = bat.Recursive
 	for j, vec := range bat.Vecs {
 		typ := *bat.GetVector(int32(j)).GetType()
 		rvec := vector.NewVec(typ)
@@ -287,8 +276,17 @@ func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 		}
 		rbat.SetVector(int32(j), rvec)
 	}
-	rbat.Zs = append(rbat.Zs, bat.Zs...)
+	rbat.rowCount = bat.rowCount
 	return rbat, nil
+}
+
+func (bat *Batch) PreExtend(m *mpool.MPool, rows int) error {
+	for i := range bat.Vecs {
+		if err := bat.Vecs[i].PreExtend(rows, m); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (bat *Batch) Append(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch, error) {
@@ -302,33 +300,21 @@ func (bat *Batch) Append(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch
 		return bat, nil
 	}
 
-	// XXX Here is a good place to trigger an panic for fault injection.
-	// fault.AddFaultPoint("panic_in_batch_append", ":::", "PANIC", 0, "")
-	fault.TriggerFault("panic_in_batch_append")
-
 	for i := range bat.Vecs {
 		if err := bat.Vecs[i].UnionBatch(b.Vecs[i], 0, b.Vecs[i].Length(), nil, mh); err != nil {
 			return bat, err
 		}
 	}
-	bat.Zs = append(bat.Zs, b.Zs...)
+	bat.rowCount += b.rowCount
 	return bat, nil
 }
 
-// XXX I will slowly remove all code that uses InitZsone.
-func (bat *Batch) SetZs(len int, m *mpool.MPool) {
-	bat.Zs = m.GetSels()
-	for i := 0; i < len; i++ {
-		bat.Zs = append(bat.Zs, 1)
-	}
+func (bat *Batch) AddRowCount(rowCount int) {
+	bat.rowCount += rowCount
 }
 
-// InitZsOne init Batch.Zs and values are all 1
-func (bat *Batch) InitZsOne(len int) {
-	bat.Zs = make([]int64, len)
-	for i := range bat.Zs {
-		bat.Zs[i]++
-	}
+func (bat *Batch) SetRowCount(rowCount int) {
+	bat.rowCount = rowCount
 }
 
 func (bat *Batch) AddCnt(cnt int) {
@@ -337,6 +323,10 @@ func (bat *Batch) AddCnt(cnt int) {
 
 func (bat *Batch) SubCnt(cnt int) {
 	atomic.StoreInt64(&bat.Cnt, bat.Cnt-int64(cnt))
+}
+
+func (bat *Batch) SetCnt(cnt int64) {
+	atomic.StoreInt64(&bat.Cnt, cnt)
 }
 
 func (bat *Batch) GetCnt() int64 {
@@ -352,27 +342,23 @@ func (bat *Batch) ReplaceVector(oldVec *vector.Vector, newVec *vector.Vector) {
 }
 
 func (bat *Batch) AntiShrink(sels []int64) {
-	selsMp := make(map[int64]bool)
-	for _, sel := range sels {
-		selsMp[sel] = true
-	}
-	newSels := make([]int64, 0, bat.Length()-len(sels))
-	for i := 0; i < bat.Length(); i++ {
-		if ok := selsMp[int64(i)]; !ok {
-			newSels = append(newSels, int64(i))
-		}
-	}
-	mp := make(map[*vector.Vector]uint8)
 	for _, vec := range bat.Vecs {
-		if _, ok := mp[vec]; ok {
-			continue
-		}
-		mp[vec]++
-		vec.Shrink(newSels, false)
+		vec.Shrink(sels, true)
 	}
-	vs := bat.Zs
-	for i, sel := range newSels {
-		vs[i] = vs[sel]
+	bat.rowCount -= len(sels)
+}
+
+func (bat *Batch) IsEmpty() bool {
+	return bat.rowCount == 0 && bat.AuxData == nil
+}
+
+func (bat *Batch) DupJmAuxData() (ret *hashmap.JoinMap) {
+	jm := bat.AuxData.(*hashmap.JoinMap)
+	if jm.IsDup() {
+		ret = jm.Dup()
+	} else {
+		ret = jm
+		bat.AuxData = nil
 	}
-	bat.Zs = bat.Zs[:len(newSels)]
+	return
 }

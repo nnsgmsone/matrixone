@@ -90,15 +90,16 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		if w.isSetPK && w.pk == uint16(i) {
 			isPK = true
 		}
-		columnData := containers.ToDNVector(vec)
+		columnData := containers.ToTNVector(vec)
 		// update null count and distinct value
 		w.objMetaBuilder.InspectVector(i, columnData, isPK)
 
 		// Build ZM
 		zm := index.NewZM(vec.GetType().Oid, vec.GetType().Scale)
-		if err = index.BatchUpdateZM(zm, columnData); err != nil {
+		if err = index.BatchUpdateZM(zm, columnData.GetDownstreamVector()); err != nil {
 			return nil, err
 		}
+		index.SetZMSum(zm, columnData.GetDownstreamVector())
 		// Update column meta zonemap
 		w.writer.UpdateBlockZM(int(block.GetID()), seqnums[i], zm)
 		// update object zonemap
@@ -124,9 +125,12 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 	return block, nil
 }
 
-// WriteBatch write a fixed schema batch, usually not a user table
-func (w *BlockWriter) WriteBatchWithOutIndex(batch *batch.Batch) (objectio.BlockObject, error) {
-	return w.writer.WriteWithoutSeqnum(batch)
+func (w *BlockWriter) WriteTombstoneBatch(batch *batch.Batch) (objectio.BlockObject, error) {
+	return w.writer.WriteTombstone(batch)
+}
+
+func (w *BlockWriter) WriteSubBatch(batch *batch.Batch, dataType objectio.DataMetaType) (objectio.BlockObject, int, error) {
+	return w.writer.WriteSubBlock(batch, dataType)
 }
 
 func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objectio.Extent, error) {
@@ -149,11 +153,11 @@ func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objecti
 	}
 	blocks, err := w.writer.WriteEnd(ctx)
 	if len(blocks) == 0 {
-		logutil.Info("[WriteEnd]", common.OperationField(w.nameStr),
+		logutil.Debug("[WriteEnd]", common.OperationField(w.nameStr),
 			common.OperandField("[Size=0]"), common.OperandField(w.writer.GetSeqnums()))
 		return blocks, objectio.Extent{}, err
 	}
-	logutil.Info("[WriteEnd]",
+	logutil.Debug("[WriteEnd]",
 		common.OperationField(w.String(blocks)),
 		common.OperandField(w.writer.GetSeqnums()),
 		common.OperandField(w.writer.GetMaxSeqnum()))

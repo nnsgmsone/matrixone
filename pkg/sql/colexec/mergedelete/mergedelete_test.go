@@ -69,8 +69,8 @@ func TestMergeDelete(t *testing.T) {
 			testutil.MakeInt32Vector([]int32{0}, nil),
 			vector.NewConstFixed(types.T_uint32.ToType(), uint32(15), 1, proc.GetMPool()),
 		},
-		Zs: []int64{1},
 	}
+	batch1.SetRowCount(1)
 	uuid1 := objectio.NewSegmentid()
 	blkId1 := objectio.NewBlockid(uuid1, 0, 0)
 	metaLocBat1 := &batch.Batch{
@@ -113,7 +113,7 @@ func TestMergeDelete(t *testing.T) {
 
 	metaLocBat3 := &batch.Batch{
 		Attrs: []string{
-			catalog.BlockMeta_MetaLoc,
+			catalog.BlockMeta_DeltaLoc,
 		},
 		Vecs: []*vector.Vector{
 			testutil.MakeTextVector([]string{"d:magic:15"}, nil),
@@ -132,12 +132,12 @@ func TestMergeDelete(t *testing.T) {
 		Vecs: []*vector.Vector{
 			testutil.MakeTextVector([]string{"mock_block_id1", "mock_block_id2", "mock_block_id3"}, nil),
 			testutil.MakeTextVector([]string{string(bytes1), string(bytes2), string(bytes3)}, nil),
-			testutil.MakeInt8Vector([]int8{deletion.RawRowIdBatch, deletion.CNBlockOffset, deletion.FlushMetaLoc}, nil),
+			testutil.MakeInt8Vector([]int8{deletion.RawRowIdBatch, deletion.CNBlockOffset, deletion.FlushDeltaLoc}, nil),
 			testutil.MakeInt32Vector([]int32{0, 0, 0}, nil),
 			vector.NewConstFixed(types.T_uint32.ToType(), uint32(45), 3, proc.GetMPool()),
 		},
-		Zs: []int64{1, 1, 1},
 	}
+	batch2.SetRowCount(3)
 
 	argument1 := Argument{
 		DelSource:    &mockRelation{},
@@ -175,7 +175,7 @@ func TestMergeDelete(t *testing.T) {
 	// check attr names
 	require.True(t, reflect.DeepEqual(
 		[]string{
-			catalog.BlockMeta_MetaLoc,
+			catalog.BlockMeta_DeltaLoc,
 		},
 		result1.Attrs,
 	))
@@ -186,7 +186,7 @@ func TestMergeDelete(t *testing.T) {
 	}
 
 	// free resource
-	argument1.Free(proc, false)
+	argument1.Free(proc, false, nil)
 	metaLocBat0.Clean(proc.GetMPool())
 	metaLocBat1.Clean(proc.GetMPool())
 	metaLocBat2.Clean(proc.GetMPool())
@@ -194,5 +194,6 @@ func TestMergeDelete(t *testing.T) {
 	batch1.Clean(proc.GetMPool())
 	batch2.Clean(proc.GetMPool())
 	// constVector can't free
-	require.Equal(t, int64(16), proc.GetMPool().CurrNB())
+	// 2 * 16 is 2 header of const vector.
+	require.Equal(t, int64(16+2*16), proc.GetMPool().CurrNB())
 }

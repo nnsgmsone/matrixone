@@ -47,15 +47,16 @@ func NewRSMState() HAKeeperRSMState {
 		ScheduleCommands: make(map[string]CommandBatch),
 		LogShards:        make(map[string]uint64),
 		CNState:          NewCNState(),
-		DNState:          NewDNState(),
+		TNState:          NewTNState(),
 		LogState:         NewLogState(),
+		ProxyState:       NewProxyState(),
 		ClusterInfo:      newClusterInfo(),
 	}
 }
 
 func newClusterInfo() ClusterInfo {
 	return ClusterInfo{
-		DNShards:  make([]metadata.DNShardRecord, 0),
+		TNShards:  make([]metadata.TNShardRecord, 0),
 		LogShards: make([]metadata.LogShardRecord, 0),
 	}
 }
@@ -75,6 +76,14 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 		storeInfo = CNStoreInfo{}
 		storeInfo.Labels = make(map[string]metadata.LabelList)
 	}
+	if storeInfo.WorkState == metadata.WorkState_Unknown { // set init value
+		v, ok := metadata.WorkState_value[metadata.ToTitle(hb.InitWorkState)]
+		if !ok || v == int32(metadata.WorkState_Unknown) {
+			storeInfo.WorkState = metadata.WorkState_Working
+		} else {
+			storeInfo.WorkState = metadata.WorkState(v)
+		}
+	}
 	storeInfo.Tick = tick
 	storeInfo.ServiceAddress = hb.ServiceAddress
 	storeInfo.SQLAddress = hb.SQLAddress
@@ -82,6 +91,12 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 	storeInfo.CtlAddress = hb.CtlAddress
 	storeInfo.Role = hb.Role
 	storeInfo.TaskServiceCreated = hb.TaskServiceCreated
+	storeInfo.QueryAddress = hb.QueryAddress
+	storeInfo.GossipAddress = hb.GossipAddress
+	storeInfo.GossipJoined = hb.GossipJoined
+	if hb.ConfigData != nil {
+		storeInfo.ConfigData = hb.ConfigData
+	}
 	s.Stores[hb.UUID] = storeInfo
 }
 
@@ -97,19 +112,52 @@ func (s *CNState) UpdateLabel(label CNStoreLabel) {
 	s.Stores[label.UUID] = storeInfo
 }
 
-// NewDNState creates a new DNState.
-func NewDNState() DNState {
-	return DNState{
-		Stores: make(map[string]DNStoreInfo),
+// UpdateWorkState updates work state of CN store.
+func (s *CNState) UpdateWorkState(state CNWorkState) {
+	if state.GetState() == metadata.WorkState_Unknown {
+		state.State = metadata.WorkState_Working
+	}
+	storeInfo, ok := s.Stores[state.UUID]
+	// If the CN store does not exist, we should do nothing and wait for
+	// CN heartbeat.
+	if !ok {
+		return
+	}
+	storeInfo.WorkState = state.State
+	s.Stores[state.UUID] = storeInfo
+}
+
+// PatchCNStore updates work state and labels of CN store.
+func (s *CNState) PatchCNStore(stateLabel CNStateLabel) {
+	if stateLabel.GetState() == metadata.WorkState_Unknown {
+		stateLabel.State = metadata.WorkState_Working
+	}
+	storeInfo, ok := s.Stores[stateLabel.UUID]
+	// If the CN store does not exist, we should do nothing and wait for
+	// CN heartbeat.
+	if !ok {
+		return
+	}
+	storeInfo.WorkState = stateLabel.State
+	if stateLabel.Labels != nil {
+		storeInfo.Labels = stateLabel.Labels
+	}
+	s.Stores[stateLabel.UUID] = storeInfo
+}
+
+// NewTNState creates a new DNState.
+func NewTNState() TNState {
+	return TNState{
+		Stores: make(map[string]TNStoreInfo),
 	}
 }
 
 // Update applies the incoming DNStoreHeartbeat into HAKeeper. Tick is the
 // current tick of the HAKeeper which is used as the timestamp of the heartbeat.
-func (s *DNState) Update(hb DNStoreHeartbeat, tick uint64) {
+func (s *TNState) Update(hb TNStoreHeartbeat, tick uint64) {
 	storeInfo, ok := s.Stores[hb.UUID]
 	if !ok {
-		storeInfo = DNStoreInfo{}
+		storeInfo = TNStoreInfo{}
 	}
 	storeInfo.Tick = tick
 	storeInfo.Shards = hb.Shards
@@ -118,6 +166,10 @@ func (s *DNState) Update(hb DNStoreHeartbeat, tick uint64) {
 	storeInfo.LockServiceAddress = hb.LockServiceAddress
 	storeInfo.CtlAddress = hb.CtlAddress
 	storeInfo.TaskServiceCreated = hb.TaskServiceCreated
+	if hb.ConfigData != nil {
+		storeInfo.ConfigData = hb.ConfigData
+	}
+	storeInfo.QueryAddress = hb.QueryAddress
 	s.Stores[hb.UUID] = storeInfo
 }
 
@@ -147,6 +199,9 @@ func (s *LogState) updateStores(hb LogStoreHeartbeat, tick uint64) {
 	storeInfo.GossipAddress = hb.GossipAddress
 	storeInfo.Replicas = hb.Replicas
 	storeInfo.TaskServiceCreated = hb.TaskServiceCreated
+	if hb.ConfigData != nil {
+		storeInfo.ConfigData = hb.ConfigData
+	}
 	s.Stores[hb.UUID] = storeInfo
 }
 
@@ -165,7 +220,8 @@ func (s *LogState) updateShards(hb LogStoreHeartbeat) {
 			recorded.Replicas = incoming.Replicas
 		} else if incoming.Epoch == recorded.Epoch && incoming.Epoch > 0 {
 			if !reflect.DeepEqual(recorded.Replicas, incoming.Replicas) {
-				panic("inconsistent replicas")
+				panic(fmt.Sprintf("inconsistent replicas, recorded: %+v, incoming: %+v",
+					recorded, incoming))
 			}
 		}
 
@@ -182,15 +238,12 @@ func (s *LogState) updateShards(hb LogStoreHeartbeat) {
 // Do not add CN's StartTaskRunner info to log string, because there has user and password.
 func (m *ScheduleCommand) LogString() string {
 	c := func(s string) string {
-		if len(s) > 6 {
-			return s[:6]
-		}
 		return s
 	}
 
 	serviceType := map[ServiceType]string{
 		LogService: "L",
-		DNService:  "D",
+		TNService:  "D",
 		CNService:  "C",
 	}[m.ServiceType]
 
@@ -233,4 +286,25 @@ func (m *ScheduleCommand) LogString() string {
 	}
 
 	return s
+}
+
+// NewProxyState creates a new ProxyState.
+func NewProxyState() ProxyState {
+	return ProxyState{
+		Stores: make(map[string]ProxyStore),
+	}
+}
+
+func (s *ProxyState) Update(hb ProxyHeartbeat, tick uint64) {
+	storeInfo, ok := s.Stores[hb.UUID]
+	if !ok {
+		storeInfo = ProxyStore{}
+	}
+	storeInfo.UUID = hb.UUID
+	storeInfo.Tick = tick
+	storeInfo.ListenAddress = hb.ListenAddress
+	if hb.ConfigData != nil {
+		storeInfo.ConfigData = hb.ConfigData
+	}
+	s.Stores[hb.UUID] = storeInfo
 }

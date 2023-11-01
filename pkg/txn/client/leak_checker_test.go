@@ -38,6 +38,7 @@ func TestLeakCheck(t *testing.T) {
 			func(txnID []byte, createAt time.Time, createBy string) {
 				close(cc)
 			}))
+	c.Resume()
 	_, err := c.New(ctx, newTestTimestamp(0))
 	assert.Nil(t, err)
 	<-cc
@@ -58,6 +59,7 @@ func TestLeakCheckWithNoLeak(t *testing.T) {
 			func(txnID []byte, createAt time.Time, createBy string) {
 				n++
 			}))
+	c.Resume()
 	op, err := c.New(ctx, newTestTimestamp(0))
 	require.NoError(t, err)
 	require.NoError(t, op.Rollback(ctx))

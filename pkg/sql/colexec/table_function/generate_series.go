@@ -70,17 +70,24 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 		return true, nil
 	}
 
-	startVec, err = arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat})
-	if err != nil {
-		return false, err
-	}
-	endVec, err = arg.ctr.executorsForArgs[1].Eval(proc, []*batch.Batch{bat})
-	if err != nil {
-		return false, err
+	if len(arg.ctr.executorsForArgs) == 1 {
+		endVec, err = arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat})
+		if err != nil {
+			return false, err
+		}
+		startVec = vector.NewConstFixed(types.T_int64.ToType(), int64(1), 1, proc.Mp())
+	} else {
+		startVec, err = arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat})
+		if err != nil {
+			return false, err
+		}
+		endVec, err = arg.ctr.executorsForArgs[1].Eval(proc, []*batch.Batch{bat})
+		if err != nil {
+			return false, err
+		}
 	}
 	rbat = batch.NewWithSize(len(arg.Attrs))
 	rbat.Attrs = arg.Attrs
-	rbat.Cnt = 1
 	for i := range arg.Attrs {
 		rbat.Vecs[i] = vector.NewVec(arg.retSchema[i])
 	}
@@ -303,7 +310,7 @@ func handleInt[T int32 | int64](startVec, endVec, stepVec *vector.Vector, genFn 
 			return err
 		}
 	}
-	rbat.InitZsOne(len(res))
+	rbat.SetRowCount(len(res))
 	return nil
 }
 
@@ -336,7 +343,7 @@ func handleDatetime(startVec, endVec, stepVec *vector.Vector, scale int32, proc 
 			return err
 		}
 	}
-	rbat.InitZsOne(len(res))
+	rbat.SetRowCount(len(res))
 	return nil
 }
 

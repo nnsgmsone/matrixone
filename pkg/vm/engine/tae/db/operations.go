@@ -101,16 +101,37 @@ func (m *Checkpoint) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
 }
 
-type InspectDN struct {
+type InspectTN struct {
 	AccessInfo AccessInfo
 	Operation  string
 }
 
-func (m *InspectDN) MarshalBinary() ([]byte, error) {
+func (m *InspectTN) MarshalBinary() ([]byte, error) {
 	return m.Marshal()
 }
 
-func (m *InspectDN) UnmarshalBinary(data []byte) error {
+func (m *InspectTN) UnmarshalBinary(data []byte) error {
+	return m.Unmarshal(data)
+}
+
+const (
+	EnableFaultInjection  = "enable_fault_injection"
+	DisableFaultInjection = "disable_fault_injection"
+)
+
+type FaultPoint struct {
+	Name   string
+	Freq   string
+	Action string
+	Iarg   int64
+	Sarg   string
+}
+
+func (m *FaultPoint) MarshalBinary() ([]byte, error) {
+	return m.Marshal()
+}
+
+func (m *FaultPoint) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
 }
 
@@ -231,6 +252,15 @@ func (m *InspectResp) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
 }
 
+func (m *InspectResp) ConsoleString() string {
+	switch m.Typ {
+	case InspectNormal:
+		return fmt.Sprintf("\nmsg: %s\n\n%v", m.Message, string(m.Payload))
+	default:
+		return fmt.Sprintf("\nmsg: %s\n\n unhandled resp type %v", m.Message, m.Typ)
+	}
+}
+
 const (
 	InspectNormal = 0
 	InspectCata   = 1
@@ -257,4 +287,18 @@ func (m *CatalogResp) MarshalBinary() ([]byte, error) {
 
 func (m *CatalogResp) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
+}
+
+type TraceSpan struct {
+	Cmd       string
+	Spans     string
+	Threshold int64
+}
+
+func (t *TraceSpan) MarshalBinary() ([]byte, error) {
+	return t.Marshal()
+}
+
+func (t *TraceSpan) UnmarshalBinary(data []byte) error {
+	return t.Unmarshal(data)
 }

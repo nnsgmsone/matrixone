@@ -19,6 +19,7 @@ import (
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
@@ -391,9 +392,8 @@ func (un *TxnMVCCNode) CloneAll() *TxnMVCCNode {
 }
 
 func (un *TxnMVCCNode) String() string {
-	return fmt.Sprintf("[%s,%s,%s]",
+	return fmt.Sprintf("[%s,%s]",
 		un.Start.ToString(),
-		un.Prepare.ToString(),
 		un.End.ToString())
 }
 
@@ -404,9 +404,25 @@ func (un *TxnMVCCNode) PrepareCommit() (ts types.TS, err error) {
 }
 
 func (un *TxnMVCCNode) AppendTuple(bat *containers.Batch) {
-	bat.GetVectorByName(SnapshotAttr_StartTS).Append(un.Start, false)
-	bat.GetVectorByName(SnapshotAttr_PrepareTS).Append(un.Prepare, false)
-	bat.GetVectorByName(SnapshotAttr_CommitTS).Append(un.End, false)
+	startTSVec := bat.GetVectorByName(SnapshotAttr_StartTS)
+	vector.AppendFixed(
+		startTSVec.GetDownstreamVector(),
+		un.Start,
+		false,
+		startTSVec.GetAllocator(),
+	)
+	vector.AppendFixed(
+		bat.GetVectorByName(SnapshotAttr_PrepareTS).GetDownstreamVector(),
+		un.Prepare,
+		false,
+		startTSVec.GetAllocator(),
+	)
+	vector.AppendFixed(
+		bat.GetVectorByName(SnapshotAttr_CommitTS).GetDownstreamVector(),
+		un.End,
+		false,
+		startTSVec.GetAllocator(),
+	)
 }
 
 func (un *TxnMVCCNode) ReadTuple(bat *containers.Batch, offset int) {

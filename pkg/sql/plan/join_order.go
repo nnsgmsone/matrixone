@@ -57,12 +57,12 @@ func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
 			break
 		}
 
-		leftTags := make(map[int32]*Binding)
+		leftTags := make(map[int32]any)
 		for _, tag := range builder.enumerateTags(joinNode.Children[0]) {
 			leftTags[tag] = nil
 		}
 
-		rightTags := make(map[int32]*Binding)
+		rightTags := make(map[int32]any)
 		for _, tag := range builder.enumerateTags(joinNode.Children[1]) {
 			rightTags[tag] = nil
 		}
@@ -106,7 +106,51 @@ func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
 	return nodeID
 }
 
-func IsEquiJoin(exprs []*plan.Expr) bool {
+func (builder *QueryBuilder) IsEquiJoin(node *plan.Node) bool {
+	if node.NodeType != plan.Node_JOIN {
+		return false
+	}
+
+	leftTags := make(map[int32]any)
+	for _, tag := range builder.enumerateTags(node.Children[0]) {
+		leftTags[tag] = nil
+	}
+
+	rightTags := make(map[int32]any)
+	for _, tag := range builder.enumerateTags(node.Children[1]) {
+		rightTags[tag] = nil
+	}
+
+	for _, expr := range node.OnList {
+		if equi := isEquiCond(expr, leftTags, rightTags); equi {
+			return true
+		}
+	}
+	return false
+}
+
+func isEquiCond(expr *plan.Expr, leftTags, rightTags map[int32]any) bool {
+	if e, ok := expr.Expr.(*plan.Expr_F); ok {
+		if !SupportedJoinCondition(e.F.Func.GetObj()) {
+			return false
+		}
+
+		lside, rside := getJoinSide(e.F.Args[0], leftTags, rightTags, 0), getJoinSide(e.F.Args[1], leftTags, rightTags, 0)
+		if lside == JoinSideLeft && rside == JoinSideRight {
+			return true
+		} else if lside == JoinSideRight && rside == JoinSideLeft {
+			// swap to make sure left and right is in order
+			e.F.Args[0], e.F.Args[1] = e.F.Args[1], e.F.Args[0]
+			return true
+		}
+	}
+
+	return false
+}
+
+// IsEquiJoin2 Judge whether a join node is equi-join (after column remapping)
+// Can only be used after optimizer!!!
+func IsEquiJoin2(exprs []*plan.Expr) bool {
 	for _, expr := range exprs {
 		if e, ok := expr.Expr.(*plan.Expr_F); ok {
 			if !SupportedJoinCondition(e.F.Func.GetObj()) {
@@ -119,23 +163,9 @@ func IsEquiJoin(exprs []*plan.Expr) bool {
 			return true
 		}
 	}
-	return false || isEquiJoin0(exprs)
+	return false
 }
 
-func isEquiJoin0(exprs []*plan.Expr) bool {
-	for _, expr := range exprs {
-		if e, ok := expr.Expr.(*plan.Expr_F); ok {
-			if !SupportedJoinCondition(e.F.Func.GetObj()) {
-				return false
-			}
-			lpos, rpos := HasColExpr(e.F.Args[0], -1), HasColExpr(e.F.Args[1], -1)
-			if lpos == -1 || rpos == -1 || (lpos == rpos) {
-				return false
-			}
-		}
-	}
-	return true
-}
 func SupportedJoinCondition(id int64) bool {
 	fid, _ := function.DecodeOverloadID(id)
 	return fid == function.EQUAL
@@ -176,10 +206,6 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 				node.Children[i] = builder.determineJoinOrder(child)
 			}
 		}
-		if node.NodeType == plan.Node_JOIN {
-			//swap join order for left & right join, inner join is not here
-			builder.applySwapRuleByStats(node.NodeId, false)
-		}
 		return nodeID
 	}
 
@@ -189,25 +215,8 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 
 	leaves, conds := builder.gatherJoinLeavesAndConds(node, nil, nil)
 	newConds := deduceNewOnList(conds)
-	totalConds := append(conds, newConds...)
-	vertices, tag2Vert := builder.getJoinGraph(leaves, totalConds)
-	for i := range newConds {
-		ok, leftCol, rightCol := checkStrictJoinPred(newConds[i])
-		if !ok {
-			continue
-		}
-		var leftId, rightId int32
-		if leftId, ok = tag2Vert[leftCol.RelPos]; !ok {
-			continue
-		}
-		if rightId, ok = tag2Vert[rightCol.RelPos]; !ok {
-			continue
-		}
-		if vertices[leftId].parent == rightId || vertices[rightId].parent == leftId {
-			// deduced new cond is useful
-			conds = append(conds, newConds[i])
-		}
-	}
+	conds = append(conds, newConds...)
+	vertices := builder.getJoinGraph(leaves, conds)
 
 	subTrees := make([]*plan.Node, 0, len(leaves))
 	for i, vertex := range vertices {
@@ -282,7 +291,6 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 				Children: children,
 				JoinType: plan.Node_INNER,
 			}, nil)
-			builder.applySwapRuleByStats(nodeID, false)
 
 			for i, adj := range adjMat[nextSibling*nLeaf : (nextSibling+1)*nLeaf] {
 				eligible[i] = eligible[i] || adj
@@ -309,7 +317,6 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 				Children: children,
 				JoinType: plan.Node_INNER,
 			}, nil)
-			builder.applySwapRuleByStats(nodeID, false)
 		}
 	}
 
@@ -340,7 +347,7 @@ func (builder *QueryBuilder) gatherJoinLeavesAndConds(joinNode *plan.Node, leave
 	return leaves, conds
 }
 
-func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Expr) ([]*joinVertex, map[int32]int32) {
+func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Expr) []*joinVertex {
 	vertices := make([]*joinVertex, len(leaves))
 	tag2Vert := make(map[int32]int32)
 
@@ -351,12 +358,8 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 			parent:   -1,
 		}
 
-		if node.NodeType == plan.Node_TABLE_SCAN {
-			tag2Vert[node.BindingTags[0]] = int32(i)
-		} else if len(node.BindingTags) > 0 {
-			for _, tag := range node.BindingTags {
-				tag2Vert[tag] = int32(i)
-			}
+		for _, tag := range builder.enumerateTags(node.NodeId) {
+			tag2Vert[tag] = int32(i)
 		}
 	}
 
@@ -392,7 +395,7 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 			}
 
 			leftParent := vertices[leftId].parent
-			if isHighNdvCols(edge.leftCols, vertices[leftId].node.TableDef, builder) {
+			if isHighNdvCols(edge.leftCols, builder.tag2Table[leftCol.RelPos], builder) {
 				if leftParent == -1 || shouldChangeParent(leftId, leftParent, rightId, vertices) {
 					if vertices[rightId].parent != leftId {
 						setParent(leftId, rightId, vertices)
@@ -403,7 +406,7 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 				}
 			}
 			rightParent := vertices[rightId].parent
-			if isHighNdvCols(edge.rightCols, vertices[rightId].node.TableDef, builder) {
+			if isHighNdvCols(edge.rightCols, builder.tag2Table[rightCol.RelPos], builder) {
 				if rightParent == -1 || shouldChangeParent(rightId, rightParent, leftId, vertices) {
 					if vertices[leftId].parent != rightId {
 						setParent(rightId, leftId, vertices)
@@ -415,7 +418,7 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 			}
 		}
 	}
-	return vertices, tag2Vert
+	return vertices
 }
 
 func setParent(child, parent int32, vertices []*joinVertex) {
@@ -513,15 +516,21 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 		}, nil)
 
 		vertex.node = builder.qry.Nodes[nodeID]
-		builder.applySwapRuleByStats(nodeID, false)
 	}
 }
 
-func containsAllPKs(cols, pks []int32) bool {
+func containsAllPKs(cols []int32, tableDef *plan.TableDef) bool {
+	if tableDef.Pkey == nil {
+		return false
+	}
+	pkNames := tableDef.Pkey.Names
+	pks := make([]int32, len(pkNames))
+	for i := range pkNames {
+		pks[i] = tableDef.Name2ColIndex[pkNames[i]]
+	}
 	if len(pks) == 0 {
 		return false
 	}
-
 	for _, pk := range pks {
 		found := false
 		for _, col := range cols {
@@ -530,12 +539,10 @@ func containsAllPKs(cols, pks []int32) bool {
 				break
 			}
 		}
-
 		if !found {
 			return false
 		}
 	}
-
 	return true
 }
 

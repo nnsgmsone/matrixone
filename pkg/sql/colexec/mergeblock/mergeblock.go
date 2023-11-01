@@ -32,28 +32,29 @@ func Prepare(proc *process.Process, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	var err error
 	ap := arg.(*Argument)
-	bat := proc.Reg.InputBatch
+	bat := proc.InputBatch()
 	if bat == nil {
-		return true, nil
+		return process.ExecStop, nil
 	}
 
-	if len(bat.Zs) == 0 {
-		bat.Clean(proc.Mp())
-		return false, nil
+	if bat.IsEmpty() {
+		proc.PutBatch(bat)
+		proc.SetInputBatch(batch.EmptyBatch)
+		return process.ExecNext, nil
 	}
 	defer proc.PutBatch(bat)
 
 	if err := ap.Split(proc, bat); err != nil {
-		return false, err
+		return process.ExecNext, err
 	}
 
 	if !ap.notFreeBatch {
 		defer func() {
 			for k := range ap.container.mp {
-				ap.container.mp[k].Clean(proc.GetMPool())
+				proc.PutBatch(ap.container.mp[k])
 			}
 		}()
 	}
@@ -62,17 +63,17 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	if len(ap.PartitionSources) > 0 {
 		// 'i' aligns with partition number
 		for i := range ap.PartitionSources {
-			if ap.container.mp[i].Length() > 0 {
+			if ap.container.mp[i].RowCount() > 0 {
 				// batches in mp will be deeply copied into txn's workspace.
 				if err = ap.PartitionSources[i].Write(proc.Ctx, ap.container.mp[i]); err != nil {
-					return false, err
+					return process.ExecNext, err
 				}
 			}
 
 			for _, bat := range ap.container.mp2[i] {
 				// batches in mp2 will be deeply copied into txn's workspace.
 				if err = ap.PartitionSources[i].Write(proc.Ctx, bat); err != nil {
-					return false, err
+					return process.ExecNext, err
 				}
 
 			}
@@ -80,22 +81,22 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		}
 	} else {
 		// handle origin/main table.
-		if ap.container.mp[0].Length() > 0 {
+		if ap.container.mp[0].RowCount() > 0 {
 			//batches in mp will be deeply copied into txn's workspace.
 			if err = ap.Tbl.Write(proc.Ctx, ap.container.mp[0]); err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 		}
 
 		for _, bat := range ap.container.mp2[0] {
 			//batches in mp2 will be deeply copied into txn's workspace.
 			if err = ap.Tbl.Write(proc.Ctx, bat); err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 		}
 		ap.container.mp2[0] = ap.container.mp2[0][:0]
 	}
 
 	proc.SetInputBatch(nil)
-	return false, nil
+	return process.ExecNext, nil
 }

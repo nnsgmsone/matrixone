@@ -94,12 +94,13 @@ func (c *mockNetConn) SetWriteDeadline(t time.Time) error {
 }
 
 type mockClientConn struct {
-	conn        net.Conn
-	tenant      Tenant
-	clientInfo  clientInfo // need to set it explicitly
-	router      Router
-	tun         *tunnel
-	setVarStmts []string
+	conn         net.Conn
+	tenant       Tenant
+	clientInfo   clientInfo // need to set it explicitly
+	router       Router
+	tun          *tunnel
+	setVarStmts  []string
+	prepareStmts []string
 }
 
 var _ ClientConn = (*mockClientConn)(nil)
@@ -139,8 +140,14 @@ func (c *mockClientConn) BuildConnWithServer(_ bool) (ServerConn, error) {
 			return nil, err
 		}
 	}
+	for _, stmt := range c.prepareStmts {
+		if _, err := sc.ExecStmt(stmt, nil); err != nil {
+			return nil, err
+		}
+	}
 	return sc, nil
 }
+
 func (c *mockClientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []byte) error {
 	switch ev := e.(type) {
 	case *killQueryEvent:
@@ -155,25 +162,9 @@ func (c *mockClientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- 
 		c.setVarStmts = append(c.setVarStmts, ev.stmt)
 		sendResp([]byte("ok"), resp)
 		return nil
-	case *suspendAccountEvent:
-		cns, err := c.router.SelectByTenant(ev.account)
-		if err != nil {
-			sendResp([]byte(err.Error()), resp)
-			return err
-		}
-		for _, cn := range cns {
-			sendResp([]byte(cn.addr), resp)
-		}
-		return nil
-	case *dropAccountEvent:
-		cns, err := c.router.SelectByTenant(ev.account)
-		if err != nil {
-			sendResp([]byte(err.Error()), resp)
-			return err
-		}
-		for _, cn := range cns {
-			sendResp([]byte(cn.addr), resp)
-		}
+	case *prepareEvent:
+		c.prepareStmts = append(c.prepareStmts, ev.stmt)
+		sendResp([]byte("ok"), resp)
 		return nil
 	default:
 		sendResp([]byte("type not supported"), resp)
@@ -228,35 +219,60 @@ func testStartNClients(t *testing.T, tp *testProxyHandler, ci clientInfo, cn *CN
 }
 
 func TestAccountParser(t *testing.T) {
-	a := clientInfo{}
-	err := a.parse("t1:u1")
-	require.NoError(t, err)
-	require.Equal(t, string(a.labelInfo.Tenant), "t1")
-	require.Equal(t, a.username, "u1")
-
-	a = clientInfo{}
-	err = a.parse("t1#u1")
-	require.NoError(t, err)
-	require.Equal(t, string(a.labelInfo.Tenant), "t1")
-	require.Equal(t, a.username, "u1")
-
-	a = clientInfo{}
-	err = a.parse(":u1")
-	require.NoError(t, err)
-	require.Equal(t, superTenant, string(a.labelInfo.Tenant))
-	require.Equal(t, a.username, "u1")
-
-	a = clientInfo{}
-	err = a.parse("a1:")
-	require.Error(t, err)
-	require.Equal(t, string(a.labelInfo.Tenant), "")
-	require.Equal(t, a.username, "")
-
-	a = clientInfo{}
-	err = a.parse("u1")
-	require.NoError(t, err)
-	require.Equal(t, string(a.labelInfo.Tenant), superTenant)
-	require.Equal(t, a.username, "u1")
+	cases := []struct {
+		str      string
+		tenant   string
+		username string
+		hasErr   bool
+	}{
+		{
+			str:      "t1:u1",
+			tenant:   "t1",
+			username: "u1",
+			hasErr:   false,
+		},
+		{
+			str:      "t1#u1",
+			tenant:   "t1",
+			username: "u1",
+			hasErr:   false,
+		},
+		{
+			str:      ":u1",
+			tenant:   "",
+			username: "",
+			hasErr:   true,
+		},
+		{
+			str:      "a:",
+			tenant:   "",
+			username: "",
+			hasErr:   true,
+		},
+		{
+			str:      "u1",
+			tenant:   frontend.GetDefaultTenant(),
+			username: "u1",
+			hasErr:   false,
+		},
+		{
+			str:      "t1:u1?a=1",
+			tenant:   "t1",
+			username: "u1",
+			hasErr:   false,
+		},
+	}
+	for _, item := range cases {
+		a := clientInfo{}
+		err := a.parse(item.str)
+		if item.hasErr {
+			require.Error(t, err)
+		} else {
+			require.NoError(t, err)
+		}
+		require.Equal(t, string(a.labelInfo.Tenant), item.tenant)
+		require.Equal(t, a.username, item.username)
+	}
 }
 
 func createNewClientConn(t *testing.T) (ClientConn, func()) {
@@ -269,7 +285,7 @@ func createNewClientConn(t *testing.T) (ClientConn, func()) {
 	rt := runtime.DefaultRuntime()
 	logger := rt.Logger()
 	cs := newCounterSet()
-	cc, err := newClientConn(ctx, &Config{}, logger, cs, s, nil, nil, nil, nil)
+	cc, err := newClientConn(ctx, &Config{}, logger, cs, s, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cc)
 	return cc, func() {

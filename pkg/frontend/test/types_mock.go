@@ -12,6 +12,7 @@ import (
 	batch "github.com/matrixorigin/matrixone/pkg/container/batch"
 	types "github.com/matrixorigin/matrixone/pkg/container/types"
 	tree "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	util "github.com/matrixorigin/matrixone/pkg/util"
 	process "github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -39,11 +40,12 @@ func (m *MockComputationRunner) EXPECT() *MockComputationRunnerMockRecorder {
 }
 
 // Run mocks base method.
-func (m *MockComputationRunner) Run(ts uint64) error {
+func (m *MockComputationRunner) Run(ts uint64) (*util.RunResult, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Run", ts)
-	ret0, _ := ret[0].(error)
-	return ret0
+	ret0, _ := ret[0].(*util.RunResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // Run indicates an expected call of Run.
@@ -88,20 +90,6 @@ func (m *MockComputationWrapper) Compile(requestCtx context.Context, u interface
 func (mr *MockComputationWrapperMockRecorder) Compile(requestCtx, u, fill interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Compile", reflect.TypeOf((*MockComputationWrapper)(nil).Compile), requestCtx, u, fill)
-}
-
-// GetAffectedRows mocks base method.
-func (m *MockComputationWrapper) GetAffectedRows() uint64 {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetAffectedRows")
-	ret0, _ := ret[0].(uint64)
-	return ret0
-}
-
-// GetAffectedRows indicates an expected call of GetAffectedRows.
-func (mr *MockComputationWrapperMockRecorder) GetAffectedRows() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAffectedRows", reflect.TypeOf((*MockComputationWrapper)(nil).GetAffectedRows))
 }
 
 // GetAst mocks base method.
@@ -161,6 +149,20 @@ func (mr *MockComputationWrapperMockRecorder) GetProcess() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetProcess", reflect.TypeOf((*MockComputationWrapper)(nil).GetProcess))
 }
 
+// GetServerStatus mocks base method.
+func (m *MockComputationWrapper) GetServerStatus() uint16 {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetServerStatus")
+	ret0, _ := ret[0].(uint16)
+	return ret0
+}
+
+// GetServerStatus indicates an expected call of GetServerStatus.
+func (mr *MockComputationWrapperMockRecorder) GetServerStatus() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetServerStatus", reflect.TypeOf((*MockComputationWrapper)(nil).GetServerStatus))
+}
+
 // GetUUID mocks base method.
 func (m *MockComputationWrapper) GetUUID() []byte {
 	m.ctrl.T.Helper()
@@ -190,11 +192,12 @@ func (mr *MockComputationWrapperMockRecorder) RecordExecPlan(ctx interface{}) *g
 }
 
 // Run mocks base method.
-func (m *MockComputationWrapper) Run(ts uint64) error {
+func (m *MockComputationWrapper) Run(ts uint64) (*util.RunResult, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Run", ts)
-	ret0, _ := ret[0].(error)
-	return ret0
+	ret0, _ := ret[0].(*util.RunResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // Run indicates an expected call of Run.
@@ -408,6 +411,18 @@ func (m *MockBackgroundExec) EXPECT() *MockBackgroundExecMockRecorder {
 	return m.recorder
 }
 
+// ClearExecResultBatches mocks base method.
+func (m *MockBackgroundExec) ClearExecResultBatches() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "ClearExecResultBatches")
+}
+
+// ClearExecResultBatches indicates an expected call of ClearExecResultBatches.
+func (mr *MockBackgroundExecMockRecorder) ClearExecResultBatches() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ClearExecResultBatches", reflect.TypeOf((*MockBackgroundExec)(nil).ClearExecResultBatches))
+}
+
 // ClearExecResultSet mocks base method.
 func (m *MockBackgroundExec) ClearExecResultSet() {
 	m.ctrl.T.Helper()
@@ -444,6 +459,34 @@ func (m *MockBackgroundExec) Exec(arg0 context.Context, arg1 string) error {
 func (mr *MockBackgroundExecMockRecorder) Exec(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Exec", reflect.TypeOf((*MockBackgroundExec)(nil).Exec), arg0, arg1)
+}
+
+// ExecStmt mocks base method.
+func (m *MockBackgroundExec) ExecStmt(arg0 context.Context, arg1 tree.Statement) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ExecStmt", arg0, arg1)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// ExecStmt indicates an expected call of ExecStmt.
+func (mr *MockBackgroundExecMockRecorder) ExecStmt(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExecStmt", reflect.TypeOf((*MockBackgroundExec)(nil).ExecStmt), arg0, arg1)
+}
+
+// GetExecResultBatches mocks base method.
+func (m *MockBackgroundExec) GetExecResultBatches() []*batch.Batch {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetExecResultBatches")
+	ret0, _ := ret[0].([]*batch.Batch)
+	return ret0
+}
+
+// GetExecResultBatches indicates an expected call of GetExecResultBatches.
+func (mr *MockBackgroundExecMockRecorder) GetExecResultBatches() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetExecResultBatches", reflect.TypeOf((*MockBackgroundExec)(nil).GetExecResultBatches))
 }
 
 // GetExecResultSet mocks base method.

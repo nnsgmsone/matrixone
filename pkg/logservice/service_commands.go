@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
@@ -50,6 +51,7 @@ func (s *Service) handleCommands(cmds []pb.ScheduleCommand) {
 			s.handleShutdownStore(cmd)
 		} else if cmd.GetCreateTaskService() != nil {
 			s.createTaskService(cmd.CreateTaskService)
+			s.createSQLLogger(cmd.CreateTaskService)
 		} else {
 			panic("unknown schedule command type")
 		}
@@ -108,8 +110,10 @@ func (s *Service) handleKillZombie(cmd pb.ScheduleCommand) {
 }
 
 func (s *Service) handleShutdownStore(_ pb.ScheduleCommand) {
-	if err := s.Close(); err != nil {
-		s.runtime.Logger().Error("failed to shutdown replica", zap.Error(err))
+	// notify main routine that have received shutdown cmd
+	select {
+	case s.shutdownC <- struct{}{}:
+	default:
 	}
 }
 
@@ -144,6 +148,10 @@ func (s *Service) heartbeatWorker(ctx context.Context) {
 }
 
 func (s *Service) heartbeat(ctx context.Context) {
+	start := time.Now()
+	defer func() {
+		v2.LogHeartbeatHistogram.Observe(time.Since(start).Seconds())
+	}()
 	ctx2, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
@@ -161,10 +169,16 @@ func (s *Service) heartbeat(ctx context.Context) {
 
 	hb := s.store.getHeartbeatMessage()
 	hb.TaskServiceCreated = s.taskServiceCreated()
+	hb.ConfigData = s.config.GetData()
+
 	cb, err := s.haClient.SendLogHeartbeat(ctx2, hb)
 	if err != nil {
+		v2.LogHeartbeatFailureCounter.Inc()
 		s.runtime.Logger().Error("failed to send log service heartbeat", zap.Error(err))
 		return
 	}
+
+	s.config.DecrCount()
+
 	s.handleCommands(cb.Commands)
 }

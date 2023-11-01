@@ -28,40 +28,64 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func FilterRowIdForDel(proc *process.Process, bat *batch.Batch, idx int) *batch.Batch {
-	retVec := vector.NewVec(types.T_Rowid.ToType())
-	rowIdMap := make(map[types.Rowid]struct{})
+func FilterRowIdForDel(proc *process.Process, bat *batch.Batch,
+	idx int, primaryKeyIdx int) (*batch.Batch, error) {
+	sels := proc.Mp().GetSels()
+	defer proc.Mp().PutSels(sels)
+	retBat := batch.NewWithSize(2)
+	retBat.SetAttributes([]string{catalog.Row_ID, "pk"})
+	rowidVec := proc.GetVector(types.T_Rowid.ToType())
+	primaryVec := proc.GetVector(*bat.GetVector(int32(primaryKeyIdx)).GetType())
+	retBat.SetVector(0, rowidVec)
+	retBat.SetVector(1, primaryVec)
+	rowIdMap := make(map[types.Rowid]bool)
+	nulls := bat.Vecs[idx].GetNulls()
 	for i, r := range vector.MustFixedCol[types.Rowid](bat.Vecs[idx]) {
-		if !bat.Vecs[idx].GetNulls().Contains(uint64(i)) {
-			rowIdMap[r] = struct{}{}
+		if !nulls.Contains(uint64(i)) {
+			if rowIdMap[r] {
+				continue
+			}
+			rowIdMap[r] = true
+			sels = append(sels, int64(i))
 		}
 	}
-	rowIdList := make([]types.Rowid, len(rowIdMap))
-	i := 0
-	for rowId := range rowIdMap {
-		rowIdList[i] = rowId
-		i++
+	uf := vector.GetUnionOneFunction(types.T_Rowid.ToType(), proc.Mp())
+	for _, sel := range sels {
+		if err := uf(rowidVec, bat.Vecs[idx], sel); err != nil {
+			retBat.Clean(proc.Mp())
+			return nil, err
+		}
 	}
-	vector.AppendFixedList(retVec, rowIdList, nil, proc.Mp())
-	retBatch := batch.New(true, []string{catalog.Row_ID})
-	retBatch.SetZs(retVec.Length(), proc.Mp())
-	retBatch.SetVector(0, retVec)
-	return retBatch
+	uf = vector.GetUnionOneFunction(*bat.GetVector(int32(primaryKeyIdx)).GetType(), proc.Mp())
+	for _, sel := range sels {
+		if err := uf(primaryVec, bat.Vecs[primaryKeyIdx], sel); err != nil {
+			retBat.Clean(proc.Mp())
+			return nil, err
+		}
+	}
+	retBat.SetRowCount(len(sels))
+	return retBat, nil
 }
 
-// GroupByPartitionForDelete: Group data based on partition and return batch array with the same length as the number of partitions.
+// GroupByPartitionForDeleteS3: Group data based on partition and return batch array with the same length as the number of partitions.
 // Data from the same partition is placed in the same batch
-func GroupByPartitionForDelete(proc *process.Process, bat *batch.Batch, idx int, pIdx int, partitionNum int) ([]*batch.Batch, error) {
+func GroupByPartitionForDelete(proc *process.Process, bat *batch.Batch, rowIdIdx int, partitionIdx int, partitionNum int, pkIdx int) ([]*batch.Batch, error) {
 	vecList := make([]*vector.Vector, partitionNum)
+	pkList := make([]*vector.Vector, partitionNum)
+	pkTyp := bat.Vecs[pkIdx].GetType()
+	fun := vector.GetUnionOneFunction(*pkTyp, proc.Mp())
 	for i := 0; i < partitionNum; i++ {
-		retVec := vector.NewVec(types.T_Rowid.ToType())
+		//retVec := vector.NewVec(types.T_Rowid.ToType())
+		retVec := proc.GetVector(types.T_Rowid.ToType())
+		pkVec := proc.GetVector(*pkTyp)
 		vecList[i] = retVec
+		pkList[i] = pkVec
 	}
 
 	// Fill the data into the corresponding batch based on the different partitions to which the current `row_id` data
-	for i, rowid := range vector.MustFixedCol[types.Rowid](bat.Vecs[idx]) {
-		if !bat.Vecs[idx].GetNulls().Contains(uint64(i)) {
-			partition := vector.MustFixedCol[int32](bat.Vecs[pIdx])[i]
+	for i, rowid := range vector.MustFixedCol[types.Rowid](bat.Vecs[rowIdIdx]) {
+		if !bat.Vecs[rowIdIdx].GetNulls().Contains(uint64(i)) {
+			partition := vector.MustFixedCol[int32](bat.Vecs[partitionIdx])[i]
 			if partition == -1 {
 				for _, vecElem := range vecList {
 					vecElem.Free(proc.Mp())
@@ -70,6 +94,10 @@ func GroupByPartitionForDelete(proc *process.Process, bat *batch.Batch, idx int,
 				return nil, moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
 			} else {
 				vector.AppendFixed(vecList[partition], rowid, false, proc.Mp())
+				err := fun(pkList[partition], bat.Vecs[pkIdx], int64(i))
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -77,9 +105,10 @@ func GroupByPartitionForDelete(proc *process.Process, bat *batch.Batch, idx int,
 	batches := make([]*batch.Batch, partitionNum)
 	for i := range vecList {
 		// initialize the vectors in each batch, the batch only contains a `row_id` column
-		retBatch := batch.New(true, []string{catalog.Row_ID})
-		retBatch.SetZs(vecList[i].Length(), proc.Mp())
+		retBatch := batch.New(true, []string{catalog.Row_ID, "pk"})
+		retBatch.SetRowCount(vecList[i].Length())
 		retBatch.SetVector(0, vecList[i])
+		retBatch.SetVector(1, pkList[i])
 		batches[i] = retBatch
 	}
 	return batches, nil
@@ -96,7 +125,8 @@ func GroupByPartitionForInsert(proc *process.Process, bat *batch.Batch, attrs []
 		partitionBatch.Attrs = attrs
 		for i := range partitionBatch.Attrs {
 			vecType := bat.GetVector(int32(i)).GetType()
-			retVec := vector.NewVec(*vecType)
+			//retVec := vector.NewVec(*vecType)
+			retVec := proc.GetVector(*vecType)
 			partitionBatch.SetVector(int32(i), retVec)
 		}
 		batches[partIdx] = partitionBatch
@@ -123,7 +153,7 @@ func GroupByPartitionForInsert(proc *process.Process, bat *batch.Batch, attrs []
 
 	for partIdx := range batches {
 		length := batches[partIdx].GetVector(0).Length()
-		batches[partIdx].SetZs(length, proc.Mp())
+		batches[partIdx].SetRowCount(length)
 	}
 	return batches, nil
 }

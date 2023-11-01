@@ -72,20 +72,21 @@ func TestBuild(t *testing.T) {
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
 		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
+		tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		for {
 			ok, err := Call(0, tc.proc, tc.arg, false, false)
 			require.NoError(t, err)
-			require.Equal(t, false, ok)
-			mp := tc.proc.Reg.InputBatch.Ht.(*hashmap.JoinMap)
+			require.Equal(t, false, ok == process.ExecStop)
+			mp := tc.proc.Reg.InputBatch.AuxData.(*hashmap.JoinMap)
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			mp.Free()
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 			break
 		}
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.arg.Free(tc.proc, false)
+		tc.arg.Free(tc.proc, false, nil)
+		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
@@ -103,13 +104,13 @@ func BenchmarkBuild(b *testing.B) {
 			err := Prepare(tc.proc, tc.arg)
 			require.NoError(t, err)
 			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-			tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
+			tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			for {
 				ok, err := Call(0, tc.proc, tc.arg, false, false)
 				require.NoError(t, err)
 				require.Equal(t, true, ok)
-				mp := tc.proc.Reg.InputBatch.Ht.(*hashmap.JoinMap)
+				mp := tc.proc.Reg.InputBatch.AuxData.(*hashmap.JoinMap)
 				tc.proc.Reg.MergeReceivers[0].Ch <- nil
 				mp.Free()
 				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())

@@ -17,28 +17,12 @@ package types
 import (
 	"encoding/binary"
 	"fmt"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"golang.org/x/exp/constraints"
 )
 
 type T uint8
-
-var typesPool = sync.Pool{
-	New: func() any {
-		return &Type{}
-	},
-}
-
-func GetTypeFromPool() Type {
-	typ := typesPool.Get().(*Type)
-	return *typ
-}
-
-func PutTypeToPool(typ Type) {
-	typesPool.Put(&typ)
-}
 
 const (
 	// any family
@@ -85,6 +69,7 @@ const (
 	T_uuid      T = 63
 	T_binary    T = 64
 	T_varbinary T = 65
+	T_enum      T = 66
 
 	// blobs
 	T_blob T = 70
@@ -97,6 +82,12 @@ const (
 
 	// system family
 	T_tuple T = 201
+
+	// Array/Vector family
+	T_array_float32 T = 224 // In SQL , it is vecf32
+	T_array_float64 T = 225 // In SQL , it is vecf64
+
+	//note: max value of uint8 is 255
 )
 
 const (
@@ -189,6 +180,8 @@ type Timestamp int64
 type Time int64
 
 type Decimal64 uint64
+
+type Enum uint16
 
 type Decimal128 struct {
 	B0_63   uint64
@@ -298,7 +291,7 @@ func (b *Blockid) Unmarshal(data []byte) error {
 	return nil
 }
 
-// Fixed bytes.   Deciaml64/128 and Varlena are not included because they
+// Fixed bytes.   Decimal64/128 and Varlena are not included because they
 // has special meanings.  In general you cannot compare them as bytes.
 type FixedBytes interface {
 	TS | Rowid
@@ -321,7 +314,7 @@ type BuiltinNumber interface {
 }
 
 type OrderedT interface {
-	constraints.Ordered | Date | Time | Datetime | Timestamp
+	constraints.Ordered
 }
 
 type Decimal interface {
@@ -331,6 +324,10 @@ type Decimal interface {
 // FixedSized types in our type system.   Esp, Varlena.
 type FixedSizeT interface {
 	FixedSizeTExceptStrType | Varlena
+}
+
+type RealNumbers interface {
+	constraints.Float
 }
 
 type FixedSizeTExceptStrType interface {
@@ -357,6 +354,7 @@ var Types map[string]T = map[string]T{
 	"bigint unsigned":   T_uint64,
 
 	"decimal64":  T_decimal64,
+	"decimal":    T_decimal128,
 	"decimal128": T_decimal128,
 	"decimal256": T_decimal256,
 
@@ -375,6 +373,8 @@ var Types map[string]T = map[string]T{
 	"binary":    T_binary,
 	"varbinary": T_varbinary,
 
+	"enum": T_enum,
+
 	"json": T_json,
 	"text": T_text,
 	"blob": T_blob,
@@ -383,10 +383,13 @@ var Types map[string]T = map[string]T{
 	"transaction timestamp": T_TS,
 	"rowid":                 T_Rowid,
 	"blockid":               T_Blockid,
+
+	"array float32": T_array_float32,
+	"array float64": T_array_float64,
 }
 
 func New(oid T, width, scale int32) Type {
-	typ := GetTypeFromPool()
+	typ := Type{}
 	typ.Oid = oid
 	typ.Size = int32(oid.TypeLen())
 	typ.Width = width
@@ -486,6 +489,10 @@ func (t Type) IsDecimal() bool {
 	}
 }
 
+func (t Type) IsNumeric() bool {
+	return t.IsIntOrUint() || t.IsFloat() || t.IsDecimal()
+}
+
 func (t Type) IsTemporal() bool {
 	switch t.Oid {
 	case T_date, T_time, T_datetime, T_timestamp, T_interval:
@@ -495,7 +502,7 @@ func (t Type) IsTemporal() bool {
 }
 
 func (t Type) IsNumericOrTemporal() bool {
-	return t.IsIntOrUint() || t.IsFloat() || t.IsDecimal() || t.IsTemporal()
+	return t.IsNumeric() || t.IsTemporal()
 }
 
 func (t Type) String() string {
@@ -515,7 +522,7 @@ func (t Type) DescString() string {
 	case T_decimal64:
 		return fmt.Sprintf("DECIMAL(%d,%d)", t.Width, t.Scale)
 	case T_decimal128:
-		return fmt.Sprintf("DECIAML(%d,%d)", t.Width, t.Scale)
+		return fmt.Sprintf("DECIMAL(%d,%d)", t.Width, t.Scale)
 	}
 	return t.Oid.String()
 }
@@ -582,18 +589,29 @@ func (t T) ToType() Type {
 	case T_varchar:
 		typ.Size = VarlenaSize
 		typ.Width = MaxVarcharLen
+	case T_array_float32, T_array_float64:
+		typ.Size = VarlenaSize
+		typ.Width = MaxArrayDimension
 	case T_binary:
 		typ.Size = VarlenaSize
 		typ.Width = MaxBinaryLen
 	case T_varbinary:
 		typ.Size = VarlenaSize
 		typ.Width = MaxVarBinaryLen
+	case T_enum:
+		typ.Size = 2
 	case T_any:
 		// XXX I don't know about this one ...
 		typ.Size = 0
 	default:
 		panic("Unknown type")
 	}
+	return typ
+}
+
+func (t T) ToTypeWithScale(scale int32) Type {
+	typ := t.ToType()
+	typ.Scale = scale
 	return typ
 }
 
@@ -663,6 +681,12 @@ func (t T) String() string {
 		return "BLOCKID"
 	case T_interval:
 		return "INTERVAL"
+	case T_array_float32:
+		return "VECF32"
+	case T_array_float64:
+		return "VECF64"
+	case T_enum:
+		return "ENUM"
 	}
 	return fmt.Sprintf("unexpected type: %d", t)
 }
@@ -730,6 +754,12 @@ func (t T) OidString() string {
 		return "T_Blockid"
 	case T_interval:
 		return "T_interval"
+	case T_enum:
+		return "T_enum"
+	case T_array_float32:
+		return "T_array_float32"
+	case T_array_float64:
+		return "T_array_float64"
 	}
 	return "unknown_type"
 }
@@ -759,7 +789,7 @@ func (t T) TypeLen() int {
 		return 4
 	case T_float64:
 		return 8
-	case T_char, T_varchar, T_json, T_blob, T_text, T_binary, T_varbinary:
+	case T_char, T_varchar, T_json, T_blob, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64:
 		return VarlenaSize
 	case T_decimal64:
 		return 8
@@ -777,6 +807,8 @@ func (t T) TypeLen() int {
 		return BlockidSize
 	case T_tuple, T_interval:
 		return 0
+	case T_enum:
+		return 2
 	}
 	panic(fmt.Sprintf("unknown type %d", t))
 }
@@ -808,10 +840,28 @@ func (t T) FixedLength() int {
 		return RowidSize
 	case T_Blockid:
 		return BlockidSize
-	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary:
+	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64:
 		return -24
+	case T_enum:
+		return 2
 	}
 	panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknown type %d", t)))
+}
+
+func (t T) IsFixedLen() bool {
+	return t.FixedLength() > 0
+}
+
+func (t T) IsOrdered() bool {
+	switch t {
+	case T_int8, T_int16, T_int32, T_int64,
+		T_uint8, T_uint16, T_uint32, T_uint64,
+		T_float32, T_float64,
+		T_date, T_time, T_datetime, T_timestamp:
+		return true
+	default:
+		return false
+	}
 }
 
 // IsUnsignedInt return true if the types.T is UnSigned integer type
@@ -859,6 +909,13 @@ func (t T) IsMySQLString() bool {
 
 func (t T) IsDateRelate() bool {
 	if t == T_date || t == T_datetime || t == T_timestamp || t == T_time {
+		return true
+	}
+	return false
+}
+
+func (t T) IsArrayRelate() bool {
+	if t == T_array_float32 || t == T_array_float64 {
 		return true
 	}
 	return false

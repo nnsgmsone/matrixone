@@ -16,21 +16,27 @@ package compile
 
 import (
 	"context"
+	"errors"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 
+	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/udf"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/multierr"
 )
 
 type sqlExecutor struct {
@@ -40,7 +46,11 @@ type sqlExecutor struct {
 	txnClient client.TxnClient
 	fs        fileservice.FileService
 	ls        lockservice.LockService
+	qs        queryservice.QueryService
+	hakeeper  logservice.CNHAKeeperClient
+	us        udf.Service
 	aicm      *defines.AutoIncrCacheManager
+	buf       *buffer.Buffer
 }
 
 // NewSQLExecutor returns a internal used sql service. It can execute sql in current CN.
@@ -50,6 +60,9 @@ func NewSQLExecutor(
 	mp *mpool.MPool,
 	txnClient client.TxnClient,
 	fs fileservice.FileService,
+	qs queryservice.QueryService,
+	hakeeper logservice.CNHAKeeperClient,
+	us udf.Service,
 	aicm *defines.AutoIncrCacheManager) executor.SQLExecutor {
 	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.LockService)
 	if !ok {
@@ -61,8 +74,12 @@ func NewSQLExecutor(
 		txnClient: txnClient,
 		fs:        fs,
 		ls:        v.(lockservice.LockService),
+		qs:        qs,
+		hakeeper:  hakeeper,
+		us:        us,
 		aicm:      aicm,
 		mp:        mp,
+		buf:       buffer.New(),
 	}
 }
 
@@ -95,9 +112,24 @@ func (s *sqlExecutor) ExecTxn(
 	}
 	err = execFunc(exec)
 	if err != nil {
-		return exec.rollback()
+		logutil.Errorf("internal sql executor error: %v", err)
+		return exec.rollback(err)
 	}
-	return exec.commit()
+	if err = exec.commit(); err != nil {
+		return err
+	}
+	s.maybeWaitCommittedLogApplied(exec.opts)
+	return nil
+}
+
+func (s *sqlExecutor) maybeWaitCommittedLogApplied(opts executor.Options) {
+	if !opts.WaitCommittedLogApplied() {
+		return
+	}
+	ts := opts.Txn().Txn().CommitTS
+	if !ts.IsEmpty() {
+		s.txnClient.SyncLatestCommitTS(ts)
+	}
 }
 
 func (s *sqlExecutor) getCompileContext(
@@ -114,11 +146,11 @@ func (s *sqlExecutor) getCompileContext(
 func (s *sqlExecutor) adjustOptions(
 	ctx context.Context,
 	opts executor.Options) (context.Context, executor.Options, error) {
-	if opts.HasAccoundID() {
+	if opts.HasAccountID() {
 		ctx = context.WithValue(
 			ctx,
 			defines.TenantIDKey{},
-			opts.AccoundID())
+			opts.AccountID())
 	}
 
 	if !opts.HasExistsTxn() {
@@ -160,6 +192,21 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 		return executor.Result{}, err
 	}
 
+	// TODO(volgariver6): we got a duplicate code logic in `func (cwft *TxnComputationWrapper) Compile`,
+	// maybe we should fix it.
+	txnOp := exec.opts.Txn()
+	if txnOp != nil && !exec.opts.DisableIncrStatement() {
+		txnOp.GetWorkspace().StartStatement()
+		defer func() {
+			txnOp.GetWorkspace().EndStatement()
+		}()
+
+		err := txnOp.GetWorkspace().IncrStatementID(exec.ctx, false)
+		if err != nil {
+			return executor.Result{}, err
+		}
+	}
+
 	proc := process.New(
 		exec.ctx,
 		exec.s.mp,
@@ -167,28 +214,27 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 		exec.opts.Txn(),
 		exec.s.fs,
 		exec.s.ls,
+		exec.s.qs,
+		exec.s.hakeeper,
+		exec.s.us,
 		exec.s.aicm,
 	)
+	proc.SetVectorPoolSize(0)
+	proc.SessionInfo.TimeZone = exec.opts.GetTimeZone()
+	proc.SessionInfo.Buf = exec.s.buf
+	defer func() {
+		proc.CleanValueScanBatchs()
+		proc.FreeVectors()
+	}()
 
 	pn, err := plan.BuildPlan(
 		exec.s.getCompileContext(exec.ctx, proc, exec.opts),
-		stmts[0])
+		stmts[0], false)
 	if err != nil {
 		return executor.Result{}, err
 	}
 
-	c := New(
-		exec.s.addr,
-		exec.opts.Database(),
-		sql,
-		"",
-		"",
-		exec.ctx,
-		exec.s.eng,
-		proc,
-		stmts[0],
-		false,
-		nil)
+	c := New(exec.s.addr, exec.opts.Database(), sql, "", "", exec.ctx, exec.s.eng, proc, stmts[0], false, nil)
 
 	result := executor.NewResult(exec.s.mp)
 	var batches []*batch.Batch
@@ -212,12 +258,19 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 	if err != nil {
 		return executor.Result{}, err
 	}
-	if err := c.Run(0); err != nil {
+	var runResult *util.RunResult
+	runResult, err = c.Run(0)
+	if err != nil {
+		for _, bat := range batches {
+			if bat != nil {
+				bat.Clean(exec.s.mp)
+			}
+		}
 		return executor.Result{}, err
 	}
 
 	result.Batches = batches
-	result.AffectedRows = c.GetAffectedRows()
+	result.AffectedRows = runResult.AffectRows
 	return result, nil
 }
 
@@ -225,21 +278,12 @@ func (exec *txnExecutor) commit() error {
 	if exec.opts.ExistsTxn() {
 		return nil
 	}
-	if err := exec.s.eng.Commit(
-		exec.ctx,
-		exec.opts.Txn()); err != nil {
-		return err
-	}
 	return exec.opts.Txn().Commit(exec.ctx)
 }
 
-func (exec *txnExecutor) rollback() error {
+func (exec *txnExecutor) rollback(err error) error {
 	if exec.opts.ExistsTxn() {
-		return nil
+		return err
 	}
-	err := exec.s.eng.Rollback(
-		exec.ctx,
-		exec.opts.Txn())
-	return multierr.Append(err,
-		exec.opts.Txn().Rollback(exec.ctx))
+	return errors.Join(err, exec.opts.Txn().Rollback(exec.ctx))
 }

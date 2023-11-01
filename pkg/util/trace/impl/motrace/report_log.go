@@ -16,12 +16,17 @@ package motrace
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/export/table"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"encoding/hex"
+	"sync"
 	"time"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
+
 	"go.uber.org/zap"
 	"go.uber.org/zap/buffer"
 	"go.uber.org/zap/zapcore"
@@ -35,14 +40,22 @@ type MOZapLog struct {
 	SpanContext *trace.SpanContext `json:"span"`
 	Timestamp   time.Time          `json:"timestamp"`
 	LoggerName  string
-	Caller      string `json:"caller"` // like "util/trace/trace.go:666"
-	Message     string `json:"message"`
-	Extra       string `json:"extra"` // like json text
-	Stack       string `json:"stack"`
+	Caller      string   `json:"caller"` // like "util/trace/trace.go:666"
+	Message     string   `json:"message"`
+	Extra       string   `json:"extra"` // like json text
+	Stack       string   `json:"stack"`
+	SessionID   [16]byte `json:"session_id"`
+	StatementID [16]byte `json:"statement_id"`
+}
+
+var logPool = sync.Pool{
+	New: func() any {
+		return &MOZapLog{}
+	},
 }
 
 func newMOZap() *MOZapLog {
-	return &MOZapLog{}
+	return logPool.Get().(*MOZapLog)
 }
 
 func (m *MOZapLog) GetName() string {
@@ -55,7 +68,13 @@ func (m *MOZapLog) GetName() string {
 // itemName: 8
 // nodeInfo: 40 /*36+4*/
 // spanInfo: 36+16
-const deltaContentLength = int64(26 + 5 + 8 + 40 + 36 + 16)
+const (
+	deltaContentLength = int64(26 + 5 + 8 + 40 + 36 + 16)
+
+	session_id = "session_id"
+
+	statement_id = "statement_id"
+)
 
 // Size 计算近似值
 func (m *MOZapLog) Size() int64 {
@@ -69,6 +88,7 @@ func (m *MOZapLog) Free() {
 	m.Caller = ""
 	m.Message = ""
 	m.Extra = ""
+	logPool.Put(m)
 }
 
 func (m *MOZapLog) GetTable() *table.Table { return logView.OriginTable }
@@ -80,7 +100,7 @@ func (m *MOZapLog) FillRow(ctx context.Context, row *table.Row) {
 		row.SetColumnVal(traceIDCol, table.UuidField(m.SpanContext.TraceID[:]))
 	}
 	if m.SpanContext.SpanID != trace.NilSpanID {
-		row.SetColumnVal(spanIDCol, table.BytesField(m.SpanContext.SpanID[:]))
+		row.SetColumnVal(spanIDCol, table.StringField(hex.EncodeToString(m.SpanContext.SpanID[:])))
 	}
 	row.SetColumnVal(spanKindCol, table.StringField(m.SpanContext.Kind.String()))
 	row.SetColumnVal(nodeUUIDCol, table.StringField(GetNodeResource().NodeUuid))
@@ -92,10 +112,19 @@ func (m *MOZapLog) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(messageCol, table.StringField(m.Message))
 	row.SetColumnVal(extraCol, table.StringField(m.Extra))
 	row.SetColumnVal(stackCol, table.StringField(m.Stack))
+	if m.SessionID != [16]byte{} {
+		row.SetColumnVal(sessionIDCol, table.UuidField(m.SessionID[:]))
+	}
+	if m.StatementID != [16]byte{} {
+		row.SetColumnVal(sessionIDCol, table.UuidField(m.SessionID[:]))
+	}
 }
 
 func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcore.Field) (*buffer.Buffer, error) {
-	var needReport = true
+	var discardable = false
+	// count log message each minute
+	metric.MOLogMessageCounter(entry.Level.String()).Add(1)
+	// check trace is enable
 	if !GetTracerProvider().IsEnable() {
 		return jsonEncoder.EncodeEntry(entry, []zap.Field{})
 	}
@@ -110,6 +139,9 @@ func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcor
 	// find SpanContext
 	endIdx := len(fields) - 1
 	for idx, v := range fields {
+		if v.Type == zapcore.BoolType && v.Key == logutil.MOInternalFiledKeyDiscardable {
+			discardable = true
+		}
 		if trace.IsSpanField(v) {
 			log.SpanContext = v.Interface.(*trace.SpanContext)
 			// find endIdx
@@ -121,16 +153,34 @@ func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcor
 			}
 			continue
 		}
+
+		if v.Type == zapcore.ByteStringType {
+			if v.Key == session_id {
+				copy(log.SessionID[:], v.Interface.([]byte))
+			} else if v.Key == statement_id {
+				copy(log.StatementID[:], v.Interface.([]byte))
+			}
+		}
 		if idx == endIdx {
 			break
 		}
 	}
-	if !needReport {
-		log.Free()
-		return jsonEncoder.EncodeEntry(entry, []zap.Field{})
-	}
 	buffer, err := jsonEncoder.EncodeEntry(entry, fields[:endIdx+1])
 	log.Extra = buffer.String()
-	GetGlobalBatchProcessor().Collect(DefaultContext(), log)
+	collector := GetGlobalBatchProcessor()
+	var collectFunc = collector.Collect
+	if discardable {
+		if c, support := collector.(DiscardableCollector); support {
+			collectFunc = c.DiscardableCollect
+		}
+	}
+	switch entry.Level {
+	case zap.PanicLevel, zap.DPanicLevel, zap.FatalLevel:
+		syncer := NewItemSyncer(log)
+		collectFunc(DefaultContext(), syncer)
+		syncer.Wait()
+	default:
+		collectFunc(DefaultContext(), log)
+	}
 	return buffer, err
 }

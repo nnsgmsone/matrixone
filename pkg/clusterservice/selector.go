@@ -19,9 +19,17 @@ import (
 )
 
 // NewSelector return a default selector, this empty selector
-// will select all input
+// will select all instances. For CN type, it only select the
+// ones whose work state is working.
 func NewSelector() Selector {
 	return Selector{}
+}
+
+// NewSelectAll will return all CN services.
+func NewSelectAll() Selector {
+	return Selector{
+		all: true,
+	}
 }
 
 // NewServiceIDSelector
@@ -44,12 +52,28 @@ func (s Selector) SelectByLabel(labels map[string]string, op Op) Selector {
 	return s
 }
 
+// SelectWithoutLabel updates the selector by removing the labels.
+func (s Selector) SelectWithoutLabel(labels map[string]string) Selector {
+	for labelKey, labelValue := range s.labels {
+		v, ok := labels[labelKey]
+		if ok && v == labelValue {
+			delete(s.labels, labelKey)
+		}
+	}
+	return s
+}
+
+// LabelNum returns the number of labels in this selector.
+func (s Selector) LabelNum() int {
+	return len(s.labels)
+}
+
 func (s Selector) filterCN(cn metadata.CNService) bool {
 	return s.filter(cn.ServiceID, cn.Labels)
 }
 
-func (s Selector) filterDN(dn metadata.DNService) bool {
-	return s.filter(dn.ServiceID, dn.Labels)
+func (s Selector) filterTN(tn metadata.TNService) bool {
+	return s.filter(tn.ServiceID, tn.Labels)
 }
 
 func (s Selector) filter(serviceID string, labels map[string]metadata.LabelList) bool {

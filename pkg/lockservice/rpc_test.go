@@ -40,10 +40,11 @@ func TestRPCSend(t *testing.T) {
 				lock.Method_Lock,
 				func(
 					ctx context.Context,
+					cancel context.CancelFunc,
 					req *lock.Request,
 					resp *lock.Response,
 					cs morpc.ClientSession) {
-					writeResponse(ctx, resp, nil, cs)
+					writeResponse(ctx, cancel, resp, nil, cs)
 				})
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
@@ -58,6 +59,22 @@ func TestRPCSend(t *testing.T) {
 	)
 }
 
+func TestRPCSendWithNotSupport(t *testing.T) {
+	runRPCTests(
+		t,
+		func(c Client, s Server) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+			defer cancel()
+			_, err := c.Send(ctx,
+				&lock.Request{
+					LockTable: lock.LockTable{ServiceID: "s1"},
+					Method:    lock.Method_Lock})
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+		},
+	)
+}
+
 func TestMOErrorCanHandled(t *testing.T) {
 	runRPCTests(
 		t,
@@ -66,10 +83,11 @@ func TestMOErrorCanHandled(t *testing.T) {
 				lock.Method_Lock,
 				func(
 					ctx context.Context,
+					cancel context.CancelFunc,
 					req *lock.Request,
 					resp *lock.Response,
 					cs morpc.ClientSession) {
-					writeResponse(ctx, resp, moerr.NewDeadLockDetectedNoCtx(), cs)
+					writeResponse(ctx, cancel, resp, moerr.NewDeadLockDetectedNoCtx(), cs)
 				})
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
@@ -92,10 +110,11 @@ func TestRequestCanBeFilter(t *testing.T) {
 				lock.Method_Lock,
 				func(
 					ctx context.Context,
+					cancel context.CancelFunc,
 					req *lock.Request,
 					resp *lock.Response,
 					cs morpc.ClientSession) {
-					writeResponse(ctx, resp, nil, cs)
+					writeResponse(ctx, cancel, resp, nil, cs)
 				})
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
@@ -119,11 +138,12 @@ func TestLockTableBindChanged(t *testing.T) {
 				lock.Method_Lock,
 				func(
 					ctx context.Context,
+					cancel context.CancelFunc,
 					req *lock.Request,
 					resp *lock.Response,
 					cs morpc.ClientSession) {
 					resp.NewBind = &lock.LockTable{ServiceID: "s1"}
-					writeResponse(ctx, resp, nil, cs)
+					writeResponse(ctx, cancel, resp, nil, cs)
 				})
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
@@ -162,7 +182,7 @@ func runRPCTests(
 					LockServiceAddress: testSockets,
 				},
 			},
-			[]metadata.DNService{
+			[]metadata.TNService{
 				{
 					LockServiceAddress: testSockets,
 				},

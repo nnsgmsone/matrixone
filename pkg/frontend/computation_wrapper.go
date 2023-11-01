@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -24,15 +25,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	util2 "github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/mohae/deepcopy"
 )
 
 var _ ComputationWrapper = &TxnComputationWrapper{}
@@ -76,8 +82,8 @@ func (ncw *NullComputationWrapper) GetUUID() []byte {
 	return ncw.uuid[:]
 }
 
-func (ncw *NullComputationWrapper) Run(ts uint64) error {
-	return nil
+func (ncw *NullComputationWrapper) Run(ts uint64) (*util2.RunResult, error) {
+	return nil, nil
 }
 
 func (ncw *NullComputationWrapper) GetLoadTag() bool {
@@ -85,11 +91,12 @@ func (ncw *NullComputationWrapper) GetLoadTag() bool {
 }
 
 type TxnComputationWrapper struct {
-	stmt    tree.Statement
-	plan    *plan2.Plan
-	proc    *process.Process
-	ses     *Session
-	compile *compile.Compile
+	stmt      tree.Statement
+	plan      *plan2.Plan
+	proc      *process.Process
+	ses       *Session
+	compile   *compile.Compile
+	runResult *util2.RunResult
 
 	uuid uuid.UUID
 }
@@ -180,18 +187,57 @@ func (cwft *TxnComputationWrapper) GetClock() clock.Clock {
 }
 
 func (cwft *TxnComputationWrapper) GetAffectedRows() uint64 {
-	return cwft.compile.GetAffectedRows()
+	return cwft.runResult.AffectRows
+}
+
+func (cwft *TxnComputationWrapper) GetServerStatus() uint16 {
+	return cwft.ses.GetServerStatus()
 }
 
 func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+	var span trace.Span
+	requestCtx, span = trace.Start(requestCtx, "TxnComputationWrapper.Compile",
+		trace.WithKind(trace.SpanKindStatement))
+	defer span.End(trace.WithStatementExtra(cwft.ses.GetTxnId(), cwft.ses.GetStmtId(), cwft.ses.GetSqlOfStmt()))
+
 	var err error
 	defer RecordStatementTxnID(requestCtx, cwft.ses)
 	if cwft.ses.IfInitedTempEngine() {
-		requestCtx = context.WithValue(requestCtx, defines.TemporaryDN{}, cwft.ses.GetTempTableStorage())
+		requestCtx = context.WithValue(requestCtx, defines.TemporaryTN{}, cwft.ses.GetTempTableStorage())
 		cwft.ses.SetRequestContext(requestCtx)
-		cwft.proc.Ctx = context.WithValue(cwft.proc.Ctx, defines.TemporaryDN{}, cwft.ses.GetTempTableStorage())
+		cwft.proc.Ctx = context.WithValue(cwft.proc.Ctx, defines.TemporaryTN{}, cwft.ses.GetTempTableStorage())
 		cwft.ses.GetTxnHandler().AttachTempStorageToTxnCtx()
 	}
+
+	txnHandler := cwft.ses.GetTxnHandler()
+	var txnCtx context.Context
+	txnCtx, cwft.proc.TxnOperator, err = txnHandler.GetTxn()
+	if err != nil {
+		return nil, err
+	}
+
+	txnCtx = fileservice.EnsureStatementProfiler(txnCtx, requestCtx)
+
+	// Increase the statement ID and update snapshot TS before build plan, because the
+	// snapshot TS is used when build plan.
+	// NB: In internal executor, we should also do the same action, which is increasing
+	// statement ID and updating snapshot TS.
+	// See `func (exec *txnExecutor) Exec(sql string)` for details.
+	txnOp := cwft.proc.TxnOperator
+	cwft.ses.SetTxnId(txnOp.Txn().ID)
+	if txnOp != nil && !cwft.ses.IsDerivedStmt() {
+		ok, _ := cwft.ses.GetTxnHandler().calledStartStmt()
+		if !ok {
+			txnOp.GetWorkspace().StartStatement()
+			cwft.ses.GetTxnHandler().enableStartStmt(txnOp.Txn().ID)
+		}
+
+		err = txnOp.GetWorkspace().IncrStatementID(requestCtx, false)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	cacheHit := cwft.plan != nil
 	if !cacheHit {
 		cwft.plan, err = buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
@@ -215,58 +261,59 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		if err != nil {
 			return nil, err
 		}
+		preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
 
 		// TODO check if schema change, obj.Obj is zero all the time in 0.6
-		// for _, obj := range preparePlan.GetSchemas() {
-		// 	newObj, _ := cwft.ses.txnCompileCtx.Resolve(obj.SchemaName, obj.ObjName)
-		// 	if newObj == nil || newObj.Obj != obj.Obj {
-		// 		return nil, moerr.NewInternalError("", fmt.Sprintf(ctx, "table '%s' has been changed, please reset Prepare statement '%s'", obj.ObjName, stmtName))
-		// 	}
-		// }
-
-		preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
-		if len(executePlan.Args) != len(preparePlan.ParamTypes) {
-			return nil, moerr.NewInvalidInput(requestCtx, "Incorrect arguments to EXECUTE")
+		for _, obj := range preparePlan.GetSchemas() {
+			newObj, newTableDef := cwft.ses.txnCompileCtx.Resolve(obj.SchemaName, obj.ObjName)
+			if newObj == nil {
+				return nil, moerr.NewInternalError(requestCtx, "table '%s' in prepare statement '%s' does not exist anymore", obj.ObjName, stmtName)
+			}
+			if newObj.Obj != obj.Obj || newTableDef.Version != uint32(obj.Server) {
+				return nil, moerr.NewInternalError(requestCtx, "table '%s' has been changed, please reset prepare statement '%s'", obj.ObjName, stmtName)
+			}
 		}
-		if prepareStmt.IsInsertValues {
-			for _, node := range preparePlan.Plan.GetQuery().Nodes {
-				if node.NodeType == plan.Node_VALUE_SCAN && node.RowsetData != nil {
-					tableDef := node.TableDef
-					colCount := len(tableDef.Cols)
-					colsData := node.RowsetData.Cols
-					rowCount := len(colsData[0].Data)
 
-					bat := prepareStmt.InsertBat
-					bat.CleanOnlyData()
-					for i := 0; i < colCount; i++ {
-						if err = rowsetDataToVector(cwft.proc.Ctx, cwft.proc, cwft.ses.txnCompileCtx,
-							colsData[i].Data, bat.Vecs[i], executePlan.Args, prepareStmt.ufs[i]); err != nil {
-							return nil, err
-						}
-					}
-					bat.AddCnt(1)
-					for i := 0; i < rowCount; i++ {
-						bat.Zs = append(bat.Zs, 1)
-					}
-					cwft.proc.SetPrepareBatch(bat)
-					break
+		// The default count is 1. Setting it to 2 ensures that memory will not be reclaimed.
+		//  Convenient to reuse memory next time
+		if prepareStmt.InsertBat != nil {
+			prepareStmt.InsertBat.SetCnt(1000) //we will make sure :  when retry in lock error, we will not clean up this batch
+			cwft.proc.SetPrepareBatch(prepareStmt.InsertBat)
+			cwft.proc.SetPrepareExprList(prepareStmt.exprList)
+		}
+		numParams := len(preparePlan.ParamTypes)
+		if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { //use binary protocol
+			if prepareStmt.params.Length() != numParams {
+				return nil, moerr.NewInvalidInput(requestCtx, "Incorrect arguments to EXECUTE")
+			}
+			cwft.proc.SetPrepareParams(prepareStmt.params)
+		} else if len(executePlan.Args) > 0 {
+			if len(executePlan.Args) != numParams {
+				return nil, moerr.NewInvalidInput(requestCtx, "Incorrect arguments to EXECUTE")
+			}
+			params := cwft.proc.GetVector(types.T_text.ToType())
+			for _, arg := range executePlan.Args {
+				exprImpl := arg.Expr.(*plan.Expr_V)
+				param, err := cwft.proc.GetResolveVariableFunc()(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
+				if err != nil {
+					return nil, err
+				}
+				if param == nil {
+					return nil, moerr.NewInvalidInput(requestCtx, "Incorrect arguments to EXECUTE")
+				}
+				err = util.AppendAnyToStringVector(cwft.proc, param, params)
+				if err != nil {
+					return nil, err
 				}
 			}
-			cwft.plan = preparePlan.Plan
+			cwft.proc.SetPrepareParams(params)
 		} else {
-			newPlan := plan2.DeepCopyPlan(preparePlan.Plan)
-
-			// replace ? and @var with their values
-			resetParamRule := plan2.NewResetParamRefRule(requestCtx, executePlan.Args)
-			resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx(), cwft.ses.GetTxnCompileCtx().GetProcess())
-			constantFoldRule := plan2.NewConstantFoldRule(cwft.ses.GetTxnCompileCtx())
-			vp := plan2.NewVisitPlan(newPlan, []plan2.VisitPlanRule{resetParamRule, resetVarRule, constantFoldRule})
-			err = vp.Visit(requestCtx)
-			if err != nil {
-				return nil, err
+			if numParams > 0 {
+				return nil, moerr.NewInvalidInput(requestCtx, "Incorrect arguments to EXECUTE")
 			}
-			cwft.plan = newPlan
 		}
+
+		cwft.plan = preparePlan.Plan
 
 		// reset plan & stmt
 		cwft.stmt = prepareStmt.PrepareStmt
@@ -286,25 +333,8 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		   	return nil, err
 		   }
 		*/
-	} else {
-		var vp *plan2.VisitPlan
-		if cacheHit {
-			vp = plan2.NewVisitPlan(cwft.plan, []plan2.VisitPlanRule{plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx(), cwft.ses.GetTxnCompileCtx().GetProcess()), plan2.NewRecomputeRealTimeRelatedFuncRule(cwft.ses.GetTxnCompileCtx().GetProcess())})
-		} else {
-			vp = plan2.NewVisitPlan(cwft.plan, []plan2.VisitPlanRule{plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx(), cwft.ses.GetTxnCompileCtx().GetProcess())})
-		}
-		err = vp.Visit(requestCtx)
-		if err != nil {
-			return nil, err
-		}
 	}
 
-	txnHandler := cwft.ses.GetTxnHandler()
-	var txnCtx context.Context
-	txnCtx, cwft.proc.TxnOperator, err = txnHandler.GetTxn()
-	if err != nil {
-		return nil, err
-	}
 	addr := ""
 	if len(cwft.ses.GetParameterUnit().ClusterNodes) > 0 {
 		addr = cwft.ses.GetParameterUnit().ClusterNodes[0].Addr
@@ -328,8 +358,11 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		cwft.proc,
 		cwft.stmt,
 		cwft.ses.isInternal,
-		cwft.ses.getCNLabels(),
+		deepcopy.Copy(cwft.ses.getCNLabels()).(map[string]string),
 	)
+	cwft.compile.SetBuildPlanFunc(func() (*plan2.Plan, error) {
+		return buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
+	})
 
 	if _, ok := cwft.stmt.(*tree.ExplainAnalyze); ok {
 		fill = func(obj interface{}, bat *batch.Batch) error { return nil }
@@ -341,13 +374,13 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	// check if it is necessary to initialize the temporary engine
 	if cwft.compile.NeedInitTempEngine(cwft.ses.IfInitedTempEngine()) {
 		// 0. init memory-non-dist storage
-		dnStore, err := cwft.ses.SetTempTableStorage(cwft.GetClock())
+		tnStore, err := cwft.ses.SetTempTableStorage(cwft.GetClock())
 		if err != nil {
 			return nil, err
 		}
 
 		// temporary storage is passed through Ctx
-		requestCtx = context.WithValue(requestCtx, defines.TemporaryDN{}, cwft.ses.GetTempTableStorage())
+		requestCtx = context.WithValue(requestCtx, defines.TemporaryTN{}, cwft.ses.GetTempTableStorage())
 
 		// 1. init memory-non-dist engine
 		tempEngine := memoryengine.New(
@@ -360,8 +393,8 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 				nil,
 				0,
 				clusterservice.WithDisableRefresh(),
-				clusterservice.WithServices(nil, []metadata.DNService{
-					*dnStore,
+				clusterservice.WithServices(nil, []metadata.TNService{
+					*tnStore,
 				})),
 		)
 
@@ -384,7 +417,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 
 func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context) error {
 	if stm := motrace.StatementFromContext(ctx); stm != nil {
-		stm.SetSerializableExecPlan(NewMarshalPlanHandler(ctx, stm.StatementID, cwft.plan))
+		stm.SetSerializableExecPlan(NewJsonPlanHandler(ctx, stm, cwft.plan))
 	}
 	return nil
 }
@@ -393,13 +426,15 @@ func (cwft *TxnComputationWrapper) GetUUID() []byte {
 	return cwft.uuid[:]
 }
 
-func (cwft *TxnComputationWrapper) Run(ts uint64) error {
-	logDebugf(cwft.ses.GetDebugString(), "compile.Run begin")
+func (cwft *TxnComputationWrapper) Run(ts uint64) (*util2.RunResult, error) {
+	logDebug(cwft.ses, cwft.ses.GetDebugString(), "compile.Run begin")
 	defer func() {
-		logDebugf(cwft.ses.GetDebugString(), "compile.Run end")
+		logDebug(cwft.ses, cwft.ses.GetDebugString(), "compile.Run end")
 	}()
-	err := cwft.compile.Run(ts)
-	return err
+	runResult, err := cwft.compile.Run(ts)
+	cwft.runResult = runResult
+	cwft.compile = nil
+	return runResult, err
 }
 
 func (cwft *TxnComputationWrapper) GetLoadTag() bool {

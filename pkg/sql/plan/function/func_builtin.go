@@ -17,22 +17,28 @@ package function
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
+	"math"
+	"math/rand"
+	"strings"
+	"time"
+	"unsafe"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"math"
-	"math/rand"
-	"strings"
-	"time"
-	"unsafe"
 )
 
 func builtInDateDiff(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
@@ -415,6 +421,66 @@ func builtInMoLogDate(parameters []*vector.Vector, result vector.FunctionResultW
 	return nil
 }
 
+// buildInPurgeLog act like `select mo_purge_log('rawlog,statement_info,metric', '2023-06-27')`
+func buildInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[uint8](result)
+
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[types.Date](parameters[1])
+
+	if proc.SessionInfo.AccountId != sysAccountID {
+		return moerr.NewNotSupported(proc.Ctx, "only support sys account")
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		v2, null2 := p2.GetValue(i)
+		// fixme: should we need to support null date?
+		if null1 || null2 {
+			rs.Append(uint8(1), true)
+			continue
+		}
+
+		v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.InternalSQLExecutor)
+		if !ok {
+			return moerr.NewNotSupported(proc.Ctx, "no implement sqlExecutor")
+		}
+		exec := v.(executor.SQLExecutor)
+		tables := table.GetAllTables()
+		tableNames := strings.Split(util.UnsafeBytesToString(v1), ",")
+		for _, tblName := range tableNames {
+			found := false
+			for _, tbl := range tables {
+				if tbl.TimestampColumn != nil && strings.TrimSpace(tblName) == tbl.Table {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return moerr.NewNotSupported(proc.Ctx, "purge '%s'", tblName)
+			}
+		}
+		for _, tblName := range tableNames {
+			for _, tbl := range tables {
+				if strings.TrimSpace(tblName) == tbl.Table {
+					sql := fmt.Sprintf("delete from `%s`.`%s` where `%s` < %q",
+						tbl.Database, tbl.Table, tbl.TimestampColumn.Name, v2.String())
+					opts := executor.Options{}.WithDatabase(tbl.Database)
+					res, err := exec.Exec(proc.Ctx, sql, opts)
+					if err != nil {
+						return err
+					}
+					res.Close()
+				}
+			}
+		}
+
+		rs.Append(uint8(0), false)
+	}
+
+	return nil
+}
+
 func builtInDatabase(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
@@ -497,9 +563,9 @@ func builtInCurrentUserName(_ []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
-func doLpad(src string, tgtLen int64, pad string) (string, bool) {
-	const MaxTgtLen = int64(16 * 1024 * 1024)
+const MaxTgtLen = int64(16 * 1024 * 1024)
 
+func doLpad(src string, tgtLen int64, pad string) (string, bool) {
 	srcRune, padRune := []rune(src), []rune(pad)
 	srcLen, padLen := len(srcRune), len(padRune)
 
@@ -519,8 +585,6 @@ func doLpad(src string, tgtLen int64, pad string) (string, bool) {
 }
 
 func doRpad(src string, tgtLen int64, pad string) (string, bool) {
-	const MaxTgtLen = int64(16 * 1024 * 1024)
-
 	srcRune, padRune := []rune(src), []rune(pad)
 	srcLen, padLen := len(srcRune), len(padRune)
 
@@ -537,6 +601,49 @@ func doRpad(src string, tgtLen int64, pad string) (string, bool) {
 		p, m := r/padLen, r%padLen
 		return src + strings.Repeat(pad, p) + string(padRune[:m]), false
 	}
+}
+
+func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	// repeat the string n times.
+	repeatNTimes := func(base string, n int64) (r string, null bool) {
+		if n <= 0 {
+			return "", false
+		}
+
+		// return null if result is too long.
+		// I'm not sure if this is the right thing to do, MySql can repeat string with the result length at least 1,000,000.
+		// and there is no documentation about the limit of the result length.
+		sourceLen := int64(len(base))
+		if sourceLen*n > MaxTgtLen {
+			return "", true
+		}
+		return strings.Repeat(base, int(n)), false
+	}
+
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	var err error
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		v1, null1 := p1.GetStrValue(i)
+		v2, null2 := p2.GetValue(i)
+		if null1 || null2 {
+			err = rs.AppendMustNullForBytesResult()
+		} else {
+			r, null := repeatNTimes(functionUtil.QuickBytesToStr(v1), v2)
+			if null {
+				err = rs.AppendMustNullForBytesResult()
+			} else {
+				err = rs.AppendBytes([]byte(r), false)
+			}
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
@@ -745,7 +852,7 @@ func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	}
 
 	fillGroupStr := func(keys [][]byte, vec *vector.Vector, n int, sz int, start int) {
-		data := unsafe.Slice((*byte)(vector.GetPtrAt(vec, 0)), (n+start)*sz)
+		data := unsafe.Slice(vector.GetPtrAt[byte](vec, 0), (n+start)*sz)
 		if !vec.GetNulls().Any() {
 			for i := 0; i < n; i++ {
 				keys[i] = append(keys[i], byte(0))
@@ -780,8 +887,7 @@ func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		}
 	}
 
-	vec := result.GetResultVector()
-	vec.SetLength(0)
+	rs := vector.MustFunctionResult[int64](result)
 
 	keys := make([][]byte, hashmap.UnitLimit)
 	states := make([][3]uint64, hashmap.UnitLimit)
@@ -790,12 +896,14 @@ func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
+		for j := 0; j < n; j++ {
+			keys[j] = keys[j][:0]
+		}
 		encodeHashKeys(keys, parameters, i, n)
+
 		hashtable.BytesBatchGenHashStates(&keys[0], &states[0], n)
 		for j := 0; j < n; j++ {
-			if err := vector.AppendFixed(vec, int64(states[j][0]), false, proc.Mp()); err != nil {
-				return err
-			}
+			rs.AppendMustValue(int64(states[j][0]))
 		}
 	}
 	return nil
@@ -809,13 +917,7 @@ func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrappe
 // input vec is [[1, 1, 1], [2, 2, null], [3, 3, 3]]
 // result vec is [serial(1, 2, 3), serial(1, 2, 3), null]
 func builtInSerial(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	// do not support the constant vector.
-	for _, v := range parameters {
-		if v.IsConst() {
-			return moerr.NewConstraintViolation(proc.Ctx, "serial function don't support constant")
-		}
-	}
-
+	rs := vector.MustFunctionResult[types.Varlena](result)
 	ps := types.NewPackerArray(length, proc.Mp())
 	defer func() {
 		for _, p := range ps {
@@ -826,173 +928,13 @@ func builtInSerial(parameters []*vector.Vector, result vector.FunctionResultWrap
 	bitMap := new(nulls.Nulls)
 
 	for _, v := range parameters {
-		switch v.GetType().Oid {
-		case types.T_bool:
-			s := vector.MustFixedCol[bool](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
-					ps[i].EncodeBool(b)
-				}
-			}
-		case types.T_int8:
-			s := vector.MustFixedCol[int8](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
-					ps[i].EncodeInt8(b)
-				}
-			}
-		case types.T_int16:
-			s := vector.MustFixedCol[int16](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
-					ps[i].EncodeInt16(b)
-				}
-			}
-		case types.T_int32:
-			s := vector.MustFixedCol[int32](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
-					ps[i].EncodeInt32(b)
-				}
-			}
-		case types.T_int64:
-			s := vector.MustFixedCol[int64](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
-					ps[i].EncodeInt64(b)
-				}
-			}
-		case types.T_uint8:
-			s := vector.MustFixedCol[uint8](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
-					ps[i].EncodeUint8(b)
-				}
-			}
-		case types.T_uint16:
-			s := vector.MustFixedCol[uint16](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
-					ps[i].EncodeUint16(b)
-				}
-			}
-		case types.T_uint32:
-			s := vector.MustFixedCol[uint32](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
-					ps[i].EncodeUint32(b)
-				}
-			}
-		case types.T_uint64:
-			s := vector.MustFixedCol[uint64](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
-					ps[i].EncodeUint64(b)
-				}
-			}
-		case types.T_float32:
-			s := vector.MustFixedCol[float32](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
-					ps[i].EncodeFloat32(b)
-				}
-			}
-		case types.T_float64:
-			s := vector.MustFixedCol[float64](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
-					ps[i].EncodeFloat64(b)
-				}
-			}
-		case types.T_date:
-			s := vector.MustFixedCol[types.Date](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
-					ps[i].EncodeDate(b)
-				}
-			}
-		case types.T_time:
-			s := vector.MustFixedCol[types.Time](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
-					ps[i].EncodeTime(b)
-				}
-			}
-		case types.T_datetime:
-			s := vector.MustFixedCol[types.Datetime](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
-					ps[i].EncodeDatetime(b)
-				}
-			}
-		case types.T_timestamp:
-			s := vector.MustFixedCol[types.Timestamp](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
-					ps[i].EncodeTimestamp(b)
-				}
-			}
-		case types.T_decimal64:
-			s := vector.MustFixedCol[types.Decimal64](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
-					ps[i].EncodeDecimal64(b)
-				}
-			}
-		case types.T_decimal128:
-			s := vector.MustFixedCol[types.Decimal128](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
-					ps[i].EncodeDecimal128(b)
-				}
-			}
-		case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-			vs := vector.MustStrCol(v)
-			for i := range vs {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
-					ps[i].EncodeStringType([]byte(vs[i]))
-				}
-			}
+		if v.IsConstNull() {
+			nulls.AddRange(rs.GetResultVector().GetNulls(), 0, uint64(length))
+			return nil
 		}
+		serialHelper(v, bitMap, ps, false)
 	}
 
-	rs := vector.MustFunctionResult[types.Varlena](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		if bitMap.Contains(i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
@@ -1005,6 +947,297 @@ func builtInSerial(parameters []*vector.Vector, result vector.FunctionResultWrap
 		}
 	}
 	return nil
+}
+
+func BuiltInSerialFull(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	ps := types.NewPackerArray(length, proc.Mp())
+	defer func() {
+		for _, p := range ps {
+			p.FreeMem()
+		}
+	}()
+
+	for _, v := range parameters {
+		if v.IsConstNull() {
+			for i := 0; i < v.Length(); i++ {
+				ps[i].EncodeNull()
+			}
+			continue
+		}
+
+		serialHelper(v, nil, ps, true)
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.AppendBytes(ps[i].GetBuf(), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// serialHelper is unified function used in builtInSerial and BuiltInSerialFull
+// To use it inside builtInSerial, pass the bitMap pointer and set isFull false
+// To use it inside BuiltInSerialFull, pass the bitMap as nil and set isFull to true
+func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isFull bool) {
+
+	if !isFull && bitMap == nil {
+		// if you are using it inside the builtInSerial then, you should pass bitMap
+		panic("for builtInSerial(), bitmap should not be nil")
+	}
+
+	switch v.GetType().Oid {
+	case types.T_bool:
+		s := vector.ExpandFixedCol[bool](v)
+		for i, b := range s {
+			if v.IsNull(uint64(i)) {
+				if isFull {
+					ps[i].EncodeNull()
+				} else {
+					nulls.Add(bitMap, uint64(i))
+				}
+			} else {
+				ps[i].EncodeBool(b)
+			}
+		}
+	case types.T_int8:
+		s := vector.ExpandFixedCol[int8](v)
+		for i, b := range s {
+			if v.IsNull(uint64(i)) {
+				if isFull {
+					ps[i].EncodeNull()
+				} else {
+					nulls.Add(bitMap, uint64(i))
+				}
+			} else {
+				ps[i].EncodeInt8(b)
+			}
+		}
+	case types.T_int16:
+		s := vector.ExpandFixedCol[int16](v)
+		for i, b := range s {
+			if v.IsNull(uint64(i)) {
+				if isFull {
+					ps[i].EncodeNull()
+				} else {
+					nulls.Add(bitMap, uint64(i))
+				}
+			} else {
+				ps[i].EncodeInt16(b)
+			}
+		}
+	case types.T_int32:
+		s := vector.ExpandFixedCol[int32](v)
+		for i, b := range s {
+			if v.IsNull(uint64(i)) {
+				if isFull {
+					ps[i].EncodeNull()
+				} else {
+					nulls.Add(bitMap, uint64(i))
+				}
+			} else {
+				ps[i].EncodeInt32(b)
+			}
+		}
+	case types.T_int64:
+		s := vector.ExpandFixedCol[int64](v)
+		for i, b := range s {
+			if v.IsNull(uint64(i)) {
+				if isFull {
+					ps[i].EncodeNull()
+				} else {
+					nulls.Add(bitMap, uint64(i))
+				}
+			} else {
+				ps[i].EncodeInt64(b)
+			}
+		}
+	case types.T_uint8:
+		s := vector.ExpandFixedCol[uint8](v)
+		for i, b := range s {
+			if v.IsNull(uint64(i)) {
+				if isFull {
+					ps[i].EncodeNull()
+				} else {
+					nulls.Add(bitMap, uint64(i))
+				}
+			} else {
+				ps[i].EncodeUint8(b)
+			}
+		}
+	case types.T_uint16:
+		s := vector.ExpandFixedCol[uint16](v)
+		for i, b := range s {
+			if v.IsNull(uint64(i)) {
+				if isFull {
+					ps[i].EncodeNull()
+				} else {
+					nulls.Add(bitMap, uint64(i))
+				}
+			} else {
+				ps[i].EncodeUint16(b)
+			}
+		}
+	case types.T_uint32:
+		s := vector.ExpandFixedCol[uint32](v)
+		for i, b := range s {
+			if v.IsNull(uint64(i)) {
+				if isFull {
+					ps[i].EncodeNull()
+				} else {
+					nulls.Add(bitMap, uint64(i))
+				}
+			} else {
+				ps[i].EncodeUint32(b)
+			}
+		}
+	case types.T_uint64:
+		s := vector.ExpandFixedCol[uint64](v)
+		for i, b := range s {
+			if v.IsNull(uint64(i)) {
+				if isFull {
+					ps[i].EncodeNull()
+				} else {
+					nulls.Add(bitMap, uint64(i))
+				}
+			} else {
+				ps[i].EncodeUint64(b)
+			}
+		}
+	case types.T_float32:
+		s := vector.ExpandFixedCol[float32](v)
+		for i, b := range s {
+			if v.IsNull(uint64(i)) {
+				if isFull {
+					ps[i].EncodeNull()
+				} else {
+					nulls.Add(bitMap, uint64(i))
+				}
+			} else {
+				ps[i].EncodeFloat32(b)
+			}
+		}
+	case types.T_float64:
+		s := vector.ExpandFixedCol[float64](v)
+		for i, b := range s {
+			if v.IsNull(uint64(i)) {
+				if isFull {
+					ps[i].EncodeNull()
+				} else {
+					nulls.Add(bitMap, uint64(i))
+				}
+			} else {
+				ps[i].EncodeFloat64(b)
+			}
+		}
+	case types.T_date:
+		s := vector.ExpandFixedCol[types.Date](v)
+		for i, b := range s {
+			if v.IsNull(uint64(i)) {
+				if isFull {
+					ps[i].EncodeNull()
+				} else {
+					nulls.Add(bitMap, uint64(i))
+				}
+			} else {
+				ps[i].EncodeDate(b)
+			}
+		}
+	case types.T_time:
+		s := vector.ExpandFixedCol[types.Time](v)
+		for i, b := range s {
+			if v.IsNull(uint64(i)) {
+				if isFull {
+					ps[i].EncodeNull()
+				} else {
+					nulls.Add(bitMap, uint64(i))
+				}
+			} else {
+				ps[i].EncodeTime(b)
+			}
+		}
+	case types.T_datetime:
+		s := vector.ExpandFixedCol[types.Datetime](v)
+		for i, b := range s {
+			if v.IsNull(uint64(i)) {
+				if isFull {
+					ps[i].EncodeNull()
+				} else {
+					nulls.Add(bitMap, uint64(i))
+				}
+			} else {
+				ps[i].EncodeDatetime(b)
+			}
+		}
+	case types.T_timestamp:
+		s := vector.ExpandFixedCol[types.Timestamp](v)
+		for i, b := range s {
+			if v.IsNull(uint64(i)) {
+				if isFull {
+					ps[i].EncodeNull()
+				} else {
+					nulls.Add(bitMap, uint64(i))
+				}
+			} else {
+				ps[i].EncodeTimestamp(b)
+			}
+		}
+	case types.T_enum:
+		s := vector.MustFixedCol[types.Enum](v)
+		for i, b := range s {
+			if nulls.Contains(v.GetNulls(), uint64(i)) {
+				if isFull {
+					ps[i].EncodeNull()
+				} else {
+					nulls.Add(bitMap, uint64(i))
+				}
+			} else {
+				ps[i].EncodeEnum(b)
+			}
+		}
+	case types.T_decimal64:
+		s := vector.ExpandFixedCol[types.Decimal64](v)
+		for i, b := range s {
+			if v.IsNull(uint64(i)) {
+				if isFull {
+					ps[i].EncodeNull()
+				} else {
+					nulls.Add(bitMap, uint64(i))
+				}
+			} else {
+				ps[i].EncodeDecimal64(b)
+			}
+		}
+	case types.T_decimal128:
+		s := vector.ExpandFixedCol[types.Decimal128](v)
+		for i, b := range s {
+			if v.IsNull(uint64(i)) {
+				if isFull {
+					ps[i].EncodeNull()
+				} else {
+					nulls.Add(bitMap, uint64(i))
+				}
+			} else {
+				ps[i].EncodeDecimal128(b)
+			}
+		}
+	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64:
+		vs := vector.ExpandStrCol(v)
+		for i := range vs {
+			if v.IsNull(uint64(i)) {
+				if isFull {
+					ps[i].EncodeNull()
+				} else {
+					nulls.Add(bitMap, uint64(i))
+				}
+			} else {
+				ps[i].EncodeStringType([]byte(vs[i]))
+			}
+		}
+	}
 }
 
 // 24-hour seconds
@@ -1348,6 +1581,25 @@ func builtInExp(parameters []*vector.Vector, result vector.FunctionResultWrapper
 	return nil
 }
 
+func builtInSqrt(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opUnaryFixedToFixedWithErrorCheck[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+		return momath.Sqrt(v)
+	})
+}
+
+func builtInSqrtArray[T types.RealNumbers](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opUnaryBytesToBytesWithErrorCheck(parameters, result, proc, length, func(in []byte) (out []byte, err error) {
+		_in := types.BytesToArray[T](in)
+
+		_out, err := moarray.Sqrt(_in)
+		if err != nil {
+			return nil, err
+		}
+		return types.ArrayToBytes[float64](_out), nil
+
+	})
+}
+
 func builtInACos(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
 	rs := vector.MustFunctionResult[float64](result)
@@ -1468,9 +1720,55 @@ func builtInLog(parameters []*vector.Vector, result vector.FunctionResultWrapper
 	return nil
 }
 
+func builtInLog2(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
+	rs := vector.MustFunctionResult[float64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := p1.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			log2Value, err := momath.Log2(v)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(log2Value, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func builtInLog10(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
+	rs := vector.MustFunctionResult[float64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := p1.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			log10Value, err := momath.Lg(v)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(log10Value, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 type opBuiltInRand struct {
 	seed *rand.Rand
 }
+
+var _ = newOpBuiltInRand().builtInRand
 
 func newOpBuiltInRand() *opBuiltInRand {
 	return new(opBuiltInRand)
@@ -1510,4 +1808,11 @@ func (op *opBuiltInRand) builtInRand(parameters []*vector.Vector, result vector.
 		}
 	}
 	return nil
+}
+
+func builtInConvertFake(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	// ignore the second parameter and just set result the same to the first parameter.
+	return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
+		return v
+	})
 }

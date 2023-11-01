@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
 
 // The global variable is used to serialize plan and avoid objects being repeatedly created
@@ -81,11 +82,15 @@ func NewMarshalNodeImpl(node *plan.Node) *MarshalNodeImpl {
 
 func (m MarshalNodeImpl) GetStats() Stats {
 	if m.node.Stats != nil {
+		var hashmapSize float64
+		if m.node.Stats.HashmapStats != nil {
+			hashmapSize = m.node.Stats.HashmapStats.HashmapSize
+		}
 		return Stats{
 			BlockNum:    m.node.Stats.BlockNum,
 			Cost:        m.node.Stats.Cost,
 			Outcnt:      m.node.Stats.Outcnt,
-			HashmapSize: m.node.Stats.HashmapSize,
+			HashmapSize: hashmapSize,
 			Rowsize:     m.node.Stats.Rowsize,
 		}
 	} else {
@@ -107,7 +112,7 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 	buf := bytes.NewBuffer(make([]byte, 0, 400))
 	var err error
 	switch m.node.NodeType {
-	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN:
+	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_STREAM_SCAN:
 		//"title" : "SNOWFLAKE_SAMPLE_DATA.TPCDS_SF10TCL.DATE_DIM",
 		if m.node.ObjRef != nil {
 			buf.WriteString(m.node.ObjRef.GetSchemaName() + "." + m.node.ObjRef.GetObjName())
@@ -170,12 +175,18 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		return "preinsert", nil
 	case plan.Node_PRE_INSERT_UK:
 		return "preinsert_uk", nil
+	case plan.Node_PRE_INSERT_SK:
+		return "preinsert_sk", nil
 	case plan.Node_PRE_DELETE:
 		return "predelete", nil
 	case plan.Node_SINK:
 		return "sink", nil
 	case plan.Node_SINK_SCAN:
 		return "sink_scan", nil
+	case plan.Node_RECURSIVE_SCAN:
+		return "recursive_scan", nil
+	case plan.Node_RECURSIVE_CTE:
+		return "cte_scan", nil
 	case plan.Node_ON_DUPLICATE_KEY:
 		return "on_duplicate_key", nil
 	case plan.Node_LOCK_OP:
@@ -197,7 +208,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 	labels := make([]Label, 0)
 
 	switch m.node.NodeType {
-	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN:
+	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_STREAM_SCAN:
 		tableDef := m.node.TableDef
 		objRef := m.node.ObjRef
 		fullTableName := ""
@@ -427,6 +438,11 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			Name:  Label_Pre_InsertUk, //"pre insert uk",
 			Value: []string{},
 		})
+	case plan.Node_PRE_INSERT_SK:
+		labels = append(labels, Label{
+			Name:  Label_Pre_InsertSk, //"pre insert sk",
+			Value: []string{},
+		})
 	case plan.Node_PRE_DELETE:
 		labels = append(labels, Label{
 			Name:  Label_Pre_Delete, //"pre delete",
@@ -440,6 +456,16 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 	case plan.Node_SINK_SCAN:
 		labels = append(labels, Label{
 			Name:  Label_Sink_Scan, //"sink scan",
+			Value: []string{},
+		})
+	case plan.Node_RECURSIVE_SCAN:
+		labels = append(labels, Label{
+			Name:  Label_Recursive_SCAN, //"sink scan",
+			Value: []string{},
+		})
+	case plan.Node_RECURSIVE_CTE:
+		labels = append(labels, Label{
+			Name:  Label_Recursive_SCAN, //"sink scan",
 			Value: []string{},
 		})
 	case plan.Node_LOCK_OP:
@@ -510,6 +536,27 @@ const S3IOByte = "S3 IO Byte"
 const S3IOInputCount = "S3 IO Input Count"
 const S3IOOutputCount = "S3 IO Output Count"
 const Network = "Network"
+
+func GetStatistic4Trace(ctx context.Context, node *plan.Node, options *ExplainOptions) (s statistic.StatsArray) {
+	s.Reset()
+	if options.Analyze && node.AnalyzeInfo != nil {
+		analyzeInfo := node.AnalyzeInfo
+		s.WithTimeConsumed(float64(analyzeInfo.TimeConsumed)).
+			WithMemorySize(float64(analyzeInfo.MemorySize)).
+			WithS3IOInputCount(float64(analyzeInfo.S3IOInputCount)).
+			WithS3IOOutputCount(float64(analyzeInfo.S3IOOutputCount))
+	}
+	return
+}
+
+// GetInputRowsAndInputSize return plan.Node AnalyzeInfo InputRows and InputSize.
+// migrate ExplainData.StatisticsRead to here
+func GetInputRowsAndInputSize(ctx context.Context, node *plan.Node, options *ExplainOptions) (rows int64, size int64) {
+	if options.Analyze && node.AnalyzeInfo != nil {
+		return node.AnalyzeInfo.InputRows, node.AnalyzeInfo.InputSize
+	}
+	return
+}
 
 func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOptions) Statistics {
 	statistics := NewStatistics()

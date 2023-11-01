@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"hash/crc32"
 	"runtime"
 	"time"
@@ -34,8 +35,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -43,16 +46,20 @@ import (
 const (
 	maxMessageSizeToMoRpc = 64 * mpool.MB
 
-	HandleNotifyTimeout = 60 * time.Second
+	// need to fix this in the future. for now, increase it to make tpch1T can run on 3 CN
+	HandleNotifyTimeout = 300 * time.Second
 )
 
 // cnInformation records service information to help handle messages.
 type cnInformation struct {
-	cnAddr      string
-	storeEngine engine.Engine
-	fileService fileservice.FileService
-	lockService lockservice.LockService
-	aicm        *defines.AutoIncrCacheManager
+	cnAddr       string
+	storeEngine  engine.Engine
+	fileService  fileservice.FileService
+	lockService  lockservice.LockService
+	queryService queryservice.QueryService
+	hakeeper     logservice.CNHAKeeperClient
+	udfService   udf.Service
+	aicm         *defines.AutoIncrCacheManager
 }
 
 // processHelper records source process information to help
@@ -141,8 +148,8 @@ func (sender *messageSenderOnClient) send(
 func (sender *messageSenderOnClient) receiveMessage() (morpc.Message, error) {
 	select {
 	case <-sender.ctx.Done():
-		logutil.Errorf("sender ctx done during receive")
 		return nil, nil
+
 	case val, ok := <-sender.receiveCh:
 		if !ok || val == nil {
 			// ch close
@@ -193,6 +200,9 @@ func newMessageReceiverOnServer(
 	storeEngine engine.Engine,
 	fileService fileservice.FileService,
 	lockService lockservice.LockService,
+	queryService queryservice.QueryService,
+	hakeeper logservice.CNHAKeeperClient,
+	udfService udf.Service,
 	txnClient client.TxnClient,
 	aicm *defines.AutoIncrCacheManager) messageReceiverOnServer {
 
@@ -206,11 +216,14 @@ func newMessageReceiverOnServer(
 		sequence:        0,
 	}
 	receiver.cnInformation = cnInformation{
-		cnAddr:      cnAddr,
-		storeEngine: storeEngine,
-		fileService: fileService,
-		lockService: lockService,
-		aicm:        aicm,
+		cnAddr:       cnAddr,
+		storeEngine:  storeEngine,
+		fileService:  fileService,
+		lockService:  lockService,
+		queryService: queryService,
+		hakeeper:     hakeeper,
+		udfService:   udfService,
+		aicm:         aicm,
 	}
 
 	switch m.GetCmd() {
@@ -263,6 +276,9 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		pHelper.txnOperator,
 		cnInfo.fileService,
 		cnInfo.lockService,
+		cnInfo.queryService,
+		cnInfo.hakeeper,
+		cnInfo.udfService,
 		cnInfo.aicm)
 	proc.UnixTime = pHelper.unixTime
 	proc.Id = pHelper.id
@@ -283,12 +299,15 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		anal: &anaylze{analInfos: proc.AnalInfos},
 		addr: receiver.cnInformation.cnAddr,
 	}
-	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, &c.s3CounterSet)
+	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, &c.counterSet)
 	c.ctx = context.WithValue(c.proc.Ctx, defines.TenantIDKey{}, pHelper.accountId)
 
 	c.fill = func(_ any, b *batch.Batch) error {
 		return receiver.sendBatch(b)
 	}
+
+	c.runtimeFilterReceiverMap = make(map[int32]*runtimeFilterReceiver)
+
 	return c
 }
 
@@ -312,6 +331,10 @@ func (receiver *messageReceiverOnServer) sendBatch(
 	if b == nil {
 		return nil
 	}
+
+	// There is still a memory problem here. If row count is very small, but the cap of batch's vectors is very large,
+	// to encode will allocate a large memory.
+	// but I'm not sure how string type store data in vector, so I can't do a simple optimization like vec.col = vec.col[:len].
 	data, err := types.Encode(b)
 	if err != nil {
 		return err
@@ -417,17 +440,19 @@ func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.
 	defer getCancel()
 	var opProc *process.Process
 	var ok bool
-	opUuid := receiver.messageUuid
 outter:
 	for {
 		select {
 		case <-getCtx.Done():
+			colexec.Srv.GetProcByUuid(uid, true)
 			return nil, moerr.NewInternalError(receiver.ctx, "get dispatch process by uuid timeout")
+
 		case <-receiver.ctx.Done():
-			logutil.Errorf("receiver conctx done during get dispatch process")
+			colexec.Srv.GetProcByUuid(uid, true)
 			return nil, nil
+
 		default:
-			if opProc, ok = colexec.Srv.GetNotifyChByUuid(opUuid); !ok {
+			if opProc, ok = colexec.Srv.GetProcByUuid(uid, false); !ok {
 				runtime.Gosched()
 			} else {
 				break outter

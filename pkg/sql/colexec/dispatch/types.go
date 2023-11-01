@@ -20,7 +20,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -33,7 +32,6 @@ const (
 	maxMessageSizeToMoRpc = 64 * mpool.MB
 	procTimeout           = 10000 * time.Second
 	waitNotifyTimeout     = 45 * time.Second
-	shuffleBatchSize      = 1024 * 8 //8k
 
 	// send to all reg functions
 	SendToAllLocalFunc = iota
@@ -73,11 +71,8 @@ type container struct {
 	localRegsCnt  int
 	remoteRegsCnt int
 
-	// for shuffle reuse memory
-	sels         [][]int32
-	remoteToIdx  map[uuid.UUID]int
-	shuffledBats []*batch.Batch
-	batsCount    int
+	remoteToIdx map[uuid.UUID]int
+	hasData     bool
 }
 
 type Argument struct {
@@ -85,39 +80,48 @@ type Argument struct {
 
 	// IsSink means this is a Sink Node
 	IsSink bool
+	// RecSink means this is a Recursive Sink Node
+	RecSink bool
 	// FuncId means the sendFunc you want to call
 	FuncId int
 	// LocalRegs means the local register you need to send to.
 	LocalRegs []*process.WaitRegister
 	// RemoteRegs specific the remote reg you need to send to.
 	RemoteRegs []colexec.ReceiveInfo
-	// for shuffle
-	ShuffleColIdx       int
+	// for shuffle dispatch
+	ShuffleType         int32
 	ShuffleRegIdxLocal  []int
 	ShuffleRegIdxRemote []int
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	if arg.ctr.isRemote {
-		if !arg.ctr.prepared {
-			arg.waitRemoteRegsReady(proc)
-		}
-		for _, r := range arg.ctr.remoteReceivers {
-			timeoutCtx, cancel := context.WithTimeout(context.Background(), procTimeout)
-			_ = cancel
-			message := cnclient.AcquireMessage()
-			{
-				message.Id = r.msgId
-				message.Cmd = pipeline.BatchMessage
-				message.Sid = pipeline.MessageEnd
-				message.Uuid = r.uuid[:]
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if arg.ctr != nil {
+		if arg.ctr.isRemote {
+			if !arg.ctr.prepared {
+				arg.waitRemoteRegsReady(proc)
 			}
-			if pipelineFailed {
-				err := moerr.NewInternalError(proc.Ctx, "pipeline failed")
-				message.Err = pipeline.EncodedMessageError(timeoutCtx, err)
+			for _, r := range arg.ctr.remoteReceivers {
+				timeoutCtx, cancel := context.WithTimeout(context.Background(), procTimeout)
+				_ = cancel
+				message := cnclient.AcquireMessage()
+				{
+					message.Id = r.msgId
+					message.Cmd = pipeline.BatchMessage
+					message.Sid = pipeline.MessageEnd
+					message.Uuid = r.uuid[:]
+				}
+				if pipelineFailed {
+					message.Err = pipeline.EncodedMessageError(timeoutCtx, err)
+				}
+				r.cs.Write(timeoutCtx, message)
+				close(r.doneCh)
 			}
-			r.cs.Write(timeoutCtx, message)
-			close(r.doneCh)
+
+			uuids := make([]uuid.UUID, 0, len(arg.RemoteRegs))
+			for i := range arg.RemoteRegs {
+				uuids = append(uuids, arg.RemoteRegs[i].Uuid)
+			}
+			colexec.Srv.DeleteUuids(uuids)
 		}
 	}
 
@@ -127,6 +131,8 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 			case <-arg.LocalRegs[i].Ctx.Done():
 			case arg.LocalRegs[i].Ch <- nil:
 			}
+		} else {
+			arg.LocalRegs[i].CleanChannel(proc.Mp())
 		}
 		close(arg.LocalRegs[i].Ch)
 	}

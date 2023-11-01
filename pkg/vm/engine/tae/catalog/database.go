@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"sort"
 	"sync"
 	"unsafe"
 
@@ -230,7 +231,7 @@ func (e *DBEntry) StringWithLevel(level common.PPLevel) string {
 func (e *DBEntry) StringWithlevelLocked(level common.PPLevel) string {
 	if level <= common.PPL1 {
 		return fmt.Sprintf("DB[%d][name=%s][C@%s,D@%s]",
-			e.ID, e.GetFullName(), e.GetCreatedAt().ToString(), e.GetDeleteAt().ToString())
+			e.ID, e.GetFullName(), e.GetCreatedAtLocked().ToString(), e.GetDeleteAt().ToString())
 	}
 	return fmt.Sprintf("DB%s[name=%s]", e.BaseEntryImpl.StringLocked(), e.GetFullName())
 }
@@ -349,11 +350,11 @@ func (e *DBEntry) TxnGetTableEntryByID(id uint64, txn txnif.AsyncTxn) (entry *Ta
 // 3. Check duplicate/not found.
 // If the entry has already been dropped, return ErrNotFound.
 func (e *DBEntry) DropTableEntry(name string, txn txnif.AsyncTxn) (newEntry bool, deleted *TableEntry, err error) {
-	dn, err := e.txnGetNodeByName(txn.GetTenantID(), name, txn)
+	tn, err := e.txnGetNodeByName(txn.GetTenantID(), name, txn)
 	if err != nil {
 		return
 	}
-	entry := dn.GetPayload()
+	entry := tn.GetPayload()
 	entry.Lock()
 	defer entry.Unlock()
 	newEntry, err = entry.DropEntryLocked(txn)
@@ -406,7 +407,14 @@ func (e *DBEntry) PrettyNameIndex() string {
 	buf.WriteString(fmt.Sprintf("[%d]NameIndex:\n", len(e.nameNodes)))
 	// iterate all nodes in nameNodes, collect node ids to a string
 	ids := make([]uint64, 0)
-	for name, node := range e.nameNodes {
+	// sort e.nameNodes by name
+	names := make([]string, 0, len(e.nameNodes))
+	for name := range e.nameNodes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		node := e.nameNodes[name]
 		ids = ids[:0]
 		node.ForEachNodes(func(nn *nameNode[*TableEntry]) bool {
 			ids = append(ids, nn.id)
@@ -468,12 +476,6 @@ func (e *DBEntry) RollbackRenameTable(fullname string, tid uint64) {
 }
 
 func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
-	defer func() {
-		if err == nil {
-			e.catalog.AddTableCnt(-1)
-			e.catalog.AddColumnCnt(-1 * len(table.GetLastestSchema().ColDefs))
-		}
-	}()
 	logutil.Info("[Catalog]", common.OperationField("remove"),
 		common.OperandField(table.String()))
 	e.Lock()
@@ -520,12 +522,6 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 // 2.2.2 Check duplicate/not found.
 // If the entry hasn't been dropped, return ErrDuplicate.
 func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.TxnReader, skipDedup bool) (err error) {
-	defer func() {
-		if err == nil {
-			e.catalog.AddTableCnt(1)
-			e.catalog.AddColumnCnt(len(table.GetLastestSchema().ColDefs))
-		}
-	}()
 	fullName := table.GetFullName()
 	nn := e.nameNodes[fullName]
 	if nn == nil {
@@ -568,6 +564,10 @@ func (e *DBEntry) checkAddNameConflictLocked(name string, tid uint64, nn *nodeLi
 		return
 	}
 	// check name dup
+	if txn == nil {
+		// replay checkpoint
+		return nil
+	}
 	if existEntry, _ := nn.TxnGetNodeLocked(txn, name); existEntry != nil {
 		return moerr.GetOkExpectedDup()
 	}
@@ -603,6 +603,9 @@ func (e *DBEntry) RecurLoop(processor Processor) (err error) {
 		}
 		if err = table.RecurLoop(processor); err != nil {
 			return
+		}
+		if err = processor.OnPostTable(table); err != nil {
+			break
 		}
 		tableIt.Next()
 	}

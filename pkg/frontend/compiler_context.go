@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,14 +28,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 type TxnCompilerContext struct {
@@ -134,7 +136,10 @@ func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 	ses := tcc.GetSession()
 	_, err = tcc.GetTxnHandler().GetStorage().Database(txnCtx, name, txn)
 	if err != nil {
-		logErrorf(ses.GetDebugString(), "get database %v failed. error %v", name, err)
+		logError(ses, ses.GetDebugString(),
+			"Failed to get database",
+			zap.String("databaseName", name),
+			zap.Error(err))
 		return false
 	}
 
@@ -188,7 +193,10 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 	//open database
 	db, err := tcc.GetTxnHandler().GetStorage().Database(txnCtx, dbName, txn)
 	if err != nil {
-		logErrorf(ses.GetDebugString(), "get database %v error %v", dbName, err)
+		logError(ses, ses.GetDebugString(),
+			"Failed to get database",
+			zap.String("databaseName", dbName),
+			zap.Error(err))
 		return nil, nil, err
 	}
 
@@ -199,11 +207,14 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 	// logDebugf(ses.GetDebugString(), "dbName %v tableNames %v", dbName, tableNames)
 
 	//open table
-	table, err := db.Relation(txnCtx, tableName)
+	table, err := db.Relation(txnCtx, tableName, nil)
 	if err != nil {
 		tmpTable, e := tcc.getTmpRelation(txnCtx, engine.GetTempTableName(dbName, tableName))
 		if e != nil {
-			logutil.Errorf("get table %v error %v", tableName, err)
+			logError(ses, ses.GetDebugString(),
+				"Failed to get table",
+				zap.String("tableName", tableName),
+				zap.Error(err))
 			return nil, nil, err
 		} else {
 			table = tmpTable
@@ -220,10 +231,12 @@ func (tcc *TxnCompilerContext) getTmpRelation(_ context.Context, tableName strin
 	}
 	db, err := e.Database(txnCtx, defines.TEMPORARY_DBNAME, txn)
 	if err != nil {
-		logutil.Errorf("get temp database error %v", err)
+		logError(tcc.ses, tcc.ses.GetDebugString(),
+			"Failed to get temp database",
+			zap.Error(err))
 		return nil, err
 	}
-	table, err := db.Relation(txnCtx, tableName)
+	table, err := db.Relation(txnCtx, tableName, nil)
 	return table, err
 }
 
@@ -269,11 +282,10 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	return tcc.getTableDef(ctx, table, dbName, tableName, sub)
 }
 
-func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (body string, err error) {
-	var expectInvalidArgErr bool
-	var expectedInvalidArgLengthErr bool
-	var badValue string
+func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *function.Udf, err error) {
+	var matchNum int
 	var argstr string
+	var argTypeStr string
 	var sql string
 	var erArray []ExecResult
 
@@ -282,7 +294,7 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (body 
 
 	err = inputNameIsInvalid(ctx, name)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	bh := ses.GetBackgroundExec(ctx)
@@ -291,76 +303,136 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (body 
 	err = bh.Exec(ctx, "begin;")
 	defer func() {
 		err = finishTxn(ctx, bh, err)
-		if expectedInvalidArgLengthErr {
-			err = errors.Join(err, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args)))
-		} else if expectInvalidArgErr {
-			err = errors.Join(err, moerr.NewInvalidArg(ctx, name+" function have invalid input args", badValue))
+		if execResultArrayHasData(erArray) {
+			if matchNum < 1 {
+				err = errors.Join(err, moerr.NewInvalidInput(ctx, fmt.Sprintf("No matching function for call to %s(%s)", name, argTypeStr)))
+			} else if matchNum > 1 {
+				err = errors.Join(err, moerr.NewInvalidInput(ctx, fmt.Sprintf("call to %s(%s) is ambiguous", name, argTypeStr)))
+			}
 		}
 	}()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
-	sql = fmt.Sprintf(`select args, body from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`, name, tcc.DefaultDatabase())
+	sql = fmt.Sprintf(`select args, body, language, rettype, db, modified_time from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`, name, tcc.DefaultDatabase())
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	erArray, err = getResultSet(ctx, bh)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	if execResultArrayHasData(erArray) {
-		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-			// reset flag
-			expectedInvalidArgLengthErr = false
-			expectInvalidArgErr = false
-			argstr, err = erArray[0].GetString(ctx, i, 0)
-			if err != nil {
-				return "", err
+		fromList := make([]types.Type, len(args))
+		for i, arg := range args {
+			fromList[i] = types.Type{
+				Oid:   types.T(arg.Typ.Id),
+				Width: arg.Typ.Width,
+				Scale: arg.Typ.Scale,
 			}
-			body, err = erArray[0].GetString(ctx, i, 1)
-			if err != nil {
-				return "", err
-			}
-			// arg type check
-			argMap := make(map[string]string)
-			json.Unmarshal([]byte(argstr), &argMap)
-			if len(argMap) != len(args) {
-				expectedInvalidArgLengthErr = true
-				continue
-			}
-			i := 0
-			for _, v := range argMap {
-				switch t := int32(types.Types[v]); {
-				case (t >= 20 && t <= 29): // int family
-					if args[i].Typ.Id < 20 || args[i].Typ.Id > 29 {
-						expectInvalidArgErr = true
-						badValue = v
-					}
-				case t == 10: // bool family
-					if args[i].Typ.Id != 10 {
-						expectInvalidArgErr = true
-						badValue = v
-					}
-				case (t >= 30 && t <= 33): // float family
-					if args[i].Typ.Id < 30 || args[i].Typ.Id > 33 {
-						expectInvalidArgErr = true
-						badValue = v
-					}
-				}
-				i++
-			}
-			if (!expectInvalidArgErr) && (!expectedInvalidArgLengthErr) {
-				return body, err
+
+			argTypeStr += strings.ToLower(fromList[i].String())
+			if i+1 != len(args) {
+				argTypeStr += ", "
 			}
 		}
-		return "", err
+
+		// find function which has min type cast cost in reload functions
+		type MatchUdf struct {
+			Udf      *function.Udf
+			Cost     int
+			TypeList []types.T
+		}
+		matchedList := make([]*MatchUdf, 0)
+
+		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+			argstr, err = erArray[0].GetString(ctx, i, 0)
+			if err != nil {
+				return nil, err
+			}
+			udf = &function.Udf{}
+			udf.Body, err = erArray[0].GetString(ctx, i, 1)
+			if err != nil {
+				return nil, err
+			}
+			udf.Language, err = erArray[0].GetString(ctx, i, 2)
+			if err != nil {
+				return nil, err
+			}
+			udf.RetType, err = erArray[0].GetString(ctx, i, 3)
+			if err != nil {
+				return nil, err
+			}
+			udf.Db, err = erArray[0].GetString(ctx, i, 4)
+			if err != nil {
+				return nil, err
+			}
+			udf.ModifiedTime, err = erArray[0].GetString(ctx, i, 5)
+			if err != nil {
+				return nil, err
+			}
+			udf.ModifiedTime = strings.ReplaceAll(udf.ModifiedTime, " ", "_")
+			udf.ModifiedTime = strings.ReplaceAll(udf.ModifiedTime, ":", "-")
+			// arg type check
+			argList := make([]*function.Arg, 0)
+			err = json.Unmarshal([]byte(argstr), &argList)
+			if err != nil {
+				return nil, err
+			}
+			if len(argList) != len(args) { // mismatch
+				continue
+			}
+
+			toList := make([]types.T, len(args))
+			for j := range argList {
+				if fromList[j].IsDecimal() && argList[j].Type == "decimal" {
+					toList[j] = fromList[j].Oid
+				} else {
+					toList[j] = types.Types[argList[j].Type]
+				}
+			}
+
+			canCast, cost := function.UdfArgTypeMatch(fromList, toList)
+			if !canCast { // mismatch
+				continue
+			}
+
+			udf.Args = argList
+			matchedList = append(matchedList, &MatchUdf{
+				Udf:      udf,
+				Cost:     cost,
+				TypeList: toList,
+			})
+		}
+
+		if len(matchedList) == 0 {
+			return nil, err
+		}
+
+		sort.Slice(matchedList, func(i, j int) bool {
+			return matchedList[i].Cost < matchedList[j].Cost
+		})
+
+		minCost := matchedList[0].Cost
+		for _, matchUdf := range matchedList {
+			if matchUdf.Cost == minCost {
+				matchNum++
+			}
+		}
+
+		if matchNum == 1 {
+			matchedList[0].Udf.ArgsType = function.UdfArgTypeCast(fromList, matchedList[0].TypeList)
+			return matchedList[0].Udf, err
+		}
+
+		return nil, err
 	} else {
-		return "", moerr.NewNotSupported(ctx, "function or operator '%s'", name)
+		return nil, moerr.NewNotSupported(ctx, "function or operator '%s'", name)
 	}
 }
 
@@ -396,6 +468,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 					AutoIncr:    attr.Attr.AutoIncrement,
 					Table:       tableName,
 					NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
+					Enumvalues:  attr.Attr.EnumVlaues,
 				},
 				Primary:   attr.Attr.Primary,
 				Default:   attr.Attr.Default,
@@ -406,16 +479,16 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 				Seqnum:    uint32(attr.Attr.Seqnum),
 			}
 			// Is it a composite primary key
-			if attr.Attr.Name == catalog.CPrimaryKeyColName {
-				continue
-			}
+			//if attr.Attr.Name == catalog.CPrimaryKeyColName {
+			//	continue
+			//}
 			if attr.Attr.ClusterBy {
 				clusterByDef = &plan.ClusterByDef{
 					Name: attr.Attr.Name,
 				}
-				if util.JudgeIsCompositeClusterByColumn(attr.Attr.Name) {
-					continue
-				}
+				//if util.JudgeIsCompositeClusterByColumn(attr.Attr.Name) {
+				//	continue
+				//}
 			}
 			cols = append(cols, col)
 		} else if pro, ok := def.(*engine.PropertiesDef); ok {
@@ -447,6 +520,8 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 					refChildTbls = k.Tables
 				case *engine.PrimaryKeyDef:
 					primarykey = k.Pkey
+				case *engine.StreamConfigsDef:
+					properties = append(properties, k.Configs...)
 				}
 			}
 		} else if commnetDef, ok := def.(*engine.CommentDef); ok {
@@ -478,10 +553,12 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 	}
 
 	if primarykey != nil && primarykey.PkeyColName == catalog.CPrimaryKeyColName {
-		cols = append(cols, plan2.MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
+		//cols = append(cols, plan2.MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
+		primarykey.CompPkeyCol = plan2.GetColDefFromTable(cols, catalog.CPrimaryKeyColName)
 	}
 	if clusterByDef != nil && util.JudgeIsCompositeClusterByColumn(clusterByDef.Name) {
-		cols = append(cols, plan2.MakeHiddenColDefByName(clusterByDef.Name))
+		//cols = append(cols, plan2.MakeHiddenColDefByName(clusterByDef.Name))
+		clusterByDef.CompCbkeyCol = plan2.GetColDefFromTable(cols, clusterByDef.Name)
 	}
 	rowIdCol := plan2.MakeRowIdColDef()
 	cols = append(cols, rowIdCol)
@@ -498,6 +575,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 	obj := &plan2.ObjectRef{
 		SchemaName:       dbName,
 		ObjName:          tableName,
+		Obj:              int64(tableId),
 		SubscriptionName: subscriptionName,
 	}
 	if pubAccountId != -1 {
@@ -507,14 +585,13 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 	}
 
 	tableDef := &plan2.TableDef{
-		TblId:     tableId,
-		Name:      tableName,
-		Cols:      cols,
-		Defs:      defs,
-		TableType: TableType,
-		Createsql: Createsql,
-		Pkey:      primarykey,
-		//CompositePkey: CompositePkey,
+		TblId:        tableId,
+		Name:         tableName,
+		Cols:         cols,
+		Defs:         defs,
+		TableType:    TableType,
+		Createsql:    Createsql,
+		Pkey:         primarykey,
 		ViewSql:      viewSql,
 		Partition:    partitionInfo,
 		Fkeys:        foreignKeys,
@@ -543,7 +620,7 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 
 	if isSystemVar {
 		if isGlobalVar {
-			return tcc.GetSession().GetGlobalVar(varName)
+			return tcc.GetSession().getGlobalSystemVariableValue(varName)
 		} else {
 			return tcc.GetSession().GetSessionVar(varName)
 		}
@@ -661,8 +738,37 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) bool {
 		}
 	}
 	tableName := obj.GetObjName()
-	ctx, table, _ := tcc.getRelation(dbName, tableName, sub)
-	return table.Stats(ctx, tcc.GetSession().statsCache.GetStatsInfoMap(table.GetTableID(ctx)))
+	ctx, table, err := tcc.getRelation(dbName, tableName, sub)
+	if err != nil {
+		return false
+	}
+
+	var partitionInfo *plan2.PartitionByDef
+	engineDefs, err := table.TableDefs(ctx)
+	if err != nil {
+		return false
+	}
+	for _, def := range engineDefs {
+		if partitionDef, ok := def.(*engine.PartitionDef); ok {
+			if partitionDef.Partitioned > 0 {
+				p := &plan2.PartitionByDef{}
+				err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
+				if err != nil {
+					return false
+				}
+				partitionInfo = p
+			}
+		}
+	}
+	var ptables []any
+	if partitionInfo != nil {
+		ptables = make([]any, len(partitionInfo.PartitionTableNames))
+		for i, PartitionTableName := range partitionInfo.PartitionTableNames {
+			_, ptable, _ := tcc.getRelation(dbName, PartitionTableName, nil)
+			ptables[i] = ptable
+		}
+	}
+	return table.Stats(ctx, ptables, tcc.GetSession().statsCache.GetStatsInfoMap(table.GetTableID(ctx)))
 }
 
 func (tcc *TxnCompilerContext) GetProcess() *process.Process {

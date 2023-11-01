@@ -16,9 +16,10 @@ package frontend
 
 import (
 	"context"
+	"sync"
+
 	"github.com/fagongzi/goetty/v2"
 	"go.uber.org/zap"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const DefaultTenantMoAdmin = "sys:internal:moadmin"
@@ -43,10 +45,26 @@ func applyOverride(sess *Session, opts ie.SessionOverrideOptions) {
 	if opts.IsInternal != nil {
 		sess.isInternal = *opts.IsInternal
 	}
+
+	acc := sess.GetTenantInfo()
+	if acc != nil {
+		if opts.AccountId != nil {
+			acc.SetTenantID(*opts.AccountId)
+		}
+
+		if opts.UserId != nil {
+			acc.SetUserID(*opts.UserId)
+		}
+
+		if opts.DefaultRoleId != nil {
+			acc.SetDefaultRoleID(*opts.DefaultRoleId)
+		}
+	}
+
 }
 
 type internalMiniExec interface {
-	doComQuery(requestCtx context.Context, sql string) error
+	doComQuery(requestCtx context.Context, input *UserInput) error
 	SetSession(*Session)
 }
 
@@ -139,7 +157,7 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 	defer sess.Close()
 	ie.executor.SetSession(sess)
 	ie.proto.stashResult = false
-	return ie.executor.doComQuery(ctx, sql)
+	return ie.executor.doComQuery(ctx, &UserInput{sql: sql})
 }
 
 func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
@@ -150,7 +168,7 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	ie.executor.SetSession(sess)
 	ie.proto.stashResult = true
 	logutil.Info("internalExecutor new session", trace.ContextField(ctx), zap.String("session uuid", sess.uuid.String()))
-	err := ie.executor.doComQuery(ctx, sql)
+	err := ie.executor.doComQuery(ctx, &UserInput{sql: sql})
 	res := ie.proto.swapOutResult()
 	res.err = err
 	return res
@@ -171,7 +189,7 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 		logutil.Fatalf("internalExecutor cannot create mpool in newCmdSession")
 		panic(err)
 	}
-	sess := NewSession(ie.proto, mp, ie.pu, GSysVariables, true, ie.aicm)
+	sess := NewSession(ie.proto, mp, ie.pu, GSysVariables, true, ie.aicm, nil)
 	sess.SetRequestContext(ctx)
 	sess.SetConnectContext(ctx)
 
@@ -248,8 +266,12 @@ func (ip *internalProtocol) IsEstablished() bool {
 	return true
 }
 
-func (ip *internalProtocol) ParseExecuteData(ctx context.Context, stmt *PrepareStmt, data []byte, pos int) (names []string, vars []any, err error) {
-	return nil, nil, nil
+func (ip *internalProtocol) ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
+	return nil
+}
+
+func (ip *internalProtocol) ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
+	return nil
 }
 
 func (ip *internalProtocol) SendPrepareResponse(ctx context.Context, stmt *PrepareStmt) error {
@@ -269,7 +291,7 @@ func (ip *internalProtocol) ConnectionID() uint32 {
 
 // Peer gets the address [Host:Port] of the client
 func (ip *internalProtocol) Peer() string {
-	return "0.0.0.0"
+	return "0.0.0.0:0"
 }
 
 func (ip *internalProtocol) GetDatabaseName() string {
@@ -392,6 +414,8 @@ func (ip *internalProtocol) ResetStatistics() {
 }
 
 func (ip *internalProtocol) GetStats() string { return "internal unknown stats" }
+
+func (ip *internalProtocol) CalculateOutTrafficBytes() int64 { return 0 }
 
 func (ip *internalProtocol) sendLocalInfileRequest(filename string) error {
 	return nil

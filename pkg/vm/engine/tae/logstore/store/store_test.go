@@ -16,24 +16,24 @@ package store
 
 import (
 	"math/rand"
-	"os"
 	"strconv"
 	"testing"
 
 	// "net/http"
 	// _ "net/http/pprof"
 
-	// "github.com/lni/vfs"
-	// "github.com/matrixorigin/matrixone/pkg/logservice"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/batchstoredriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 
-	// "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 
 	"github.com/stretchr/testify/assert"
+)
+
+const (
+	ModuleName = "logstore"
 )
 
 // var buf []byte
@@ -47,9 +47,8 @@ import (
 // }
 
 func newTestDriver(t *testing.T, size int) driver.Driver {
-	dir := "/tmp/logstore/teststore/store"
-	name := "mock"
-	os.RemoveAll(dir)
+	dir := testutils.InitTestEnv(ModuleName, t)
+	name := "test"
 	cfg := &batchstoredriver.StoreCfg{
 		RotateChecker: batchstoredriver.NewMaxSizeRotateChecker(size),
 	}
@@ -59,8 +58,8 @@ func newTestDriver(t *testing.T, size int) driver.Driver {
 }
 
 func restartTestDriver(t *testing.T, size int) driver.Driver {
-	dir := "/tmp/logstore/teststore/store"
-	name := "mock"
+	dir := testutils.InitTestEnv(ModuleName, t)
+	name := "test"
 	cfg := &batchstoredriver.StoreCfg{
 		RotateChecker: batchstoredriver.NewMaxSizeRotateChecker(size),
 	}
@@ -78,7 +77,7 @@ func restartTestDriver(t *testing.T, size int) driver.Driver {
 //		return driver, service
 //	}
 func TestAppendRead(t *testing.T) {
-	driver := newTestDriver(t, int(common.M)*64)
+	driver := newTestDriver(t, int(mpool.MB)*64)
 	wal := NewStore(driver)
 	defer wal.Close()
 
@@ -108,14 +107,14 @@ func mockEntry() entry.Entry {
 	if err != nil {
 		panic(err)
 	}
-	// payload:=make([]byte,common.K)
+	// payload:=make([]byte,mpool.KB)
 	// copy(payload,buf)
 	// e.SetPayload(payload)
 	return e
 }
 
 func TestReplay(t *testing.T) {
-	driver := newTestDriver(t, int(common.K)*3)
+	driver := newTestDriver(t, int(mpool.KB)*3)
 	wal := NewStore(driver)
 
 	e := entry.GetBase()
@@ -131,7 +130,7 @@ func TestReplay(t *testing.T) {
 	e.Free()
 
 	e2 := entry.GetBase()
-	err = e2.SetPayload(make([]byte, int(common.K*3)))
+	err = e2.SetPayload(make([]byte, int(mpool.KB*3)))
 	if err != nil {
 		panic(err)
 	}
@@ -143,7 +142,7 @@ func TestReplay(t *testing.T) {
 	e2.Free()
 
 	e2 = entry.GetBase()
-	err = e2.SetPayload(make([]byte, int(common.K*3)))
+	err = e2.SetPayload(make([]byte, int(mpool.KB*3)))
 	if err != nil {
 		panic(err)
 	}
@@ -156,13 +155,13 @@ func TestReplay(t *testing.T) {
 
 	wal.Close()
 
-	driver = restartTestDriver(t, int(common.K)*3)
+	driver = restartTestDriver(t, int(mpool.KB)*3)
 	wal = NewStore(driver)
 	wal.Close()
 }
 
 func TestTruncate(t *testing.T) {
-	driver := newTestDriver(t, int(common.M)*64)
+	driver := newTestDriver(t, int(mpool.MB)*64)
 	wal := NewStore(driver)
 	defer wal.Close()
 	entryCount := 5

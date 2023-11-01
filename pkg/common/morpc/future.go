@@ -39,25 +39,27 @@ type Future struct {
 	errC chan error
 	// used to check error for sending message
 	writtenC    chan error
-	sended      atomic.Uint32
+	waiting     atomic.Bool
 	releaseFunc func(*Future)
 	mu          struct {
 		sync.Mutex
-		closed bool
-		ref    int
-		cb     func()
+		notified bool
+		closed   bool
+		ref      int
+		cb       func()
 	}
 }
 
 func (f *Future) init(send RPCMessage) {
-	if _, ok := send.Ctx.Deadline(); !ok {
+	if _, ok := send.Ctx.Deadline(); !ok && !send.internal {
 		panic("context deadline not set")
 	}
-	f.sended.Store(0)
+	f.waiting.Store(false)
 	f.send = send
 	f.id = send.Message.GetID()
 	f.mu.Lock()
 	f.mu.closed = false
+	f.mu.notified = false
 	f.mu.Unlock()
 }
 
@@ -81,7 +83,7 @@ func (f *Future) Get() (Message, error) {
 	}
 }
 
-// Close close the future.
+// Close closes the future.
 func (f *Future) Close() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -94,12 +96,11 @@ func (f *Future) Close() {
 }
 
 func (f *Future) waitSendCompleted() error {
-	err := <-f.writtenC
-	return err
+	return <-f.writtenC
 }
 
-func (f *Future) messageSended(err error) {
-	if f.sended.CompareAndSwap(0, 1) {
+func (f *Future) messageSent(err error) {
+	if f.waiting.CompareAndSwap(false, true) {
 		f.writtenC <- err
 		f.unRef()
 	}
@@ -107,7 +108,20 @@ func (f *Future) messageSended(err error) {
 
 func (f *Future) maybeReleaseLocked() {
 	if f.mu.closed && f.mu.ref == 0 && f.releaseFunc != nil {
+		f.clear()
 		f.releaseFunc(f)
+	}
+}
+
+func (f *Future) clear() {
+	for {
+		select {
+		case <-f.c:
+		case <-f.errC:
+		case <-f.writtenC:
+		default:
+			return
+		}
 	}
 }
 
@@ -119,6 +133,10 @@ func (f *Future) done(response Message, cb func()) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	if f.mu.notified {
+		return
+	}
+
 	if !f.mu.closed && !f.timeout() {
 		if response.GetID() != f.getSendMessageID() {
 			return
@@ -128,11 +146,16 @@ func (f *Future) done(response Message, cb func()) {
 	} else if cb != nil {
 		cb()
 	}
+	f.mu.notified = true
 }
 
 func (f *Future) error(id uint64, err error, cb func()) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
+	if f.mu.notified {
+		return
+	}
 
 	if !f.mu.closed && !f.timeout() {
 		if id != f.getSendMessageID() {
@@ -143,6 +166,7 @@ func (f *Future) error(id uint64, err error, cb func()) {
 	} else if cb != nil {
 		cb()
 	}
+	f.mu.notified = true
 }
 
 func (f *Future) ref() {

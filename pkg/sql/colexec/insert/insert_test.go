@@ -54,8 +54,6 @@ func TestInsertOperator(t *testing.T) {
 
 	eng := mock_frontend.NewMockEngine(ctrl)
 	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	eng.EXPECT().Hints().Return(engine.Hints{
 		CommitOrRollbackTimeout: time.Second,
 	}).AnyTimes()
@@ -72,9 +70,9 @@ func TestInsertOperator(t *testing.T) {
 			testutil.MakeScalarNull(types.T_int64, 3),
 		},
 		Attrs: []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"},
-		Zs:    []int64{1, 1, 1},
 		Cnt:   1,
 	}
+	batch1.SetRowCount(3)
 	argument1 := Argument{
 		InsertCtx: &InsertCtx{
 			Rel: &mockRelation{},

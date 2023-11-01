@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -69,8 +70,8 @@ func (e *Engine) NewCompilerContext(
 
 var _ plan.CompilerContext = new(CompilerContext)
 
-func (c *CompilerContext) ResolveUdf(name string, ast []*plan.Expr) (string, error) {
-	return "", nil
+func (c *CompilerContext) ResolveUdf(name string, ast []*plan.Expr) (*function.Udf, error) {
+	return nil, nil
 }
 
 func (c *CompilerContext) ResolveAccountIds(accountNames []string) ([]uint32, error) {
@@ -226,6 +227,7 @@ func (c *CompilerContext) getTableAttrs(dbName string, tableName string) (attrs 
 	table, err := db.Relation(
 		c.ctx,
 		tableName,
+		nil,
 	)
 	if err != nil {
 		return nil, err
@@ -258,6 +260,7 @@ func engineAttrToPlanColDef(idx int, attr *engine.Attribute) *plan.ColDef {
 			NotNullable: attr.Default != nil && !(attr.Default.NullAbility),
 			Width:       attr.Type.Width,
 			Scale:       attr.Type.Scale,
+			Enumvalues:  attr.EnumVlaues,
 		},
 		Default:   attr.Default,
 		Primary:   attr.Primary,

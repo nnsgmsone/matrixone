@@ -123,15 +123,16 @@ type connManager struct {
 	// The hash is a hashed value from labelInfo.
 	conns map[LabelHash]*connInfo
 
+	// cn uuid => tunnels
+	// It is mainly used in CN server draining.
+	cnTunnels cnTunnels
+
 	// Map from connection ID to CN server.
 	connIDServers map[uint32]*CNServer
 
 	// proxyToBackendConnID maps proxy connection ID to
 	// backend connection ID.
 	proxyToBackendConnID map[uint32]uint32
-
-	// Map from Tenant to *CNServer list.
-	tenantConns map[Tenant]map[*CNServer]struct{}
 }
 
 // newConnManager creates a new connManager.
@@ -140,7 +141,7 @@ func newConnManager() *connManager {
 		conns:                make(map[LabelHash]*connInfo),
 		connIDServers:        make(map[uint32]*CNServer),
 		proxyToBackendConnID: make(map[uint32]uint32),
-		tenantConns:          make(map[Tenant]map[*CNServer]struct{}),
+		cnTunnels:            make(cnTunnels),
 	}
 	return m
 }
@@ -187,13 +188,10 @@ func (m *connManager) connect(cn *CNServer, t *tunnel) {
 	m.connIDServers[cn.backendConnID] = cn
 	m.proxyToBackendConnID[cn.proxyConnID] = cn.backendConnID
 
-	tenant := cn.reqLabel.Tenant
-	if tenant != "" {
-		if m.tenantConns[tenant] == nil {
-			m.tenantConns[tenant] = make(map[*CNServer]struct{})
-		}
-		m.tenantConns[tenant][cn] = struct{}{}
+	if _, ok := m.cnTunnels[cn.uuid]; !ok {
+		m.cnTunnels[cn.uuid] = make(tunnelSet)
 	}
+	m.cnTunnels[cn.uuid][t] = struct{}{}
 }
 
 // disconnect removes a connection from connection manager.
@@ -201,17 +199,12 @@ func (m *connManager) disconnect(cn *CNServer, t *tunnel) {
 	m.Lock()
 	defer m.Unlock()
 	ci, ok := m.conns[cn.hash]
-	if !ok {
-		return
+	if ok {
+		ci.cnTunnels.del(cn.uuid, t)
 	}
-	ci.cnTunnels.del(cn.uuid, t)
 	delete(m.connIDServers, cn.backendConnID)
 	delete(m.proxyToBackendConnID, cn.proxyConnID)
-
-	tenant := cn.reqLabel.Tenant
-	if tenant != "" && m.tenantConns[tenant] != nil {
-		delete(m.tenantConns[tenant], cn)
-	}
+	delete(m.cnTunnels[cn.uuid], t)
 }
 
 // count returns the total connection count.
@@ -278,17 +271,16 @@ func (m *connManager) getCNServerByConnID(connID uint32) *CNServer {
 	return nil
 }
 
-// getCNServersByTenant returns a CN server list by tenant.
-func (m *connManager) getCNServersByTenant(tenant Tenant) []*CNServer {
+func (m *connManager) getTunnelsByCNID(id string) []*tunnel {
 	m.Lock()
 	defer m.Unlock()
-	cns, ok := m.tenantConns[tenant]
+	tunMap, ok := m.cnTunnels[id]
 	if !ok {
 		return nil
 	}
-	cnList := make([]*CNServer, 0, len(cns))
-	for cn := range cns {
-		cnList = append(cnList, cn)
+	tuns := make([]*tunnel, 0, len(tunMap))
+	for tun := range tunMap {
+		tuns = append(tuns, tun)
 	}
-	return cnList
+	return tuns
 }

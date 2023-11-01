@@ -16,6 +16,7 @@ package util
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -28,6 +29,7 @@ import (
 )
 
 var SerialWithCompacted = serialWithCompacted
+var SerialWithoutCompacted = serialWithoutCompacted
 var CompactSingleIndexCol = compactSingleIndexCol
 var CompactPrimaryCol = compactPrimaryCol
 
@@ -47,6 +49,8 @@ func BuildIndexTableName(ctx context.Context, unique bool) (string, error) {
 	return name, nil
 }
 
+// BuildUniqueKeyBatch used in test to validate
+// serialWithCompacted(), compactSingleIndexCol() and compactPrimaryCol()
 func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, originTablePrimaryKey string, proc *process.Process) (*batch.Batch, int) {
 	var b *batch.Batch
 	if originTablePrimaryKey == "" {
@@ -107,8 +111,8 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, 
 		b.Vecs[1] = compactPrimaryCol(vec, bitMap, proc)
 	}
 
-	b.SetZs(b.Vecs[0].Length(), proc.Mp())
-	return b, b.Vecs[0].Length()
+	b.SetRowCount(b.Vecs[0].Length())
+	return b, b.RowCount()
 }
 
 // SerialWithCompacted have a similar function named Serial
@@ -265,6 +269,15 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 					ps[i].EncodeTimestamp(b)
 				}
 			}
+		case types.T_enum:
+			s := vector.MustFixedCol[types.Enum](v)
+			for i, b := range s {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
+					nulls.Add(bitMap, uint64(i))
+				} else {
+					ps[i].EncodeEnum(b)
+				}
+			}
 		case types.T_decimal64:
 			s := vector.MustFixedCol[types.Decimal64](v)
 			for i, b := range s {
@@ -283,12 +296,19 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 					ps[i].EncodeDecimal128(b)
 				}
 			}
-		case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
+			types.T_array_float32, types.T_array_float64:
+			// NOTE 1: We will consider T_array as bytes here just like JSON, VARBINARY and BLOB.
+			// If not, we need to define arrayType in types/tuple.go as arrayF32TypeCode, arrayF64TypeCode etc
+			// NOTE 2: vs is []string and not []byte. vs[i] is not of form "[1,2,3]". It is binary string of []float32{1,2,3}
+			// NOTE 3: This class is mainly used by PreInsertUnique which gets triggered before inserting into column having
+			// Unique Key or Primary Key constraint. Vector cannot be UK or PK.
 			vs := vector.MustStrCol(v)
 			for i := range vs {
 				if nulls.Contains(v.GetNulls(), uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
+
 					ps[i].EncodeStringType([]byte(vs[i]))
 				}
 			}
@@ -305,6 +325,32 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 	vector.AppendBytesList(vec, val, nil, proc.Mp())
 
 	return vec, bitMap
+}
+
+// serialWithoutCompacted is similar to serialWithCompacted and builtInSerial
+// serialWithoutCompacted function is used by Secondary Index to support rows containing null entries
+// for example:
+// input vec is [[1, 1, 1], [2, 2, null], [3, 3, 3]]
+// result vec is [serial(1, 2, 3), serial(1, 2, null), serial(1, 2, 3)]
+// result bitmap is [] (empty)
+// Here we are keeping the same function signature of serialWithCompacted so that we can duplicate the same code of
+// `preinsertunique` in `preinsertsecondaryindex`
+func serialWithoutCompacted(vs []*vector.Vector, proc *process.Process) (*vector.Vector, *nulls.Nulls) {
+
+	result := vector.NewFunctionResultWrapper(proc.GetVector, proc.PutVector, types.T_varchar.ToType(), proc.Mp())
+	defer result.Free()
+
+	if len(vs) == 0 {
+		// return empty vector and empty bitmap
+		return vector.NewVec(types.T_varchar.ToType()), new(nulls.Nulls)
+	}
+
+	rowCount := vs[0].Length()
+	_ = function.BuiltInSerialFull(vs, result, proc, rowCount)
+	// here we create a deep copy of result.GetResultVector, so that we can free the FunctionResultWrapper upon return
+	resultVec, _ := result.GetResultVector().Dup(proc.Mp())
+	return resultVec, new(nulls.Nulls)
+
 }
 
 func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vector, *nulls.Nulls) {
@@ -462,6 +508,16 @@ func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vec
 		}
 		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+	case types.T_enum:
+		s := vector.MustFixedCol[types.Enum](v)
+		ns := make([]types.Enum, 0, len(s)-nulls.Size(nsp))
+		for i, b := range s {
+			if !nulls.Contains(v.GetNulls(), uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		vec = vector.NewVec(*v.GetType())
+		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_decimal64:
 		s := vector.MustFixedCol[types.Decimal64](v)
 		ns := make([]types.Decimal64, 0, len(s)-nulls.Size(nsp))
@@ -482,7 +538,8 @@ func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vec
 		}
 		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
-	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob:
+	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob,
+		types.T_array_float32, types.T_array_float64:
 		s := vector.MustBytesCol(v)
 		ns := make([][]byte, 0, len(s)-nulls.Size(nsp))
 		for i, b := range s {
@@ -650,6 +707,16 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 		}
 		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+	case types.T_enum:
+		s := vector.MustFixedCol[types.Enum](v)
+		ns := make([]types.Enum, 0)
+		for i, b := range s {
+			if !nulls.Contains(bitMap, uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		vec = vector.NewVec(*v.GetType())
+		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_decimal64:
 		s := vector.MustFixedCol[types.Decimal64](v)
 		ns := make([]types.Decimal64, 0)
@@ -670,7 +737,8 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 		}
 		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
-	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob:
+	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob,
+		types.T_array_float32, types.T_array_float64:
 		s := vector.MustBytesCol(v)
 		ns := make([][]byte, 0)
 		for i, b := range s {

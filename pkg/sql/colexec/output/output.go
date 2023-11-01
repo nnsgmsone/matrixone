@@ -16,6 +16,7 @@ package output
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -27,17 +28,21 @@ func Prepare(_ *process.Process, _ any) error {
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	ap := arg.(*Argument)
-	if bat := proc.Reg.InputBatch; bat != nil && len(bat.Zs) > 0 {
-		for i := range bat.Zs {
-			bat.Zs[i] = 1
-		}
-		if err := ap.Func(ap.Data, bat); err != nil {
-			proc.PutBatch(bat)
-			return true, err
-		}
-		proc.PutBatch(bat)
+	bat := proc.InputBatch()
+	if bat == nil {
+		return process.ExecStop, nil
 	}
-	return false, nil
+	if bat.IsEmpty() {
+		proc.PutBatch(bat)
+		proc.SetInputBatch(batch.EmptyBatch)
+		return process.ExecNext, nil
+	}
+	if err := ap.Func(ap.Data, bat); err != nil {
+		bat.Clean(proc.Mp())
+		return process.ExecStop, err
+	}
+	proc.PutBatch(bat)
+	return process.ExecNext, nil
 }

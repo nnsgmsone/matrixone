@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 )
 
 const (
@@ -171,7 +170,7 @@ var (
 			"attname AS COLUMN_NAME,"+
 			"attnum AS ORDINAL_POSITION,"+
 			"mo_show_visible_bin(att_default,1) as COLUMN_DEFAULT,"+
-			"(case when attnotnull != 0 then 'YES' else 'NO' end) as IS_NULLABLE,"+
+			"(case when attnotnull != 0 then 'NO' else 'YES' end) as IS_NULLABLE,"+
 			"mo_show_visible_bin(atttyp,2) as DATA_TYPE,"+
 			"internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH,"+
 			"internal_char_size(atttyp) AS CHARACTER_OCTET_LENGTH,"+
@@ -188,31 +187,6 @@ var (
 			"cast('' as varchar(500)) as GENERATION_EXPRESSION,"+
 			"if(true, NULL, 0) as SRS_ID "+
 			"from mo_catalog.mo_columns where att_relname!='%s' and att_relname not like '%s' and attname != '%s'", catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID),
-		//"CREATE TABLE IF NOT EXISTS COLUMNS(" +
-		//	"TABLE_CATALOG varchar(64)," +
-		//	"TABLE_SCHEMA varchar(64)," +
-		//	"TABLE_NAME varchar(64)," +
-		//	"COLUMN_NAME varchar(64)," +
-		//	"ORDINAL_POSITION int unsigned," +
-		//	"COLUMN_DEFAULT text," +
-		//	"IS_NULLABLE varchar(3)," +
-		//	"DATA_TYPE longtext," +
-		//	"CHARACTER_MAXIMUM_LENGTH bigint," +
-		//	"CHARACTER_OCTET_LENGTH bigint," +
-		//	"NUMERIC_PRECISION bigint unsigned," +
-		//	"NUMERIC_SCALE bigint unsigned," +
-		//	"DATETIME_PRECISION int unsigned," +
-		//	"CHARACTER_SET_NAME varchar(64)," +
-		//	"COLLATION_NAME varchar(64)," +
-		//	"COLUMN_TYPE mediumtext," +
-		//	"COLUMN_KEY varchar(10)," +
-		//	"EXTRA varchar(256)," +
-		//	"`PRIVILEGES` varchar(154)," +
-		//	"COLUMN_COMMENT text," +
-		//	"GENERATION_EXPRESSION longtext," +
-		//	"SRS_ID int unsigned" +
-		//	");",
-
 		"CREATE TABLE IF NOT EXISTS PROFILING (" +
 			"QUERY_ID int NOT NULL DEFAULT '0'," +
 			"SEQ int NOT NULL DEFAULT '0'," +
@@ -233,30 +207,14 @@ var (
 			"SOURCE_FILE varchar(20) DEFAULT NULL," +
 			"SOURCE_LINE int DEFAULT NULL" +
 			");",
-		"CREATE TABLE IF NOT EXISTS `PROCESSLIST` (" +
-			"ID bigint unsigned NOT NULL DEFAULT '0'," +
-			"USER varchar(32) NOT NULL DEFAULT ''," +
-			"HOST varchar(261) NOT NULL DEFAULT ''," +
-			"DB varchar(64) DEFAULT NULL," +
-			"COMMAND varchar(16) NOT NULL DEFAULT ''," +
-			"TIME int NOT NULL DEFAULT '0'," +
-			"STATE varchar(64) DEFAULT NULL," +
-			"INFO longtext" +
-			");",
+		"CREATE VIEW IF NOT EXISTS `PROCESSLIST` AS SELECT * FROM PROCESSLIST() A;",
 		"CREATE TABLE IF NOT EXISTS USER_PRIVILEGES (" +
 			"GRANTEE varchar(292) NOT NULL DEFAULT ''," +
 			"TABLE_CATALOG varchar(512) NOT NULL DEFAULT ''," +
 			"PRIVILEGE_TYPE varchar(64) NOT NULL DEFAULT ''," +
 			"IS_GRANTABLE varchar(3) NOT NULL DEFAULT ''" +
 			");",
-		//"CREATE TABLE IF NOT EXISTS SCHEMATA (" +
-		//	"CATALOG_NAME varchar(64)," +
-		//	"SCHEMA_NAME varchar(64)," +
-		//	"DEFAULT_CHARACTER_SET_NAME varchar(64)," +
-		//	"DEFAULT_COLLATION_NAME varchar(64)," +
-		//	"SQL_PATH binary(0)," +
-		//	"DEFAULT_ENCRYPTION varchar(10)" +
-		//	");",
+
 		"CREATE VIEW SCHEMATA AS SELECT " +
 			"dat_catalog_name AS CATALOG_NAME," +
 			"datname AS SCHEMA_NAME," +
@@ -264,7 +222,7 @@ var (
 			"'utf8mb4_0900_ai_ci' AS DEFAULT_COLLATION_NAME," +
 			"if(true, NULL, '') AS SQL_PATH," +
 			"cast('NO' as varchar(3)) AS DEFAULT_ENCRYPTION " +
-			"FROM mo_catalog.mo_database;",
+			"FROM mo_catalog.mo_database where account_id = current_account_id() or (account_id = 0 and datname in ('mo_catalog'))",
 		"CREATE TABLE IF NOT EXISTS CHARACTER_SETS(" +
 			"CHARACTER_SET_NAME varchar(64)," +
 			"DEFAULT_COLLATE_NAME varchar(64)," +
@@ -296,61 +254,75 @@ var (
 			"DATABASE_COLLATION varchar(64)" +
 			");",
 
-		"CREATE VIEW IF NOT EXISTS TABLES AS " +
-			"SELECT 'def' AS TABLE_CATALOG," +
-			"reldatabase AS TABLE_SCHEMA," +
-			"relname AS TABLE_NAME," +
-			"(case when relkind = 'v' and (reldatabase='mo_catalog' or reldatabase='information_schema') then 'SYSTEM VIEW' " +
-			"when relkind = 'v'  then 'VIEW' " +
-			"when relkind = 'e' then 'EXTERNAL TABLE' " +
-			"when relkind = 'r' then 'BASE TABLE' " +
-			"else 'INTERNAL TABLE' end) AS TABLE_TYPE," +
-			"if(relkind = 'r','Tae',NULL) AS ENGINE," +
-			"if(relkind = 'v',NULL,10) AS VERSION," +
-			"'Compressed' AS ROW_FORMAT," +
-			"if(relkind = 'v', NULL, 0) AS TABLE_ROWS," +
-			"if(relkind = 'v', NULL, 0) AS AVG_ROW_LENGTH," +
-			"if(relkind = 'v', NULL, 0) AS DATA_LENGTH," +
-			"if(relkind = 'v', NULL, 0) AS MAX_DATA_LENGTH," +
-			"if(relkind = 'v', NULL, 0) AS INDEX_LENGTH," +
-			"if(relkind = 'v', NULL, 0) AS DATA_FREE," +
-			"if(relkind = 'v', NULL, internal_auto_increment(reldatabase, relname)) AS `AUTO_INCREMENT`," +
-			"created_time AS CREATE_TIME," +
-			"if(relkind = 'v', NULL, created_time) AS UPDATE_TIME," +
-			"if(relkind = 'v', NULL, created_time) AS CHECK_TIME," +
-			"'utf8mb4_0900_ai_ci' AS TABLE_COLLATION," +
-			"if(relkind = 'v', NULL, 0) AS CHECKSUM," +
-			"if(relkind = 'v', NULL, if(partitioned = 0, '', cast('partitioned' as varchar(256)))) AS CREATE_OPTIONS," +
-			"cast(rel_comment as text) AS TABLE_COMMENT " +
-			"FROM mo_catalog.mo_tables;",
+		fmt.Sprintf("CREATE VIEW IF NOT EXISTS TABLES AS "+
+			"SELECT 'def' AS TABLE_CATALOG,"+
+			"reldatabase AS TABLE_SCHEMA,"+
+			"relname AS TABLE_NAME,"+
+			"(case when relkind = 'v' and (reldatabase='mo_catalog' or reldatabase='information_schema') then 'SYSTEM VIEW' "+
+			"when relkind = 'v'  then 'VIEW' "+
+			"when relkind = 'e' then 'EXTERNAL TABLE' "+
+			"when relkind = 'r' then 'BASE TABLE' "+
+			"else 'INTERNAL TABLE' end) AS TABLE_TYPE,"+
+			"if(relkind = 'r','Tae',NULL) AS ENGINE,"+
+			"if(relkind = 'v',NULL,10) AS VERSION,"+
+			"'Compressed' AS ROW_FORMAT,"+
+			"if(relkind = 'v', NULL, 0) AS TABLE_ROWS,"+
+			"if(relkind = 'v', NULL, 0) AS AVG_ROW_LENGTH,"+
+			"if(relkind = 'v', NULL, 0) AS DATA_LENGTH,"+
+			"if(relkind = 'v', NULL, 0) AS MAX_DATA_LENGTH,"+
+			"if(relkind = 'v', NULL, 0) AS INDEX_LENGTH,"+
+			"if(relkind = 'v', NULL, 0) AS DATA_FREE,"+
+			"if(relkind = 'v', NULL, internal_auto_increment(reldatabase, relname)) AS `AUTO_INCREMENT`,"+
+			"created_time AS CREATE_TIME,"+
+			"if(relkind = 'v', NULL, created_time) AS UPDATE_TIME,"+
+			"if(relkind = 'v', NULL, created_time) AS CHECK_TIME,"+
+			"'utf8mb4_0900_ai_ci' AS TABLE_COLLATION,"+
+			"if(relkind = 'v', NULL, 0) AS CHECKSUM,"+
+			"if(relkind = 'v', NULL, if(partitioned = 0, '', cast('partitioned' as varchar(256)))) AS CREATE_OPTIONS,"+
+			"cast(rel_comment as text) AS TABLE_COMMENT "+
+			"FROM mo_catalog.mo_tables tbl "+
+			"WHERE tbl.relname not like '%s' and tbl.relkind != '%s';", catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel),
 
-		//"CREATE VIEW IF NOT EXISTS TABLES AS " +
-		//	"SELECT 'def' AS TABLE_CATALOG," +
-		//	"reldatabase AS TABLE_SCHEMA," +
-		//	"relname AS TABLE_NAME," +
-		//	"(case when relkind = 'v' and (reldatabase='mo_catalog' or reldatabase='information_schema') then 'SYSTEM VIEW' " +
-		//	"when relkind = 'v'  then 'VIEW' " +
-		//	"when relkind = 'e' then 'EXTERNAL TABLE' " +
-		//	"when relkind = 'r' then 'BASE TABLE' " +
-		//	"else 'UNKNOWN TABLE TYPE' end) AS TABLE_TYPE," +
-		//	"'' AS ENGINE," +
-		//	"0 AS VERSION," +
-		//	"'' AS ROW_FORMAT," +
-		//	"0 AS TABLE_ROWS," +
-		//	"0 AS AVG_ROW_LENGTH," +
-		//	"0 AS DATA_LENGTH," +
-		//	"0 AS MAX_DATA_LENGTH," +
-		//	"0 AS INDEX_LENGTH," +
-		//	"0 AS DATA_FREE," +
-		//	"0 AS `AUTO_INCREMENT`," +
-		//	"created_time AS CREATE_TIME," +
-		//	"created_time AS UPDATE_TIME," +
-		//	"created_time AS CHECK_TIME," +
-		//	"'' AS TABLE_COLLATION," +
-		//	"0 AS CHECKSUM," +
-		//	"'' AS CREATE_OPTIONS," +
-		//	"rel_comment AS TABLE_COMMENT " +
-		//	"FROM mo_catalog.mo_tables;",
+		"CREATE VIEW IF NOT EXISTS `PARTITIONS` AS " +
+			"SELECT " +
+			"'def' AS `TABLE_CATALOG`," +
+			"`tbl`.`reldatabase` AS `TABLE_SCHEMA`," +
+			"`tbl`.`relname` AS `TABLE_NAME`," +
+			"`part`.`name` AS `PARTITION_NAME`," +
+			"NULL AS `SUBPARTITION_NAME`," +
+			"`part`.`number` AS `PARTITION_ORDINAL_POSITION`," +
+			"NULL AS `SUBPARTITION_ORDINAL_POSITION`," +
+			"(case `part`.`partition_type` when 'HASH' then 'HASH' " +
+			"when 'RANGE' then 'RANGE' " +
+			"when 'LIST' then 'LIST' " +
+			"when 'AUTO' then 'AUTO' " +
+			"when 'KEY_51' then 'KEY' " +
+			"when 'KEY_55' then 'KEY' " +
+			"when 'LINEAR_KEY_51' then 'LINEAR KEY' " +
+			"when 'LINEAR_KEY_55' then 'LINEAR KEY' " +
+			"when 'LINEAR_HASH' then 'LINEAR HASH' " +
+			"when 'RANGE_COLUMNS' then 'RANGE COLUMNS' " +
+			"when 'LIST_COLUMNS' then 'LIST COLUMNS' else NULL end) AS `PARTITION_METHOD`," +
+			"NULL AS `SUBPARTITION_METHOD`," +
+			"`part`.`partition_expression` AS `PARTITION_EXPRESSION`," +
+			"NULL AS `SUBPARTITION_EXPRESSION`," +
+			"`part`.`description_utf8` AS `PARTITION_DESCRIPTION`," +
+			"mo_table_rows(`tbl`.`reldatabase`, `part`.`partition_table_name`) AS `TABLE_ROWS`," +
+			"0 AS `AVG_ROW_LENGTH`," +
+			"mo_table_size(`tbl`.`reldatabase`, `part`.`partition_table_name`) AS `DATA_LENGTH`," +
+			"0 AS `MAX_DATA_LENGTH`," +
+			"0 AS `INDEX_LENGTH`," +
+			"0 AS `DATA_FREE`," +
+			"`tbl`.`created_time` AS `CREATE_TIME`," +
+			"NULL AS `UPDATE_TIME`," +
+			"NULL AS `CHECK_TIME`," +
+			"NULL AS `CHECKSUM`," +
+			"ifnull(`part`.`comment`,'')  AS `PARTITION_COMMENT`," +
+			"'default' AS `NODEGROUP`," +
+			"NULL AS `TABLESPACE_NAME` " +
+			"FROM `mo_catalog`.`mo_tables` `tbl` LEFT JOIN `mo_catalog`.`mo_table_partitions` `part` " +
+			"ON `part`.`table_id` = `tbl`.`rel_id` " +
+			"WHERE `tbl`.`partitioned` = 1;",
 
 		"CREATE VIEW IF NOT EXISTS VIEWS AS " +
 			"SELECT 'def' AS `TABLE_CATALOG`," +
@@ -365,6 +337,29 @@ var (
 			"'utf8mb4_0900_ai_ci' AS `COLLATION_CONNECTION` " +
 			"FROM mo_catalog.mo_tables tbl LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id " +
 			"WHERE tbl.relkind = 'v' and tbl.reldatabase != 'information_schema'",
+
+		"CREATE VIEW IF NOT EXISTS `STATISTICS` AS " +
+			"select 'def' AS `TABLE_CATALOG`," +
+			"`tbl`.`reldatabase` AS `TABLE_SCHEMA`," +
+			"`tbl`.`relname` AS `TABLE_NAME`," +
+			"if(((`idx`.`type` = 'PRIMARY') or (`idx`.`type` = 'UNIQUE')),0,1) AS `NON_UNIQUE`," +
+			"`tbl`.`reldatabase` AS `INDEX_SCHEMA`," +
+			"`idx`.`name` AS `INDEX_NAME`," +
+			"`idx`.`ordinal_position` AS `SEQ_IN_INDEX`," +
+			"`idx`.`column_name` AS `COLUMN_NAME`," +
+			"'A' AS `COLLATION`," +
+			"0 AS `CARDINALITY`," +
+			"NULL AS `SUB_PART`," +
+			"NULL AS `PACKED`," +
+			"if((`tcl`.`attnotnull` = 0),'YES','') AS `NULLABLE`," +
+			"NULL AS `INDEX_TYPE`," +
+			"if(((`idx`.`type` = 'PRIMARY') or (`idx`.`type` = 'UNIQUE')),'','') AS `COMMENT`," +
+			"`idx`.`comment` AS `INDEX_COMMENT`," +
+			"if(`idx`.`is_visible`,'YES','NO') AS `IS_VISIBLE`," +
+			"NULL AS `EXPRESSION`" +
+			"from (`mo_catalog`.`mo_indexes` `idx` " +
+			"join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`))" +
+			"join `mo_catalog`.`mo_columns` `tcl` on (`idx`.`table_id` = `tcl`.`att_relname_id` and `idx`.`column_name` = `tcl`.`attname`)",
 
 		"CREATE TABLE IF NOT EXISTS ENGINES (" +
 			"ENGINE varchar(64)," +
@@ -434,12 +429,12 @@ var (
 )
 
 func InitSchema(ctx context.Context, ieFactory func() ie.InternalExecutor) error {
-	initMysqlTables(ctx, ieFactory, motrace.FileService)
-	initInformationSchemaTables(ctx, ieFactory, motrace.FileService)
+	initMysqlTables(ctx, ieFactory)
+	initInformationSchemaTables(ctx, ieFactory)
 	return nil
 }
 
-func initMysqlTables(ctx context.Context, ieFactory func() ie.InternalExecutor, batchProcessMode string) {
+func initMysqlTables(ctx context.Context, ieFactory func() ie.InternalExecutor) {
 	exec := ieFactory()
 	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(MysqlDBConst).Internal(true).Finish())
 	mustExec := func(sql string) {
@@ -461,7 +456,7 @@ func initMysqlTables(ctx context.Context, ieFactory func() ie.InternalExecutor, 
 	createCost = time.Since(instant)
 }
 
-func initInformationSchemaTables(ctx context.Context, ieFactory func() ie.InternalExecutor, batchProcessMode string) {
+func initInformationSchemaTables(ctx context.Context, ieFactory func() ie.InternalExecutor) {
 	exec := ieFactory()
 	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(InformationDBConst).Internal(true).Finish())
 	mustExec := func(sql string) {

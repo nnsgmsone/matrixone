@@ -15,6 +15,9 @@
 package logservice
 
 import (
+	"fmt"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"strconv"
 	"strings"
 	"time"
@@ -22,19 +25,21 @@ import (
 	"github.com/google/uuid"
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/vfs"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
 const (
+	defaultDeploymentID      = 1
 	defaultDataDir           = "mo-data/logservice"
 	defaultSnapshotExportDir = "exported-snapshot"
-	defaultServiceAddress    = "0.0.0.0:32000"
-	defaultRaftAddress       = "0.0.0.0:32001"
+	defaultRaftAddress       = "0.0.0.0:32000"
+	defaultServiceAddress    = "0.0.0.0:32001"
 	defaultGossipAddress     = "0.0.0.0:32002"
 	defaultGossipSeedAddress = "127.0.0.1:32002"
+	defaultRaftPort          = 32000
+	defaultGossipPort        = 32002
 
 	defaultGossipProbeInterval = 5 * time.Second
 	defaultHeartbeatInterval   = time.Second
@@ -42,6 +47,17 @@ const (
 	defaultTruncateInterval    = 10 * time.Second
 	defaultMaxExportedSnapshot = 20
 	defaultMaxMessageSize      = 1024 * 1024 * 100
+	// The default value for HAKeeper truncate interval.
+	defaultHAKeeperTruncateInterval = 24 * time.Hour
+
+	DefaultListenHost     = "0.0.0.0"
+	DefaultServiceHost    = "127.0.0.1"
+	DefaultLogServicePort = 32001
+)
+
+var (
+	DefaultLogServiceServiceAddress = fmt.Sprintf("%s:%d", DefaultServiceHost, DefaultLogServicePort)
+	DefaultGossipServiceAddress     = fmt.Sprintf("%s:%d", DefaultServiceHost, defaultGossipPort)
 )
 
 // Config defines the Configurations supported by the Log Service.
@@ -53,13 +69,13 @@ type Config struct {
 	// will not be able to communicate via raft.
 	DeploymentID uint64 `toml:"deployment-id"`
 	// UUID is the UUID of the log service node. UUID value must be set.
-	UUID string `toml:"uuid"`
+	UUID string `toml:"uuid" user_setting:"basic"`
 	// RTTMillisecond is the average round trip time between log service nodes in
 	// milliseconds.
 	RTTMillisecond uint64 `toml:"rttmillisecond"`
 	// DataDir is the name of the directory for storing all log service data. It
 	// should a locally mounted partition with good write and fsync performance.
-	DataDir string `toml:"data-dir"`
+	DataDir string `toml:"data-dir" user_setting:"basic"`
 	// SnapshotExportDir is the directory where the dragonboat snapshots are
 	// exported.
 	SnapshotExportDir string `toml:"snapshot-export-dir"`
@@ -67,16 +83,27 @@ type Config struct {
 	// already MaxExportedSnapshot exported snapshots, no exported snapshot will
 	// be generated.
 	MaxExportedSnapshot int `toml:"max-exported-snapshot"`
+	// ServiceHost is the host name/IP for the service address of RPC request. There is
+	// no port value in it.
+	ServiceHost string `toml:"service-host"`
 	// ServiceAddress is log service's service address that can be reached by
-	// other nodes such as DN nodes.
-	ServiceAddress string `toml:"logservice-address"`
+	// other nodes such as TN nodes. It is deprecated and will be removed.
+	ServiceAddress string `toml:"logservice-address" user_setting:"advanced"`
 	// ServiceListenAddress is the local listen address of the ServiceAddress.
+	// It is deprecated and will be removed.
 	ServiceListenAddress string `toml:"logservice-listen-address"`
+	// ServicePort is log service's service address port that can be reached by
+	// other nodes such as TN nodes.
+	LogServicePort int `toml:"logservice-port"`
 	// RaftAddress is the address that can be reached by other log service nodes
-	// via their raft layer.
-	RaftAddress string `toml:"raft-address"`
+	// via their raft layer. It is deprecated and will be removed.
+	RaftAddress string `toml:"raft-address" user_setting:"advanced"`
 	// RaftListenAddress is the local listen address of the RaftAddress.
+	// It is deprecated and will be removed.
 	RaftListenAddress string `toml:"raft-listen-address"`
+	// RaftPort is the address port that can be reached by other log service nodes
+	// via their raft layer.
+	RaftPort int `toml:"raft-port"`
 	// UseTeeLogDB enables the log service to use tee based LogDB which is backed
 	// by both a pebble and a tan based LogDB. This field should only be set to
 	// true during testing.
@@ -84,15 +111,19 @@ type Config struct {
 	// LogDBBufferSize is the size of the logdb buffer in bytes.
 	LogDBBufferSize uint64 `toml:"logdb-buffer-size"`
 	// GossipAddress is the address used for accepting gossip communication.
-	GossipAddress string `toml:"gossip-address"`
+	// It is deprecated and will be removed.
+	GossipAddress string `toml:"gossip-address" user_setting:"advanced"`
 	// GossipAddressV2 is the address used for accepting gossip communication.
-	// This is for domain name support.
+	// This is for domain name support. It is deprecated and will be removed.
 	GossipAddressV2 string `toml:"gossip-address-v2"`
 	// GossipListenAddress is the local listen address of the GossipAddress
+	// It is deprecated and will be removed.
 	GossipListenAddress string `toml:"gossip-listen-address"`
+	// GossipPort is the port address port used for accepting gossip communication.
+	GossipPort int `toml:"gossip-port"`
 	// GossipSeedAddresses is list of seed addresses that are used for
 	// introducing the local node into the gossip network.
-	GossipSeedAddresses []string `toml:"gossip-seed-addresses"`
+	GossipSeedAddresses []string `toml:"gossip-seed-addresses" user_setting:"advanced"`
 	// GossipProbeInterval how often gossip nodes probe each other.
 	GossipProbeInterval toml.Duration `toml:"gossip-probe-interval"`
 	// GossipAllowSelfAsSeed allow use self as gossip seed
@@ -107,8 +138,11 @@ type Config struct {
 	// cluster health checks.
 	HAKeeperCheckInterval toml.Duration `toml:"hakeeper-check-interval"`
 	// TruncateInterval is the interval of how often log service should
-	// process truncate.
+	// process truncate for regular shards.
 	TruncateInterval toml.Duration `toml:"truncate-interval"`
+	// HAKeeperTruncateInterval is the interval of how often log service should
+	// process truncate for HAKeeper shard.
+	HAKeeperTruncateInterval toml.Duration `toml:"hakeeper-truncate-interval"`
 
 	RPC struct {
 		// MaxMessageSize is the max size for RPC message. The default value is 10MiB.
@@ -127,9 +161,9 @@ type Config struct {
 		BootstrapCluster bool `toml:"bootstrap-cluster"`
 		// NumOfLogShards defines the number of Log shards in the initial deployment.
 		NumOfLogShards uint64 `toml:"num-of-log-shards"`
-		// NumOfDNShards defines the number of DN shards in the initial deployment.
+		// NumOfTNShards defines the number of TN shards in the initial deployment.
 		// The count must be the same as NumOfLogShards in the current implementation.
-		NumOfDNShards uint64 `toml:"num-of-dn-shards"`
+		NumOfTNShards uint64 `toml:"num-of-tn-shards"`
 		// NumOfLogShardReplicas is the number of replicas for each shard managed by
 		// Log Stores, including Log Service shards and the HAKeeper.
 		NumOfLogShardReplicas uint64 `toml:"num-of-log-shard-replicas"`
@@ -150,7 +184,13 @@ type Config struct {
 		// is when Config.UUID is found in InitHAKeeperMembers, then the corresponding
 		// replica ID value will be used to launch a HAKeeper replica on the Log
 		// Service instance.
-		InitHAKeeperMembers []string `toml:"init-hakeeper-members"`
+		InitHAKeeperMembers []string `toml:"init-hakeeper-members" user_setting:"advanced"`
+		// Restore structure is used when the cluster needs to restore data.
+		Restore struct {
+			// FilePath is the path of the file, which contains the backup data.
+			// If is not set, nothing will be done for restore.
+			FilePath string `toml:"file-path"`
+		} `toml:"restore"`
 	}
 
 	HAKeeperConfig struct {
@@ -162,13 +202,13 @@ type Config struct {
 		// If HAKeeper does not receive two heartbeat within LogStoreTimeout,
 		// it regards the log store as down.
 		LogStoreTimeout toml.Duration `toml:"log-store-timeout"`
-		// DNStoreTimeout is the actual time limit between a dn store's heartbeat.
-		// If HAKeeper does not receive two heartbeat within DNStoreTimeout,
-		// it regards the dn store as down.
-		DNStoreTimeout toml.Duration `toml:"dn-store-timeout"`
+		// TNStoreTimeout is the actual time limit between a tn store's heartbeat.
+		// If HAKeeper does not receive two heartbeat within TNStoreTimeout,
+		// it regards the tn store as down.
+		TNStoreTimeout toml.Duration `toml:"tn-store-timeout"`
 		// CNStoreTimeout is the actual time limit between a cn store's heartbeat.
 		// If HAKeeper does not receive two heartbeat within CNStoreTimeout,
-		// it regards the dn store as down.
+		// it regards the tn store as down.
 		CNStoreTimeout toml.Duration `toml:"cn-store-timeout"`
 	}
 
@@ -192,7 +232,7 @@ func (c *Config) GetHAKeeperConfig() hakeeper.Config {
 	return hakeeper.Config{
 		TickPerSecond:   c.HAKeeperConfig.TickPerSecond,
 		LogStoreTimeout: c.HAKeeperConfig.LogStoreTimeout.Duration,
-		DNStoreTimeout:  c.HAKeeperConfig.DNStoreTimeout.Duration,
+		TNStoreTimeout:  c.HAKeeperConfig.TNStoreTimeout.Duration,
 		CNStoreTimeout:  c.HAKeeperConfig.CNStoreTimeout.Duration,
 	}
 }
@@ -260,17 +300,17 @@ func (c *Config) Validate() error {
 	}
 	// when *ListenAddress is not empty and *Address is empty, consider it as an
 	// error
-	if len(c.ServiceAddress) == 0 && len(c.ServiceListenAddress) != 0 {
-		return moerr.NewBadConfigNoCtx("ServiceAddress not set")
+	if len(c.ServiceAddress) == 0 && len(c.ServiceListenAddress) != 0 && c.LogServicePort == 0 {
+		return moerr.NewBadConfigNoCtx("ServiceAddress and LogServicePort not set")
 	}
-	if len(c.RaftAddress) == 0 && len(c.RaftListenAddress) != 0 {
-		return moerr.NewBadConfigNoCtx("RaftAddress not set")
+	if len(c.RaftAddress) == 0 && len(c.RaftListenAddress) != 0 && c.RaftPort == 0 {
+		return moerr.NewBadConfigNoCtx("RaftAddress and RaftPort not set")
 	}
 	if c.LogDBBufferSize == 0 {
 		return moerr.NewBadConfigNoCtx("LogDBBufferSize not set")
 	}
-	if len(c.GossipAddress) == 0 && len(c.GossipListenAddress) != 0 {
-		return moerr.NewBadConfigNoCtx("GossipAddress not set")
+	if len(c.GossipAddress) == 0 && len(c.GossipListenAddress) != 0 && c.GossipPort == 0 {
+		return moerr.NewBadConfigNoCtx("GossipAddress and GossipPort not set")
 	}
 	if len(c.GossipSeedAddresses) == 0 {
 		return moerr.NewBadConfigNoCtx("GossipSeedAddress not set")
@@ -281,7 +321,7 @@ func (c *Config) Validate() error {
 	if c.HAKeeperConfig.LogStoreTimeout.Duration == 0 {
 		return moerr.NewBadConfigNoCtx("LogStoreTimeout not set")
 	}
-	if c.HAKeeperConfig.DNStoreTimeout.Duration == 0 {
+	if c.HAKeeperConfig.TNStoreTimeout.Duration == 0 {
 		return moerr.NewBadConfigNoCtx("DNStoreTimeout not set")
 	}
 	if c.GossipProbeInterval.Duration == 0 {
@@ -289,6 +329,9 @@ func (c *Config) Validate() error {
 	}
 	if c.TruncateInterval.Duration == 0 {
 		return moerr.NewBadConfigNoCtx("TruncateInterval not set")
+	}
+	if c.HAKeeperTruncateInterval.Duration == 0 {
+		return moerr.NewBadConfigNoCtx("HAKeeperTruncateInterval not set")
 	}
 	if c.RPC.MaxMessageSize == 0 {
 		return moerr.NewBadConfigNoCtx("MaxMessageSize not set")
@@ -298,13 +341,13 @@ func (c *Config) Validate() error {
 		if c.BootstrapConfig.NumOfLogShards == 0 {
 			return moerr.NewBadConfigNoCtx("NumOfLogShards not set")
 		}
-		if c.BootstrapConfig.NumOfDNShards == 0 {
+		if c.BootstrapConfig.NumOfTNShards == 0 {
 			return moerr.NewBadConfigNoCtx("NumOfDNShards not set")
 		}
 		if c.BootstrapConfig.NumOfLogShardReplicas == 0 {
 			return moerr.NewBadConfigNoCtx("NumOfLogShardReplica not set")
 		}
-		if c.BootstrapConfig.NumOfDNShards != c.BootstrapConfig.NumOfLogShards {
+		if c.BootstrapConfig.NumOfTNShards != c.BootstrapConfig.NumOfLogShards {
 			return moerr.NewBadConfigNoCtx("NumOfDNShards does not match NumOfLogShards")
 		}
 		members, err := c.GetInitHAKeeperMembers()
@@ -322,22 +365,103 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+func DefaultConfig() Config {
+	uid := "7c4dccb4-4d3c-41f8-b482-5251dc7a41bf"
+	return Config{
+		FS:                       vfs.Default,
+		DeploymentID:             defaultDeploymentID,
+		UUID:                     uid,
+		RTTMillisecond:           200,
+		DataDir:                  defaultDataDir,
+		SnapshotExportDir:        defaultSnapshotExportDir,
+		MaxExportedSnapshot:      defaultMaxExportedSnapshot,
+		ServiceAddress:           defaultServiceAddress,
+		RaftAddress:              defaultRaftAddress,
+		ServiceHost:              DefaultServiceHost,
+		UseTeeLogDB:              false,
+		LogDBBufferSize:          defaultLogDBBufferSize,
+		GossipAddress:            defaultGossipAddress,
+		GossipSeedAddresses:      []string{DefaultGossipServiceAddress},
+		GossipProbeInterval:      toml.Duration{Duration: defaultGossipProbeInterval},
+		GossipAllowSelfAsSeed:    true,
+		HeartbeatInterval:        toml.Duration{Duration: defaultHeartbeatInterval},
+		HAKeeperTickInterval:     toml.Duration{Duration: time.Second / hakeeper.DefaultTickPerSecond},
+		HAKeeperCheckInterval:    toml.Duration{Duration: hakeeper.CheckDuration},
+		TruncateInterval:         toml.Duration{Duration: defaultTruncateInterval},
+		HAKeeperTruncateInterval: toml.Duration{Duration: defaultHAKeeperTruncateInterval},
+		RPC: struct {
+			MaxMessageSize toml.ByteSize `toml:"max-message-size"`
+			EnableCompress bool          `toml:"enable-compress"`
+		}(struct {
+			MaxMessageSize toml.ByteSize
+			EnableCompress bool
+		}{
+			MaxMessageSize: toml.ByteSize(defaultMaxMessageSize),
+			EnableCompress: false,
+		}),
+		BootstrapConfig: struct {
+			BootstrapCluster      bool     `toml:"bootstrap-cluster"`
+			NumOfLogShards        uint64   `toml:"num-of-log-shards"`
+			NumOfTNShards         uint64   `toml:"num-of-tn-shards"`
+			NumOfLogShardReplicas uint64   `toml:"num-of-log-shard-replicas"`
+			InitHAKeeperMembers   []string `toml:"init-hakeeper-members" user_setting:"advanced"`
+			Restore               struct {
+				FilePath string `toml:"file-path"`
+			} `toml:"restore"`
+		}(struct {
+			BootstrapCluster      bool
+			NumOfLogShards        uint64
+			NumOfTNShards         uint64
+			NumOfLogShardReplicas uint64
+			InitHAKeeperMembers   []string
+			Restore               struct {
+				FilePath string
+			}
+		}{
+			BootstrapCluster:      true,
+			NumOfLogShards:        1,
+			NumOfTNShards:         1,
+			NumOfLogShardReplicas: 1,
+			InitHAKeeperMembers:   []string{"131072:" + uid},
+			Restore:               struct{ FilePath string }{FilePath: ""},
+		}),
+		HAKeeperConfig: struct {
+			TickPerSecond   int           `toml:"tick-per-second"`
+			LogStoreTimeout toml.Duration `toml:"log-store-timeout"`
+			TNStoreTimeout  toml.Duration `toml:"tn-store-timeout"`
+			CNStoreTimeout  toml.Duration `toml:"cn-store-timeout"`
+		}(struct {
+			TickPerSecond   int
+			LogStoreTimeout toml.Duration
+			TNStoreTimeout  toml.Duration
+			CNStoreTimeout  toml.Duration
+		}{
+			TickPerSecond:   hakeeper.DefaultTickPerSecond,
+			LogStoreTimeout: toml.Duration{Duration: hakeeper.DefaultLogStoreTimeout},
+			TNStoreTimeout:  toml.Duration{Duration: hakeeper.DefaultTNStoreTimeout},
+			CNStoreTimeout:  toml.Duration{Duration: hakeeper.DefaultCNStoreTimeout},
+		}),
+		HAKeeperClientConfig: HAKeeperClientConfig{
+			DiscoveryAddress: "",
+			ServiceAddresses: []string{DefaultLogServiceServiceAddress},
+			AllocateIDBatch:  100,
+			EnableCompress:   false,
+		},
+		DisableWorkers: false,
+		// Not used for now.
+		Ctl: struct {
+			ListenAddress  string `toml:"listen-address"`
+			ServiceAddress string `toml:"service-address"`
+		}(struct {
+			ListenAddress  string
+			ServiceAddress string
+		}{ListenAddress: "", ServiceAddress: ""}),
+	}
+}
+
+// Fill just fills the listen addresses. This function is deprecated and will be removed
+// as the configurations are all deprecated.
 func (c *Config) Fill() {
-	if c.FS == nil {
-		c.FS = vfs.Default
-	}
-	if c.RTTMillisecond == 0 {
-		c.RTTMillisecond = 200
-	}
-	if len(c.DataDir) == 0 {
-		c.DataDir = defaultDataDir
-	}
-	if len(c.SnapshotExportDir) == 0 {
-		c.SnapshotExportDir = defaultSnapshotExportDir
-	}
-	if c.MaxExportedSnapshot == 0 {
-		c.MaxExportedSnapshot = defaultMaxExportedSnapshot
-	}
 	if len(c.ServiceAddress) == 0 {
 		c.ServiceAddress = defaultServiceAddress
 		c.ServiceListenAddress = defaultServiceAddress
@@ -350,9 +474,6 @@ func (c *Config) Fill() {
 	} else if len(c.RaftAddress) != 0 && len(c.RaftListenAddress) == 0 {
 		c.RaftListenAddress = c.RaftAddress
 	}
-	if c.LogDBBufferSize == 0 {
-		c.LogDBBufferSize = defaultLogDBBufferSize
-	}
 	// If GossipAddressV2 is set, we use it as gossip address, and GossipAddress
 	// will be overridden by it.
 	if len(c.GossipAddressV2) != 0 {
@@ -364,35 +485,8 @@ func (c *Config) Fill() {
 	} else if len(c.GossipAddress) != 0 && len(c.GossipListenAddress) == 0 {
 		c.GossipListenAddress = c.GossipAddress
 	}
-	if c.HAKeeperConfig.TickPerSecond == 0 {
-		c.HAKeeperConfig.TickPerSecond = hakeeper.DefaultTickPerSecond
-	}
-	if c.HAKeeperConfig.LogStoreTimeout.Duration == 0 {
-		c.HAKeeperConfig.LogStoreTimeout.Duration = hakeeper.DefaultLogStoreTimeout
-	}
-	if c.HAKeeperConfig.DNStoreTimeout.Duration == 0 {
-		c.HAKeeperConfig.DNStoreTimeout.Duration = hakeeper.DefaultDNStoreTimeout
-	}
-	if c.HAKeeperConfig.CNStoreTimeout.Duration == 0 {
-		c.HAKeeperConfig.CNStoreTimeout.Duration = hakeeper.DefaultCNStoreTimeout
-	}
-	if c.HeartbeatInterval.Duration == 0 {
-		c.HeartbeatInterval.Duration = defaultHeartbeatInterval
-	}
-	if c.HAKeeperTickInterval.Duration == 0 {
-		c.HAKeeperTickInterval.Duration = time.Second / time.Duration(c.HAKeeperConfig.TickPerSecond)
-	}
-	if c.HAKeeperCheckInterval.Duration == 0 {
-		c.HAKeeperCheckInterval.Duration = hakeeper.CheckDuration
-	}
-	if c.GossipProbeInterval.Duration == 0 {
-		c.GossipProbeInterval.Duration = defaultGossipProbeInterval
-	}
-	if c.TruncateInterval.Duration == 0 {
-		c.TruncateInterval.Duration = defaultTruncateInterval
-	}
-	if c.RPC.MaxMessageSize == 0 {
-		c.RPC.MaxMessageSize = toml.ByteSize(defaultMaxMessageSize)
+	if len(c.GossipSeedAddresses) == 0 {
+		c.GossipSeedAddresses = []string{defaultGossipSeedAddress}
 	}
 }
 
@@ -412,7 +506,7 @@ type HAKeeperClientConfig struct {
 // Validate validates the HAKeeperClientConfig.
 func (c *HAKeeperClientConfig) Validate() error {
 	if len(c.DiscoveryAddress) == 0 && len(c.ServiceAddresses) == 0 {
-		return moerr.NewBadConfigNoCtx("HAKeeperClientConfig not set")
+		c.ServiceAddresses = []string{DefaultLogServiceServiceAddress}
 	}
 	if c.AllocateIDBatch == 0 {
 		c.AllocateIDBatch = 100
@@ -428,8 +522,8 @@ type ClientConfig struct {
 	ReadOnly bool
 	// LogShardID is the shard ID of the log service shard to be used.
 	LogShardID uint64
-	// DNReplicaID is the replica ID of the DN that owns the created client.
-	DNReplicaID uint64
+	// TNReplicaID is the replica ID of the TN that owns the created client.
+	TNReplicaID uint64
 	// DiscoveryAddress is the Log Service discovery address provided by k8s.
 	DiscoveryAddress string
 	// LogService nodes service addresses. This field is provided for testing
@@ -446,11 +540,11 @@ func (c *ClientConfig) Validate() error {
 	if c.LogShardID == 0 {
 		return moerr.NewBadConfigNoCtx("LogShardID value cannot be 0")
 	}
-	if c.DNReplicaID == 0 {
+	if c.TNReplicaID == 0 {
 		return moerr.NewBadConfigNoCtx("DNReplicaID value cannot be 0")
 	}
 	if len(c.DiscoveryAddress) == 0 && len(c.ServiceAddresses) == 0 {
-		return moerr.NewBadConfigNoCtx("ServiceAddresses not set")
+		c.ServiceAddresses = []string{DefaultLogServiceServiceAddress}
 	}
 	return nil
 }
@@ -465,4 +559,51 @@ func splitAddresses(v string) []string {
 		}
 	}
 	return results
+}
+
+func (c *Config) LogServiceListenAddr() string {
+	if c.LogServicePort != 0 {
+		return fmt.Sprintf("%s:%d", DefaultListenHost, c.LogServicePort)
+	}
+	return c.ServiceListenAddress
+}
+
+func (c *Config) LogServiceServiceAddr() string {
+	if c.LogServicePort != 0 {
+		return fmt.Sprintf("%s:%d", c.ServiceHost, c.LogServicePort)
+	}
+	return c.ServiceAddress
+}
+
+func (c *Config) RaftListenAddr() string {
+	if c.RaftPort != 0 {
+		return fmt.Sprintf("%s:%d", DefaultListenHost, c.RaftPort)
+	}
+	return c.RaftListenAddress
+}
+
+func (c *Config) RaftServiceAddr() string {
+	if c.RaftPort != 0 {
+		return fmt.Sprintf("%s:%d", c.ServiceHost, c.RaftPort)
+	}
+	return c.RaftAddress
+}
+
+func (c *Config) GossipListenAddr() string {
+	if c.GossipPort != 0 {
+		return fmt.Sprintf("%s:%d", DefaultListenHost, c.GossipPort)
+	}
+	return c.GossipListenAddress
+}
+
+func (c *Config) GossipServiceAddr() string {
+	if c.GossipPort != 0 {
+		return fmt.Sprintf("%s:%d", c.ServiceHost, c.GossipPort)
+	}
+	return c.GossipAddress
+}
+
+func dumpLogConfig(cfg Config) (map[string]*logservicepb.ConfigItem, error) {
+	defCfg := Config{}
+	return util.DumpConfig(cfg, defCfg)
 }

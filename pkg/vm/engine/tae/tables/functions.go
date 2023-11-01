@@ -15,8 +15,8 @@
 package tables
 
 import (
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -42,6 +42,7 @@ var dedupNABlkFunctions = map[types.T]any{
 	types.T_date:       dedupNABlkOrderedFunc[types.Date],
 	types.T_time:       dedupNABlkOrderedFunc[types.Time],
 	types.T_datetime:   dedupNABlkOrderedFunc[types.Datetime],
+	types.T_enum:       dedupNABlkOrderedFunc[types.Enum],
 	types.T_decimal64:  dedupNABlkFuncFactory(types.CompareDecimal64),
 	types.T_decimal128: dedupNABlkFuncFactory(types.CompareDecimal128),
 	types.T_decimal256: dedupNABlkFuncFactory(types.CompareDecimal256),
@@ -57,6 +58,9 @@ var dedupNABlkFunctions = map[types.T]any{
 	types.T_varbinary: dedupNABlkBytesFunc,
 	types.T_json:      dedupNABlkBytesFunc,
 	types.T_text:      dedupNABlkBytesFunc,
+
+	types.T_array_float32: dedupNABlkBytesFunc,
+	types.T_array_float64: dedupNABlkBytesFunc,
 }
 
 var dedupAlkFunctions = map[types.T]any{
@@ -75,6 +79,7 @@ var dedupAlkFunctions = map[types.T]any{
 	types.T_date:       dedupABlkFuncFactory(compute.CompareOrdered[types.Date]),
 	types.T_time:       dedupABlkFuncFactory(compute.CompareOrdered[types.Time]),
 	types.T_datetime:   dedupABlkFuncFactory(compute.CompareOrdered[types.Datetime]),
+	types.T_enum:       dedupABlkFuncFactory(compute.CompareOrdered[types.Enum]),
 	types.T_decimal64:  dedupABlkFuncFactory(types.CompareDecimal64),
 	types.T_decimal128: dedupABlkFuncFactory(types.CompareDecimal128),
 	types.T_decimal256: dedupABlkFuncFactory(types.CompareDecimal256),
@@ -90,12 +95,15 @@ var dedupAlkFunctions = map[types.T]any{
 	types.T_varbinary: dedupABlkBytesFunc,
 	types.T_json:      dedupABlkBytesFunc,
 	types.T_text:      dedupABlkBytesFunc,
+
+	types.T_array_float32: dedupABlkBytesFunc,
+	types.T_array_float64: dedupABlkBytesFunc,
 }
 
-func parseNADedeupArgs(args ...any) (vec *vector.Vector, mask *roaring.Bitmap, def *catalog.ColDef) {
+func parseNADedeupArgs(args ...any) (vec *vector.Vector, mask *nulls.Bitmap, def *catalog.ColDef) {
 	vec = args[0].(containers.Vector).GetDownstreamVector()
 	if args[1] != nil {
-		mask = args[1].(*roaring.Bitmap)
+		mask = args[1].(*nulls.Bitmap)
 	}
 	if args[2] != nil {
 		def = args[2].(*catalog.ColDef)
@@ -104,10 +112,13 @@ func parseNADedeupArgs(args ...any) (vec *vector.Vector, mask *roaring.Bitmap, d
 }
 
 func parseADedeupArgs(args ...any) (
-	vec containers.Vector, mask *roaring.Bitmap, def *catalog.ColDef, scan func() (containers.Vector, error), txn txnif.TxnReader) {
+	vec containers.Vector, mask *nulls.Bitmap, def *catalog.ColDef,
+	scan func() (containers.Vector, error),
+	txn txnif.TxnReader,
+) {
 	vec = args[0].(containers.Vector)
 	if args[1] != nil {
-		mask = args[1].(*roaring.Bitmap)
+		mask = args[1].(*nulls.Bitmap)
 	}
 	if args[2] != nil {
 		def = args[2].(*catalog.ColDef)
@@ -121,7 +132,7 @@ func parseADedeupArgs(args ...any) (
 	return
 }
 
-func dedupNABlkFuncFactory[T any](comp func(T, T) int64) func(args ...any) func(T, bool, int) error {
+func dedupNABlkFuncFactory[T any](comp func(T, T) int) func(args ...any) func(T, bool, int) error {
 	return func(args ...any) func(T, bool, int) error {
 		vec, mask, def := parseNADedeupArgs(args...)
 		vs := vector.MustFixedCol[T](vec)
@@ -185,12 +196,12 @@ func dedupABlkBytesFunc(args ...any) func([]byte, bool, int) error {
 			}
 		}()
 		return containers.ForeachWindowVarlen(
-			vec,
+			vec.GetDownstreamVector(),
 			0,
 			vec.Length(),
 			func(v2 []byte, _ bool, row int) (err error) {
 				// logutil.Infof("row=%d,v1=%v,v2=%v", row, v1, v2)
-				if mask != nil && mask.ContainsInt(row) {
+				if mask.Contains(uint64(row)) {
 					return
 				}
 				if compute.CompareBytes(v1, v2) != 0 {
@@ -211,7 +222,7 @@ func dedupABlkBytesFunc(args ...any) func([]byte, bool, int) error {
 	}
 }
 
-func dedupABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int64) func(args ...any) func(T, bool, int) error {
+func dedupABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) func(args ...any) func(T, bool, int) error {
 	return func(args ...any) func(T, bool, int) error {
 		vec, mask, def, scan, txn := parseADedeupArgs(args...)
 		return func(v1 T, _ bool, _ int) error {
@@ -223,11 +234,11 @@ func dedupABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int64) func(args .
 				}
 			}()
 			return containers.ForeachWindowFixed(
-				vec,
+				vec.GetDownstreamVector(),
 				0,
 				vec.Length(),
 				func(v2 T, _ bool, row int) (err error) {
-					if mask != nil && mask.ContainsInt(row) {
+					if mask.Contains(uint64(row)) {
 						return
 					}
 					if comp(v1, v2) != 0 {
@@ -252,7 +263,7 @@ func dedupABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int64) func(args .
 func dedupNABlkClosure(
 	vec containers.Vector,
 	txn txnif.TxnReader,
-	mask *roaring.Bitmap,
+	mask *nulls.Bitmap,
 	def *catalog.ColDef) func(any, bool, int) error {
 	return func(v any, _ bool, _ int) (err error) {
 		if _, existed := compute.GetOffsetByVal(vec, v, mask); existed {
@@ -268,10 +279,10 @@ func dedupABlkClosureFactory(
 ) func(
 	containers.Vector,
 	txnif.TxnReader,
-	*roaring.Bitmap,
+	*nulls.Bitmap,
 	*catalog.ColDef,
 ) func(any, bool, int) error {
-	return func(vec containers.Vector, txn txnif.TxnReader, mask *roaring.Bitmap, def *catalog.ColDef) func(any, bool, int) error {
+	return func(vec containers.Vector, txn txnif.TxnReader, mask *nulls.Bitmap, def *catalog.ColDef) func(any, bool, int) error {
 		return func(v1 any, _ bool, _ int) (err error) {
 			var tsVec containers.Vector
 			defer func() {
@@ -282,7 +293,7 @@ func dedupABlkClosureFactory(
 			}()
 			return vec.Foreach(func(v2 any, _ bool, row int) (err error) {
 				// logutil.Infof("%v, %v, %d", v1, v2, row)
-				if mask != nil && mask.ContainsInt(row) {
+				if mask.Contains(uint64(row)) {
 					return
 				}
 				if compute.CompareGeneric(v1, v2, vec.GetType().Oid) != 0 {

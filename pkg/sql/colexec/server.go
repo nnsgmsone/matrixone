@@ -35,8 +35,8 @@ func NewServer(client logservice.CNHAKeeperClient) *Server {
 	Srv = &Server{
 		mp:            make(map[uint64]*process.WaitRegister),
 		hakeeper:      client,
-		uuidCsChanMap: UuidProcMap{mp: make(map[uuid.UUID]*process.Process)},
-		cnSegmentMap:  CnSegmentMap{mp: make(map[objectio.Segmentid]int32)},
+		uuidCsChanMap: UuidProcMap{mp: make(map[uuid.UUID]uuidProcMapItem, 1024)},
+		cnSegmentMap:  CnSegmentMap{mp: make(map[objectio.Segmentid]int32, 1024)},
 	}
 	return Srv
 }
@@ -56,33 +56,68 @@ func (srv *Server) RegistConnector(reg *process.WaitRegister) uint64 {
 	return srv.id
 }
 
-func (srv *Server) GetNotifyChByUuid(u uuid.UUID) (*process.Process, bool) {
+// GetProcByUuid try to get process from map, and decrease referenceCount by 1 when get succeed.
+// if forcedDelete is true, it will do action to avoid other goroutine to put a new item into map when get failed.
+func (srv *Server) GetProcByUuid(u uuid.UUID, forcedDelete bool) (*process.Process, bool) {
 	srv.uuidCsChanMap.Lock()
 	defer srv.uuidCsChanMap.Unlock()
 	p, ok := srv.uuidCsChanMap.mp[u]
 	if !ok {
+		if forcedDelete {
+			srv.uuidCsChanMap.mp[u] = uuidProcMapItem{proc: nil, referenceCount: 1}
+		}
 		return nil, false
 	}
-	return p, true
+	p.referenceCount--
+	if p.referenceCount == 0 {
+		delete(srv.uuidCsChanMap.mp, u)
+		return nil, true
+	} else {
+		srv.uuidCsChanMap.mp[u] = p
+	}
+	return p.proc, true
 }
 
-func (srv *Server) PutNotifyChIntoUuidMap(u uuid.UUID, p *process.Process) error {
+func (srv *Server) PutProcIntoUuidMap(u uuid.UUID, p *process.Process) error {
 	srv.uuidCsChanMap.Lock()
 	defer srv.uuidCsChanMap.Unlock()
-	srv.uuidCsChanMap.mp[u] = p
+	if _, ok := srv.uuidCsChanMap.mp[u]; ok {
+		delete(srv.uuidCsChanMap.mp, u)
+		return nil
+	}
+
+	srv.uuidCsChanMap.mp[u] = uuidProcMapItem{proc: p, referenceCount: 2}
 	return nil
 }
 
-func (srv *Server) PutCnSegment(segmentName *objectio.Segmentid, segmentType int32) {
-	srv.cnSegmentMap.Lock()
-	defer srv.cnSegmentMap.Unlock()
-	srv.cnSegmentMap.mp[*segmentName] = segmentType
+func (srv *Server) DeleteUuids(uuids []uuid.UUID) {
+	srv.uuidCsChanMap.Lock()
+	defer srv.uuidCsChanMap.Unlock()
+	for i := range uuids {
+		uid, ok := srv.uuidCsChanMap.mp[uuids[i]]
+		if !ok {
+			continue
+		}
+
+		uid.referenceCount--
+		if uid.referenceCount == 0 {
+			delete(srv.uuidCsChanMap.mp, uuids[i])
+		} else {
+			srv.uuidCsChanMap.mp[uuids[i]] = uid
+		}
+	}
 }
 
-func (srv *Server) DeleteTxnSegmentIds(segmentNames []objectio.Segmentid) {
+func (srv *Server) PutCnSegment(sid *objectio.Segmentid, segmentType int32) {
 	srv.cnSegmentMap.Lock()
 	defer srv.cnSegmentMap.Unlock()
-	for _, segmentName := range segmentNames {
+	srv.cnSegmentMap.mp[*sid] = segmentType
+}
+
+func (srv *Server) DeleteTxnSegmentIds(sids []objectio.Segmentid) {
+	srv.cnSegmentMap.Lock()
+	defer srv.cnSegmentMap.Unlock()
+	for _, segmentName := range sids {
 		delete(srv.cnSegmentMap.mp, segmentName)
 	}
 }
@@ -97,14 +132,14 @@ func (srv *Server) GetCnSegmentMap() map[string]int32 {
 	return new_mp
 }
 
-func (srv *Server) GetCnSegmentType(segmentName *objectio.Segmentid) int32 {
+func (srv *Server) GetCnSegmentType(sid *objectio.Segmentid) int32 {
 	srv.cnSegmentMap.Lock()
 	defer srv.cnSegmentMap.Unlock()
-	return srv.cnSegmentMap.mp[*segmentName]
+	return srv.cnSegmentMap.mp[*sid]
 }
 
 // SegmentId is part of Id for cn2s3 directly, for more info, refer to docs about it
-func (srv *Server) GenerateSegment() objectio.ObjectName {
+func (srv *Server) GenerateObject() objectio.ObjectName {
 	srv.Lock()
 	defer srv.Unlock()
 	return objectio.BuildObjectName(objectio.NewSegmentid(), 0)

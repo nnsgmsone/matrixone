@@ -15,9 +15,11 @@
 package plan
 
 import (
+	"bytes"
 	"container/list"
 	"context"
 	"encoding/csv"
+	"fmt"
 	"math"
 	"path"
 	"strings"
@@ -117,6 +119,32 @@ func hasSubquery(expr *plan.Expr) bool {
 	}
 }
 
+func HasTag(expr *plan.Expr, tag int32) bool {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return exprImpl.Col.RelPos == tag
+
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			if HasTag(arg, tag) {
+				return true
+			}
+		}
+		return false
+
+	case *plan.Expr_List:
+		for _, arg := range exprImpl.List.List {
+			if HasTag(arg, tag) {
+				return true
+			}
+		}
+		return false
+
+	default:
+		return false
+	}
+}
+
 func decreaseDepthAndDispatch(preds []*plan.Expr) ([]*plan.Expr, []*plan.Expr) {
 	filterPreds := make([]*plan.Expr, 0, len(preds))
 	joinPreds := make([]*plan.Expr, 0, len(preds))
@@ -161,7 +189,7 @@ func decreaseDepth(expr *plan.Expr) (*plan.Expr, bool) {
 	return expr, correlated
 }
 
-func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]*Binding, markTag int32) (side int8) {
+func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]any, markTag int32) (side int8) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
@@ -239,12 +267,12 @@ func replaceColRefsForSet(expr *plan.Expr, projects []*plan.Expr) *plan.Expr {
 	return expr
 }
 
-func splitAndBindCondition(astExpr tree.Expr, ctx *BindContext) ([]*plan.Expr, error) {
+func splitAndBindCondition(astExpr tree.Expr, expandAlias ExpandAliasMode, ctx *BindContext) ([]*plan.Expr, error) {
 	conds := splitAstConjunction(astExpr)
 	exprs := make([]*plan.Expr, len(conds))
 
 	for i, cond := range conds {
-		cond, err := ctx.qualifyColumnNames(cond, nil, false)
+		cond, err := ctx.qualifyColumnNames(cond, expandAlias)
 		if err != nil {
 			return nil, err
 		}
@@ -599,9 +627,14 @@ func CheckFilter(expr *plan.Expr) (bool, *ColRef) {
 	case *plan.Expr_F:
 		switch exprImpl.F.Func.ObjName {
 		case "=", ">", "<", ">=", "<=":
-			switch exprImpl.F.Args[1].Expr.(type) {
-			case *plan.Expr_C, *plan.Expr_P:
+			switch e := exprImpl.F.Args[1].Expr.(type) {
+			case *plan.Expr_C, *plan.Expr_P, *plan.Expr_V:
 				return CheckFilter(exprImpl.F.Args[0])
+			case *plan.Expr_F:
+				if e.F.Func.ObjName == "cast" {
+					return CheckFilter(exprImpl.F.Args[0])
+				}
+				return false, nil
 			default:
 				return false, nil
 			}
@@ -621,7 +654,7 @@ func CheckFilter(expr *plan.Expr) (bool, *ColRef) {
 					}
 				}
 			}
-			return true, col
+			return col != nil, col
 		}
 	case *plan.Expr_Col:
 		return true, exprImpl.Col
@@ -734,9 +767,7 @@ func combinePlanConjunction(ctx context.Context, exprs []*plan.Expr) (expr *plan
 func rejectsNull(filter *plan.Expr, proc *process.Process) bool {
 	filter = replaceColRefWithNull(DeepCopyExpr(filter))
 
-	bat := batch.NewWithSize(0)
-	bat.Zs = []int64{1}
-	filter, err := ConstantFold(bat, filter, proc)
+	filter, err := ConstantFold(batch.EmptyForConstFoldBatch, filter, proc, false)
 	if err != nil {
 		return false
 	}
@@ -775,42 +806,22 @@ func replaceColRefWithNull(expr *plan.Expr) *plan.Expr {
 	return expr
 }
 
-func increaseRefCnt(expr *plan.Expr, colRefCnt map[[2]int32]int) {
+func increaseRefCnt(expr *plan.Expr, inc int, colRefCnt map[[2]int32]int) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		colRefCnt[[2]int32{exprImpl.Col.RelPos, exprImpl.Col.ColPos}]++
+		colRefCnt[[2]int32{exprImpl.Col.RelPos, exprImpl.Col.ColPos}] += inc
 
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			increaseRefCnt(arg, colRefCnt)
+			increaseRefCnt(arg, inc, colRefCnt)
 		}
 	case *plan.Expr_W:
-		increaseRefCnt(exprImpl.W.WindowFunc, colRefCnt)
+		increaseRefCnt(exprImpl.W.WindowFunc, inc, colRefCnt)
 		for _, arg := range exprImpl.W.PartitionBy {
-			increaseRefCnt(arg, colRefCnt)
+			increaseRefCnt(arg, inc, colRefCnt)
 		}
 		for _, order := range exprImpl.W.OrderBy {
-			increaseRefCnt(order.Expr, colRefCnt)
-		}
-	}
-}
-
-func decreaseRefCnt(expr *plan.Expr, colRefCnt map[[2]int32]int) {
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		colRefCnt[[2]int32{exprImpl.Col.RelPos, exprImpl.Col.ColPos}]--
-
-	case *plan.Expr_F:
-		for _, arg := range exprImpl.F.Args {
-			decreaseRefCnt(arg, colRefCnt)
-		}
-	case *plan.Expr_W:
-		decreaseRefCnt(exprImpl.W.WindowFunc, colRefCnt)
-		for _, arg := range exprImpl.W.PartitionBy {
-			decreaseRefCnt(arg, colRefCnt)
-		}
-		for _, order := range exprImpl.W.OrderBy {
-			decreaseRefCnt(order.Expr, colRefCnt)
+			increaseRefCnt(order.Expr, inc, colRefCnt)
 		}
 	}
 }
@@ -918,6 +929,12 @@ func GetColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map
 	}
 }
 
+func GetColumnMapByExprs(exprs []*plan.Expr, tableDef *plan.TableDef, columnMap *map[int]int) {
+	for _, expr := range exprs {
+		GetColumnMapByExpr(expr, tableDef, columnMap)
+	}
+}
+
 func GetColumnsByExpr(
 	expr *plan.Expr,
 	tableDef *plan.TableDef,
@@ -949,7 +966,7 @@ func GetColumnsByExpr(
 
 func EvalFilterExpr(ctx context.Context, expr *plan.Expr, bat *batch.Batch, proc *process.Process) (bool, error) {
 	if len(bat.Vecs) == 0 { //that's constant expr
-		e, err := ConstantFold(bat, expr, proc)
+		e, err := ConstantFold(bat, expr, proc, false)
 		if err != nil {
 			return false, err
 		}
@@ -1015,11 +1032,20 @@ func CheckExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
 	}
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
+		isConst := true
 		for _, arg := range exprImpl.F.Args {
+			switch arg.Expr.(type) {
+			case *plan.Expr_C, *plan.Expr_P, *plan.Expr_V, *plan.Expr_T:
+				continue
+			}
+			isConst = false
 			isMonotonic := CheckExprIsMonotonic(ctx, arg)
 			if !isMonotonic {
 				return false
 			}
+		}
+		if isConst {
+			return true
 		}
 
 		isMonotonic, _ := function.GetFunctionIsMonotonicById(ctx, exprImpl.F.Func.GetObj())
@@ -1033,7 +1059,7 @@ func CheckExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
 	}
 }
 
-func getSortOrder(tableDef *plan.TableDef, colName string) int {
+func GetSortOrder(tableDef *plan.TableDef, colName string) int {
 	if tableDef.Pkey != nil {
 		pkNames := tableDef.Pkey.Names
 		for i := range pkNames {
@@ -1053,51 +1079,41 @@ func rewriteFiltersForStats(exprList []*plan.Expr, proc *process.Process) *plan.
 	if proc == nil {
 		return nil
 	}
-	bat := batch.NewWithSize(0)
-	bat.Zs = []int64{1}
-	for i := range exprList {
-		tmpexpr, _ := ConstantFold(bat, DeepCopyExpr(exprList[i]), proc)
-		exprList[i] = tmpexpr
-	}
 	return colexec.RewriteFilterExprList(exprList)
 }
 
-func fixColumnName(tableDef *plan.TableDef, expr *plan.Expr) {
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_F:
-		for _, arg := range exprImpl.F.Args {
-			fixColumnName(tableDef, arg)
-		}
-	case *plan.Expr_Col:
-		exprImpl.Col.Name = tableDef.Cols[exprImpl.Col.ColPos].Name
-	}
-}
-
-func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.Expr, error) {
+func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process, varAndParamIsConst bool) (*plan.Expr, error) {
 	// If it is Expr_List, perform constant folding on its elements
 	if exprImpl, ok := e.Expr.(*plan.Expr_List); ok {
-		exprList := exprImpl.List
-		for i, exprElem := range exprList.List {
-			_, ok2 := exprElem.Expr.(*plan.Expr_F)
-			if ok2 {
-				foldExpr, err := ConstantFold(bat, exprElem, proc)
-				if err != nil {
-					return e, nil
-				}
-				exprImpl.List.List[i] = foldExpr
+		exprList := exprImpl.List.List
+		for i := range exprList {
+			foldExpr, err := ConstantFold(bat, exprList[i], proc, varAndParamIsConst)
+			if err != nil {
+				return e, nil
 			}
+			exprList[i] = foldExpr
 		}
-		return e, nil
-	}
 
-	var err error
-	if elist, ok := e.Expr.(*plan.Expr_List); ok {
-		for i, expr := range elist.List.List {
-			if elist.List.List[i], err = ConstantFold(bat, expr, proc); err != nil {
-				return nil, err
-			}
+		vec, err := colexec.GenerateConstListExpressionExecutor(proc, exprList)
+		if err != nil {
+			return nil, err
 		}
-		return e, nil
+		defer vec.Free(proc.Mp())
+
+		colexec.SortInFilter(vec)
+		data, err := vec.MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+
+		return &plan.Expr{
+			Typ: e.Typ,
+			Expr: &plan.Expr_Bin{
+				Bin: &plan.BinaryData{
+					Data: data,
+				},
+			},
+		}, nil
 	}
 
 	ef, ok := e.Expr.(*plan.Expr_F)
@@ -1110,15 +1126,15 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.
 	if err != nil {
 		return nil, err
 	}
-	if f.CannotFold() { // function cannot be fold
+	if ef.F.Func.ObjName != "cast" && f.CannotFold() { // function cannot be fold
 		return e, nil
 	}
 	for i := range ef.F.Args {
-		if ef.F.Args[i], err = ConstantFold(bat, ef.F.Args[i], proc); err != nil {
+		if ef.F.Args[i], err = ConstantFold(bat, ef.F.Args[i], proc, varAndParamIsConst); err != nil {
 			return nil, err
 		}
 	}
-	if !rule.IsConstant(e) {
+	if !rule.IsConstant(e, varAndParamIsConst) {
 		return e, nil
 	}
 
@@ -1127,7 +1143,7 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.
 		return nil, err
 	}
 	defer vec.Free(proc.Mp())
-	c := rule.GetConstantValue(vec, false)
+	c := rule.GetConstantValue(vec, false, 0)
 	if c == nil {
 		return e, nil
 	}
@@ -1179,6 +1195,7 @@ func unwindTupleComparison(ctx context.Context, nonEqOp, op string, leftExprs, r
 // if constant's type higher than column's type
 // and constant's value in range of column's type, then no cast was needed
 func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
+	//TODO: Check if T_array is required here?
 	switch constT.Oid {
 	case types.T_char, types.T_varchar, types.T_text:
 		switch columnT.Oid {
@@ -1392,9 +1409,9 @@ func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.
 			return nil, "", err
 		}
 		w.Flush()
-		return fileservice.GetForETL(nil, fileservice.JoinPath(buf.String(), prefix))
+		return fileservice.GetForETL(context.TODO(), nil, fileservice.JoinPath(buf.String(), prefix))
 	}
-	return fileservice.GetForETL(param.FileService, prefix)
+	return fileservice.GetForETL(context.TODO(), param.FileService, prefix)
 }
 
 // ReadDir support "etl:" and "/..." absolute path, NOT support relative path.
@@ -1631,4 +1648,102 @@ func ResetAuxIdForExpr(expr *plan.Expr) {
 			ResetAuxIdForExpr(child)
 		}
 	}
+}
+
+// func SubstitueParam(expr *plan.Expr, proc *process.Process) *plan.Expr {
+// 	switch t := expr.Expr.(type) {
+// 	case *plan.Expr_F:
+// 		for _, arg := range t.F.Args {
+// 			SubstitueParam(arg, proc)
+// 		}
+// 	case *plan.Expr_P:
+// 		vec, _ := proc.GetPrepareParamsAt(int(t.P.Pos))
+// 		c := rule.GetConstantValue(vec, false)
+// 		ec := &plan.Expr_C{
+// 			C: c,
+// 		}
+// 		expr.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
+// 		expr.Expr = ec
+// 	case *plan.Expr_V:
+// 		val, _ := proc.GetResolveVariableFunc()(t.V.Name, t.V.System, t.V.Global)
+// 		typ := types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
+// 		vec, _ := util.GenVectorByVarValue(proc, typ, val)
+// 		c := rule.GetConstantValue(vec, false)
+// 		ec := &plan.Expr_C{
+// 			C: c,
+// 		}
+// 		expr.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
+// 		expr.Expr = ec
+// 	}
+// 	return expr
+// }
+
+func FormatExpr(expr *plan.Expr) string {
+	var w bytes.Buffer
+	doFormatExpr(expr, &w, 0)
+	return w.String()
+}
+
+func doFormatExpr(expr *plan.Expr, out *bytes.Buffer, depth int) {
+	out.WriteByte('\n')
+	prefix := strings.Repeat("\t", depth)
+	switch t := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		out.WriteString(fmt.Sprintf("%sExpr_Col(%s)", prefix, t.Col.Name))
+	case *plan.Expr_C:
+		out.WriteString(fmt.Sprintf("%sExpr_C(%s)", prefix, t.C.String()))
+	case *plan.Expr_F:
+		out.WriteString(fmt.Sprintf("%sExpr_F(\n%s\tFunc[\"%s\"](nargs=%d)", prefix, prefix, t.F.Func.ObjName, len(t.F.Args)))
+		for _, arg := range t.F.Args {
+			doFormatExpr(arg, out, depth+1)
+		}
+		out.WriteString(fmt.Sprintf("\n%s)", prefix))
+	case *plan.Expr_P:
+		out.WriteString(fmt.Sprintf("%sExpr_P(%d)", prefix, t.P.Pos))
+	case *plan.Expr_T:
+		out.WriteString(fmt.Sprintf("%sExpr_T(%s)", prefix, t.T.String()))
+	default:
+		out.WriteString(fmt.Sprintf("%sExpr_Unknown(%s)", prefix, expr.String()))
+	}
+}
+
+// databaseIsValid checks whether the database exists or not.
+func databaseIsValid(dbName string, ctx CompilerContext) (string, error) {
+	connectDBFirst := false
+	if len(dbName) == 0 {
+		connectDBFirst = true
+	}
+	if dbName == "" {
+		dbName = ctx.DefaultDatabase()
+	}
+
+	if len(dbName) == 0 || !ctx.DatabaseExists(dbName) {
+		if connectDBFirst {
+			return "", moerr.NewNoDB(ctx.GetContext())
+		} else {
+			return "", moerr.NewBadDB(ctx.GetContext(), dbName)
+		}
+	}
+	return dbName, nil
+}
+
+/*
+*
+getSuitableDBName get the database name which need to be used in next steps.
+
+For Cases:
+
+	SHOW XXX FROM [DB_NAME1].TABLE_NAME [FROM [DB_NAME2]];
+
+	In mysql,
+		if the second FROM clause exists, the DB_NAME1 in first FROM clause if it exists will be ignored.
+		if the second FROM clause does not exist, the DB_NAME1 in first FROM clause if it exists  will be used.
+		if the DB_NAME1 and DB_NAME2 neither does not exist, the current connected database (by USE statement) will be used.
+		if neither case above succeeds, an error is reported.
+*/
+func getSuitableDBName(dbName1 string, dbName2 string) string {
+	if len(dbName2) != 0 {
+		return dbName2
+	}
+	return dbName1
 }

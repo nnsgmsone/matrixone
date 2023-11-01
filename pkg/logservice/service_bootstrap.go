@@ -20,7 +20,8 @@ import (
 
 	"github.com/lni/dragonboat/v4"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"go.uber.org/zap"
 )
 
@@ -43,8 +44,19 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 		}
 	}
 	numOfLogShards := cfg.BootstrapConfig.NumOfLogShards
-	numOfDNShards := cfg.BootstrapConfig.NumOfDNShards
+	numOfTNShards := cfg.BootstrapConfig.NumOfTNShards
 	numOfLogReplicas := cfg.BootstrapConfig.NumOfLogShardReplicas
+
+	var nextID uint64
+	var nextIDByKey map[string]uint64
+	backup, err := s.getBackupData(ctx)
+	if err != nil {
+		return err
+	}
+	if backup != nil {
+		nextID = backup.NextID
+		nextIDByKey = backup.NextIDByKey
+	}
 	for i := 0; i < checkBootstrapCycles; i++ {
 		select {
 		case <-ctx.Done():
@@ -52,7 +64,7 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 		default:
 		}
 		if err := s.store.setInitialClusterInfo(numOfLogShards,
-			numOfDNShards, numOfLogReplicas); err != nil {
+			numOfTNShards, numOfLogReplicas, nextID, nextIDByKey); err != nil {
 			s.runtime.SubLogger(runtime.SystemInit).Error("failed to set initial cluster info", zap.Error(err))
 			if err == dragonboat.ErrShardNotFound {
 				return nil
@@ -63,28 +75,38 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 		s.runtime.SubLogger(runtime.SystemInit).Info("initial cluster info set")
 		break
 	}
-	for i := 0; i < checkBootstrapCycles; i++ {
-		select {
-		case <-ctx.Done():
-			return nil
-		default:
-		}
-		if err := s.createInitTasks(ctx); err == nil {
-			break
-		}
-		time.Sleep(time.Second)
-	}
 	return nil
 }
 
-func (s *Service) createInitTasks(ctx context.Context) error {
-	if err := s.store.taskScheduler.Create(ctx, []task.TaskMetadata{{
-		ID:       task.TaskCode_SystemInit.String(),
-		Executor: task.TaskCode_SystemInit,
-	}}); err != nil {
-		s.runtime.SubLogger(runtime.SystemInit).Error("failed to create init tasks", zap.Error(err))
-		return err
+func (s *Service) getBackupData(ctx context.Context) (*pb.BackupData, error) {
+	fs := s.fileService
+	filePath := s.cfg.BootstrapConfig.Restore.FilePath
+	if filePath == "" {
+		return nil, nil
 	}
-	s.runtime.SubLogger(runtime.SystemInit).Info("init tasks created")
-	return nil
+
+	st, err := fs.StatFile(ctx, filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	ioVec := &fileservice.IOVector{
+		FilePath: filePath,
+		Entries:  make([]fileservice.IOEntry, 1),
+	}
+
+	// Read the whole file to one entry.
+	ioVec.Entries[0] = fileservice.IOEntry{
+		Offset: 0,
+		Size:   st.Size,
+	}
+	if err := fs.Read(ctx, ioVec); err != nil {
+		return nil, err
+	}
+
+	var data pb.BackupData
+	if err := data.Unmarshal(ioVec.Entries[0].Data); err != nil {
+		return nil, err
+	}
+	return &data, nil
 }

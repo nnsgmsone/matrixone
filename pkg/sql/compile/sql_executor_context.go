@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -65,7 +66,7 @@ func newCompilerContext(
 	}
 }
 
-func (c *compilerContext) ResolveUdf(name string, ast []*plan.Expr) (string, error) {
+func (c *compilerContext) ResolveUdf(name string, ast []*plan.Expr) (*function.Udf, error) {
 	panic("not supported in internal sql executor")
 }
 
@@ -227,7 +228,7 @@ func (c *compilerContext) getRelation(
 		return nil, err
 	}
 
-	table, err := db.Relation(c.ctx, tableName)
+	table, err := db.Relation(c.ctx, tableName, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -269,6 +270,7 @@ func (c *compilerContext) getTableDef(
 					AutoIncr:    attr.Attr.AutoIncrement,
 					Table:       tableName,
 					NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
+					Enumvalues:  attr.Attr.EnumVlaues,
 				},
 				Primary:   attr.Attr.Primary,
 				Default:   attr.Attr.Default,
@@ -279,16 +281,16 @@ func (c *compilerContext) getTableDef(
 				Seqnum:    uint32(attr.Attr.Seqnum),
 			}
 			// Is it a composite primary key
-			if attr.Attr.Name == catalog.CPrimaryKeyColName {
-				continue
-			}
+			//if attr.Attr.Name == catalog.CPrimaryKeyColName {
+			//	continue
+			//}
 			if attr.Attr.ClusterBy {
 				clusterByDef = &plan.ClusterByDef{
 					Name: attr.Attr.Name,
 				}
-				if util.JudgeIsCompositeClusterByColumn(attr.Attr.Name) {
-					continue
-				}
+				//if util.JudgeIsCompositeClusterByColumn(attr.Attr.Name) {
+				//	continue
+				//}
 			}
 			cols = append(cols, col)
 		} else if pro, ok := def.(*engine.PropertiesDef); ok {
@@ -351,10 +353,12 @@ func (c *compilerContext) getTableDef(
 	}
 
 	if primarykey != nil && primarykey.PkeyColName == catalog.CPrimaryKeyColName {
-		cols = append(cols, plan.MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
+		//cols = append(cols, plan.MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
+		primarykey.CompPkeyCol = plan.GetColDefFromTable(cols, catalog.CPrimaryKeyColName)
 	}
 	if clusterByDef != nil && util.JudgeIsCompositeClusterByColumn(clusterByDef.Name) {
-		cols = append(cols, plan.MakeHiddenColDefByName(clusterByDef.Name))
+		//cols = append(cols, plan.MakeHiddenColDefByName(clusterByDef.Name))
+		clusterByDef.CompCbkeyCol = plan.GetColDefFromTable(cols, clusterByDef.Name)
 	}
 	rowIdCol := plan.MakeRowIdColDef()
 	cols = append(cols, rowIdCol)
@@ -367,14 +371,13 @@ func (c *compilerContext) getTableDef(
 	}
 
 	tableDef := &plan.TableDef{
-		TblId:     tableId,
-		Name:      tableName,
-		Cols:      cols,
-		Defs:      defs,
-		TableType: TableType,
-		Createsql: Createsql,
-		Pkey:      primarykey,
-		//CompositePkey: CompositePkey,
+		TblId:        tableId,
+		Name:         tableName,
+		Cols:         cols,
+		Defs:         defs,
+		TableType:    TableType,
+		Createsql:    Createsql,
+		Pkey:         primarykey,
 		ViewSql:      viewSql,
 		Partition:    partitionInfo,
 		Fkeys:        foreignKeys,

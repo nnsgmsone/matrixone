@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	util "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -103,7 +104,7 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 	}
 	uuid, _ := uuid.NewUUID()
 	runner := mock_frontend.NewMockComputationRunner(ctrl)
-	runner.EXPECT().Run(gomock.Any()).DoAndReturn(func(uint64) error {
+	runner.EXPECT().Run(gomock.Any()).DoAndReturn(func(uint64) (*util.RunResult, error) {
 		proto := ses.GetMysqlProtocol()
 		if mrs != nil {
 			if res.isSleepSql {
@@ -117,17 +118,16 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 			err = proto.SendResultSetTextBatchRowSpeedup(mrs, mrs.GetRowCount())
 			if err != nil {
 				logutil.Errorf("flush error %v", err)
-				return err
+				return nil, err
 			}
 		}
-		return nil
+		return &util.RunResult{AffectRows: 0}, nil
 	}).AnyTimes()
 	mcw := mock_frontend.NewMockComputationWrapper(ctrl)
 	mcw.EXPECT().GetAst().Return(stmt).AnyTimes()
 	mcw.EXPECT().GetProcess().Return(proc).AnyTimes()
 	mcw.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
 	mcw.EXPECT().GetColumns().Return(columns, nil).AnyTimes()
-	mcw.EXPECT().GetAffectedRows().Return(uint64(0)).AnyTimes()
 	mcw.EXPECT().Compile(gomock.Any(), gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
 	mcw.EXPECT().GetUUID().Return(uuid[:]).AnyTimes()
 	mcw.EXPECT().RecordExecPlan(gomock.Any()).Return(nil).AnyTimes()
@@ -147,8 +147,6 @@ func Test_ConnectionCount(t *testing.T) {
 	//before anything using the configuration
 	eng := mock_frontend.NewMockEngine(ctrl)
 	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 	require.NoError(t, err)
@@ -157,26 +155,26 @@ func Test_ConnectionCount(t *testing.T) {
 	noResultSet := make(map[string]bool)
 	resultSet := make(map[string]*result)
 
-	var wrapperStubFunc = func(db, sql, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
+	var wrapperStubFunc = func(db string, input *UserInput, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
 		var cw []ComputationWrapper = nil
 		var stmts []tree.Statement = nil
 		var cmdFieldStmt *InternalCmdFieldList
 		var err error
-		if isCmdFieldListSql(sql) {
-			cmdFieldStmt, err = parseCmdFieldList(proc.Ctx, sql)
+		if isCmdFieldListSql(input.getSql()) {
+			cmdFieldStmt, err = parseCmdFieldList(proc.Ctx, input.getSql())
 			if err != nil {
 				return nil, err
 			}
 			stmts = append(stmts, cmdFieldStmt)
 		} else {
-			stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, sql, 1)
+			stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, input.getSql(), 1)
 			if err != nil {
 				return nil, err
 			}
 		}
 
 		for _, stmt := range stmts {
-			cw = append(cw, newMockWrapper(ctrl, ses, resultSet, noResultSet, sql, stmt, proc))
+			cw = append(cw, newMockWrapper(ctrl, ses, resultSet, noResultSet, input.getSql(), stmt, proc))
 		}
 		return cw, nil
 	}

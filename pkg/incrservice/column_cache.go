@@ -18,6 +18,7 @@ import (
 	"context"
 	"math"
 	"sync"
+	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -25,6 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"go.uber.org/zap"
 	"golang.org/x/exp/constraints"
 )
@@ -39,6 +42,15 @@ type columnCache struct {
 	allocating  bool
 	allocatingC chan struct{}
 	overflow    bool
+	// For the load scenario, if the machine is good enough, there will be very many goroutines to
+	// concurrently fetch the value of the self-increasing column, which will immediately trigger
+	// the cache of the self-increasing column to be insufficient and thus go to the store to allocate
+	// a new cache, which causes the load to block all due to this allocation being slow. The idea of
+	// our optimization here is to reduce the number of allocations as much as possible, add an atomic
+	// counter, check how many concurrent requests are waiting when allocating (of course this is
+	// imprecise, but it doesn't matter), and then allocate more than one at a time.
+	concurrencyApply atomic.Uint64
+	allocateCount    atomic.Uint64
 }
 
 func newColumnCache(
@@ -46,7 +58,8 @@ func newColumnCache(
 	tableID uint64,
 	col AutoColumn,
 	cfg Config,
-	allocator valueAllocator) (*columnCache, error) {
+	allocator valueAllocator,
+	txnOp client.TxnOperator) (*columnCache, error) {
 	item := &columnCache{
 		logger:    getLogger(),
 		col:       col,
@@ -55,7 +68,7 @@ func newColumnCache(
 		overflow:  col.Offset == math.MaxUint64,
 		ranges:    &ranges{step: col.Step, values: make([]uint64, 0, 1)},
 	}
-	item.preAllocate(ctx, tableID, cfg.CountPerAllocate)
+	item.preAllocate(ctx, tableID, cfg.CountPerAllocate, txnOp)
 	item.Lock()
 	defer item.Unlock()
 	if err := item.waitPrevAllocatingLocked(ctx); err != nil {
@@ -79,7 +92,8 @@ func (col *columnCache) insertAutoValues(
 	ctx context.Context,
 	tableID uint64,
 	vec *vector.Vector,
-	rows int) (uint64, error) {
+	rows int,
+	txnOp client.TxnOperator) (uint64, error) {
 	switch vec.GetType().Oid {
 	case types.T_int8:
 		return insertAutoValues[int8](
@@ -90,12 +104,16 @@ func (col *columnCache) insertAutoValues(
 			math.MaxInt8,
 			col,
 			func(v uint64) error {
+				if v == 0 {
+					v = math.MaxInt8 + 1
+				}
 				return moerr.NewOutOfRange(
 					ctx,
 					"tinyint",
 					"value %v",
 					v)
-			})
+			},
+			txnOp)
 	case types.T_int16:
 		return insertAutoValues[int16](
 			ctx,
@@ -105,12 +123,16 @@ func (col *columnCache) insertAutoValues(
 			math.MaxInt16,
 			col,
 			func(v uint64) error {
+				if v == 0 {
+					v = math.MaxInt16 + 1
+				}
 				return moerr.NewOutOfRange(
 					ctx,
 					"smallint",
 					"value %v",
 					v)
-			})
+			},
+			txnOp)
 	case types.T_int32:
 		return insertAutoValues[int32](
 			ctx,
@@ -119,12 +141,16 @@ func (col *columnCache) insertAutoValues(
 			math.MaxInt32,
 			col,
 			func(v uint64) error {
+				if v == 0 {
+					v = math.MaxInt32 + 1
+				}
 				return moerr.NewOutOfRange(
 					ctx,
 					"int",
 					"value %v",
 					v)
-			})
+			},
+			txnOp)
 	case types.T_int64:
 		return insertAutoValues[int64](
 			ctx,
@@ -134,12 +160,16 @@ func (col *columnCache) insertAutoValues(
 			math.MaxInt64,
 			col,
 			func(v uint64) error {
+				if v == 0 {
+					v = math.MaxInt64 + 1
+				}
 				return moerr.NewOutOfRange(
 					ctx,
 					"bigint",
 					"value %v",
 					v)
-			})
+			},
+			txnOp)
 	case types.T_uint8:
 		return insertAutoValues[uint8](
 			ctx,
@@ -149,12 +179,16 @@ func (col *columnCache) insertAutoValues(
 			math.MaxUint8,
 			col,
 			func(v uint64) error {
+				if v == 0 {
+					v = math.MaxUint8 + 1
+				}
 				return moerr.NewOutOfRange(
 					ctx,
 					"tinyint unsigned",
 					"value %v",
 					v)
-			})
+			},
+			txnOp)
 	case types.T_uint16:
 		return insertAutoValues[uint16](
 			ctx,
@@ -164,12 +198,16 @@ func (col *columnCache) insertAutoValues(
 			math.MaxUint16,
 			col,
 			func(v uint64) error {
+				if v == 0 {
+					v = math.MaxUint16 + 1
+				}
 				return moerr.NewOutOfRange(
 					ctx,
 					"smallint unsigned",
 					"value %v",
 					v)
-			})
+			},
+			txnOp)
 	case types.T_uint32:
 		return insertAutoValues[uint32](
 			ctx,
@@ -179,12 +217,16 @@ func (col *columnCache) insertAutoValues(
 			math.MaxUint32,
 			col,
 			func(v uint64) error {
+				if v == 0 {
+					v = math.MaxUint32 + 1
+				}
 				return moerr.NewOutOfRange(
 					ctx,
 					"int unsigned",
 					"value %v",
 					v)
-			})
+			},
+			txnOp)
 	case types.T_uint64:
 		return insertAutoValues[uint64](
 			ctx,
@@ -199,7 +241,8 @@ func (col *columnCache) insertAutoValues(
 					"bigint unsigned",
 					"auto_incrment column constant value overflows bigint unsigned",
 				)
-			})
+			},
+			txnOp)
 	default:
 		return 0, moerr.NewInvalidInput(ctx, "invalid auto_increment type '%v'", vec.GetType().Oid)
 	}
@@ -215,7 +258,8 @@ func (col *columnCache) updateTo(
 	ctx context.Context,
 	tableID uint64,
 	count int,
-	manualValue uint64) error {
+	manualValue uint64,
+	txnOp client.TxnOperator) error {
 	col.Lock()
 
 	contains := col.ranges.updateTo(manualValue)
@@ -233,7 +277,8 @@ func (col *columnCache) updateTo(
 		ctx,
 		tableID,
 		col.col.ColName,
-		manualValue)
+		manualValue,
+		txnOp)
 }
 
 func (col *columnCache) applyAutoValues(
@@ -242,7 +287,10 @@ func (col *columnCache) applyAutoValues(
 	rows int,
 	skipped *ranges,
 	filter func(i int) bool,
-	apply func(int, uint64) error) error {
+	apply func(int, uint64) error,
+	txnOp client.TxnOperator) error {
+	cul := col.concurrencyApply.Load()
+	col.concurrencyApply.Add(1)
 	col.Lock()
 	defer col.Unlock()
 
@@ -256,7 +304,7 @@ func (col *columnCache) applyAutoValues(
 		}
 
 		if col.ranges.empty() {
-			if err := col.allocateLocked(ctx, tableID, rows); err != nil {
+			if err := col.allocateLocked(ctx, tableID, rows, cul, txnOp); err != nil {
 				return false, err
 			}
 		}
@@ -290,7 +338,8 @@ func (col *columnCache) applyAutoValues(
 func (col *columnCache) preAllocate(
 	ctx context.Context,
 	tableID uint64,
-	count int) {
+	count int,
+	txnOp client.TxnOperator) {
 	col.Lock()
 	defer col.Unlock()
 
@@ -307,11 +356,12 @@ func (col *columnCache) preAllocate(
 	if col.cfg.CountPerAllocate > count {
 		count = col.cfg.CountPerAllocate
 	}
-	col.allocator.asyncAlloc(
+	col.allocator.asyncAllocate(
 		ctx,
 		tableID,
 		col.col.ColName,
 		count,
+		txnOp,
 		func(from, to uint64, err error) {
 			if err == nil {
 				col.applyAllocate(from, to)
@@ -324,7 +374,9 @@ func (col *columnCache) preAllocate(
 func (col *columnCache) allocateLocked(
 	ctx context.Context,
 	tableID uint64,
-	count int) error {
+	count int,
+	beforeApplyCount uint64,
+	txnOp client.TxnOperator) error {
 	if err := col.waitPrevAllocatingLocked(ctx); err != nil {
 		return err
 	}
@@ -334,25 +386,34 @@ func (col *columnCache) allocateLocked(
 	if col.cfg.CountPerAllocate > count {
 		count = col.cfg.CountPerAllocate
 	}
+	n := int(col.concurrencyApply.Load() - beforeApplyCount)
+	if n == 0 {
+		n = 1
+	}
 	for {
-		from, to, err := col.allocator.alloc(
+		from, to, err := col.allocator.allocate(
 			ctx,
 			tableID,
 			col.col.ColName,
-			count)
+			count*n,
+			txnOp)
 		if err == nil {
+			col.allocateCount.Add(1)
 			col.applyAllocateLocked(from, to)
 			return nil
 		}
 	}
 }
 
-func (col *columnCache) maybeAllocate(tableID uint64) {
+func (col *columnCache) maybeAllocate(ctx context.Context, tableID uint64, txnOp client.TxnOperator) {
 	col.Lock()
 	low := col.ranges.left() <= col.cfg.LowCapacity
 	col.Unlock()
 	if low {
-		col.preAllocate(context.Background(), tableID, col.cfg.CountPerAllocate)
+		col.preAllocate(context.WithValue(context.Background(), defines.TenantIDKey{}, ctx.Value(defines.TenantIDKey{})),
+			tableID,
+			col.cfg.CountPerAllocate,
+			txnOp)
 	}
 }
 
@@ -387,9 +448,13 @@ func (col *columnCache) waitPrevAllocatingLocked(ctx context.Context) error {
 			return nil
 		}
 		c := col.allocatingC
+		// we must unlock here, because we may wait for a long time. And Lock will added
+		// before return, because the caller holds the lock and call this method and use
+		// defer to unlock.
 		col.Unlock()
 		select {
 		case <-ctx.Done():
+			col.Lock()
 			return ctx.Err()
 		case <-c:
 		}
@@ -410,11 +475,12 @@ func insertAutoValues[T constraints.Integer](
 	rows int,
 	max T,
 	col *columnCache,
-	outOfRangeError func(v uint64) error) (uint64, error) {
+	outOfRangeError func(v uint64) error,
+	txnOp client.TxnOperator) (uint64, error) {
 	// all values are filled after insert
 	defer func() {
 		vec.SetNulls(nil)
-		col.maybeAllocate(tableID)
+		col.maybeAllocate(ctx, tableID, txnOp)
 	}()
 
 	vs := vector.MustFixedCol[T](vec)
@@ -428,8 +494,9 @@ func insertAutoValues[T constraints.Integer](
 		manuals := roaring64.NewBitmap()
 		maxValue := uint64(0)
 		col.lockDo(func() {
-			for _, v := range vs {
-				if v > 0 {
+			for i, v := range vs {
+				// vector maybe has some invalid value, must use null bitmap to check the manual value
+				if !nulls.Contains(vec.GetNulls(), uint64(i)) && v > 0 {
 					manuals.Add(uint64(v))
 				}
 			}
@@ -451,12 +518,13 @@ func insertAutoValues[T constraints.Integer](
 				ctx,
 				tableID,
 				rows,
-				maxValue); err != nil {
+				maxValue,
+				txnOp); err != nil {
 				return 0, err
 			}
 		}
 	}
-	col.preAllocate(ctx, tableID, rows)
+	col.preAllocate(ctx, tableID, rows, txnOp)
 	err := col.applyAutoValues(
 		ctx,
 		tableID,
@@ -478,7 +546,8 @@ func insertAutoValues[T constraints.Integer](
 			vs[i] = T(v)
 			lastInsertValue = v
 			return nil
-		})
+		},
+		txnOp)
 	if err != nil {
 		return 0, err
 	}

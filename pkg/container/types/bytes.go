@@ -30,6 +30,7 @@ const (
 	MaxCharLen        = 255
 	MaxBinaryLen      = 255
 	MaxVarBinaryLen   = 65535
+	MaxEnumLen        = 65535
 )
 
 func (v *Varlena) UnsafePtr() unsafe.Pointer {
@@ -59,6 +60,8 @@ func (v *Varlena) SetOffsetLen(voff, vlen uint32) {
 	s[2] = vlen
 }
 
+// do not use this function, will be deleted in the future
+// use BuildVarlenaFromValena or BuildVarlenaFromByteSlice instead
 func BuildVarlena(bs []byte, area []byte, m *mpool.MPool) (Varlena, []byte, error) {
 	var err error
 	var v Varlena
@@ -99,6 +102,18 @@ func (v *Varlena) GetByteSlice(area []byte) []byte {
 	}
 	voff, vlen := v.OffsetLen()
 	return area[voff : voff+vlen]
+}
+
+// GetArray Returns []T from Varlena. If the Varlena size is less than Inline size,
+// it returns the value from the Varlena header.
+// Else, it returns the value from the area.
+func GetArray[T RealNumbers](v *Varlena, area []byte) []T {
+	svlen := (*v)[0]
+	if svlen <= VarlenaInlineSize {
+		return BytesToArray[T](v.ByteSlice())
+	}
+	voff, vlen := v.OffsetLen()
+	return BytesToArray[T](area[voff : voff+vlen])
 }
 
 // See the lifespan comment above.

@@ -16,7 +16,6 @@ package rpchandle
 
 import (
 	"context"
-
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -61,7 +60,7 @@ type Handler interface {
 		meta txn.TxnMeta,
 		req *apipb.SyncLogTailReq,
 		resp *apipb.SyncLogTailResp,
-	) error
+	) (func(), error)
 
 	HandlePreCommitWrite(
 		ctx context.Context,
@@ -75,19 +74,40 @@ type Handler interface {
 		meta txn.TxnMeta,
 		req *db.FlushTable,
 		resp *apipb.SyncLogTailResp,
-	) error
+	) (func(), error)
 
 	HandleForceCheckpoint(
 		ctx context.Context,
 		meta txn.TxnMeta,
 		req *db.Checkpoint,
 		resp *apipb.SyncLogTailResp,
-	) error
+	) (func(), error)
 
-	HandleInspectDN(
+	HandleInspectTN(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req *db.InspectDN,
+		req *db.InspectTN,
 		resp *db.InspectResp,
-	) error
+	) (func(), error)
+
+	HandleAddFaultPoint(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req *db.FaultPoint,
+		resp *apipb.SyncLogTailResp,
+	) (func(), error)
+
+	HandleBackup(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req *db.Checkpoint,
+		resp *apipb.SyncLogTailResp,
+	) (func(), error)
+
+	HandleTraceSpan(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req *db.TraceSpan,
+		resp *apipb.SyncLogTailResp,
+	) (func(), error)
 }

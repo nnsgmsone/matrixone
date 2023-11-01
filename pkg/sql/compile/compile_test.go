@@ -19,9 +19,11 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
+	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -81,13 +83,30 @@ func testPrint(_ interface{}, _ *batch.Batch) error {
 type Ws struct {
 }
 
-func (w *Ws) IncrStatemenetID(ctx context.Context) error {
+func (w *Ws) IncrStatementID(ctx context.Context, commit bool) error {
 	return nil
 }
 
 func (w *Ws) RollbackLastStatement(ctx context.Context) error {
 	return nil
 }
+
+func (w *Ws) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
+	return nil, nil
+}
+
+func (w *Ws) Rollback(ctx context.Context) error {
+	return nil
+}
+
+func (w *Ws) Adjust() error {
+	return nil
+}
+
+func (w *Ws) StartStatement()     {}
+func (w *Ws) EndStatement()       {}
+func (w *Ws) IncrSQLCount()       {}
+func (w *Ws) GetSQLCount() uint64 { return 0 }
 
 func TestCompile(t *testing.T) {
 	cnclient.NewCNClient("test", new(cnclient.ClientConfig))
@@ -98,8 +117,9 @@ func TestCompile(t *testing.T) {
 	txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
 	txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
 	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOperator.EXPECT().ResetRetry(gomock.Any()).AnyTimes()
 
-	txnClient := mock_frontend.NewMockTxnClientWithFeature(ctrl)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 	for _, tc := range tcs {
 		tc.proc.TxnClient = txnClient
@@ -107,12 +127,13 @@ func TestCompile(t *testing.T) {
 		c := New("test", "test", tc.sql, "", "", context.TODO(), tc.e, tc.proc, tc.stmt, false, nil)
 		err := c.Compile(ctx, tc.pn, nil, testPrint)
 		require.NoError(t, err)
-		c.GetAffectedRows()
-		err = c.Run(0)
+		c.getAffectedRows()
+		_, err = c.Run(0)
 		require.NoError(t, err)
 		// Enable memory check
 		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+		tc.proc.SessionInfo.Buf.Free()
 	}
 }
 
@@ -126,17 +147,18 @@ func TestCompileWithFaults(t *testing.T) {
 	c := New("test", "test", tc.sql, "", "", context.TODO(), tc.e, tc.proc, nil, false, nil)
 	err := c.Compile(ctx, tc.pn, nil, testPrint)
 	require.NoError(t, err)
-	c.GetAffectedRows()
-	err = c.Run(0)
+	c.getAffectedRows()
+	_, err = c.Run(0)
 	require.NoError(t, err)
 }
 
 func newTestCase(sql string, t *testing.T) compileTestCase {
 	proc := testutil.NewProcess()
+	proc.SessionInfo.Buf = buffer.New()
 	e, _, compilerCtx := testengine.New(context.Background())
 	stmts, err := mysql.Parse(compilerCtx.GetContext(), sql, 1)
 	require.NoError(t, err)
-	pn, err := plan2.BuildPlan(compilerCtx, stmts[0])
+	pn, err := plan2.BuildPlan(compilerCtx, stmts[0], false)
 	if err != nil {
 		panic(err)
 	}
@@ -147,6 +169,28 @@ func newTestCase(sql string, t *testing.T) compileTestCase {
 		proc: proc,
 		pn:   pn,
 		stmt: stmts[0],
+	}
+}
+
+func TestCompileShouldReturnCtxError(t *testing.T) {
+	{
+		c := Compile{proc: &process.Process{}}
+		ctx, cancel := context.WithTimeout(context.TODO(), 100*time.Millisecond)
+		c.proc.Ctx = ctx
+		time.Sleep(time.Second)
+		require.True(t, c.shouldReturnCtxErr())
+		cancel()
+		require.True(t, c.shouldReturnCtxErr())
+	}
+
+	{
+		c := Compile{proc: &process.Process{}}
+		ctx, cancel := context.WithTimeout(context.TODO(), 500*time.Millisecond)
+		c.proc.Ctx = ctx
+		cancel()
+		require.False(t, c.shouldReturnCtxErr())
+		time.Sleep(time.Second)
+		require.False(t, c.shouldReturnCtxErr())
 	}
 }
 

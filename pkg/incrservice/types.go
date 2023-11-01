@@ -19,25 +19,45 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
 // GetAutoIncrementService get increment service from process level runtime
-func GetAutoIncrementService() AutoIncrementService {
+func GetAutoIncrementService(ctx context.Context) AutoIncrementService {
 	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.AutoIncrmentService)
 	if !ok {
 		return nil
 	}
-	return v.(AutoIncrementService)
+	s := v.(AutoIncrementService)
+	uuid, ok := ctx.Value(defines.NodeIDKey{}).(string)
+	if !ok || uuid == "" {
+		return s
+	}
+	if s.UUID() != uuid {
+		v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.AutoIncrmentService + "_" + uuid)
+		if !ok {
+			panic("cannot get the appropriate AutoIncrementService")
+		}
+		s = v.(AutoIncrementService)
+	}
+	return s
 }
 
-// AutoIncrementService provides data service for the columns of auto-incremenet.
+// SetAutoIncrementServiceByID set auto increment service instance into process level runtime.
+func SetAutoIncrementServiceByID(id string, v AutoIncrementService) {
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.AutoIncrmentService+"_"+id, v)
+}
+
+// AutoIncrementService provides data service for the columns of auto-increment.
 // Each CN contains a service instance. Whenever a table containing an auto-increment
 // column is created, the service internally creates a data cache for the auto-increment
 // column to avoid updating the sequence values of these auto-increment columns each
 // time data is inserted.
 type AutoIncrementService interface {
+	// UUID returns the uuid of this increment service, which comes from CN service.
+	UUID() string
 	// Create a separate transaction is used to create the cache service and insert records
 	// into catalog.AutoIncrTableName before the transaction that created the table is committed.
 	// When the transaction that created the table is rolled back, the corresponding records in
@@ -91,6 +111,7 @@ type AutoIncrementService interface {
 // allocations for one write.
 type incrTableCache interface {
 	table() uint64
+	commit()
 	columns() []AutoColumn
 	insertAutoValues(ctx context.Context, tableID uint64, bat *batch.Batch) (uint64, error)
 	currentValue(ctx context.Context, tableID uint64, col string) (uint64, error)
@@ -99,22 +120,22 @@ type incrTableCache interface {
 }
 
 type valueAllocator interface {
-	alloc(ctx context.Context, tableID uint64, col string, count int) (uint64, uint64, error)
-	asyncAlloc(ctx context.Context, tableID uint64, col string, count int, cb func(uint64, uint64, error))
-	updateMinValue(ctx context.Context, tableID uint64, col string, minValue uint64) error
+	allocate(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator) (uint64, uint64, error)
+	asyncAllocate(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator, cb func(uint64, uint64, error))
+	updateMinValue(ctx context.Context, tableID uint64, col string, minValue uint64, txnOp client.TxnOperator) error
 	close()
 }
 
 // IncrValueStore is used to add and delete metadata records for auto-increment columns.
 type IncrValueStore interface {
-	// GetCloumns return auto columns of table.
-	GetCloumns(ctx context.Context, tableID uint64) ([]AutoColumn, error)
+	// GetColumns return auto columns of table.
+	GetColumns(ctx context.Context, tableID uint64, txnOp client.TxnOperator) ([]AutoColumn, error)
 	// Create add metadata records into catalog.AutoIncrTableName.
-	Create(ctx context.Context, tableID uint64, cols []AutoColumn) error
-	// Alloc alloc new range for auto-increment column.
-	Alloc(ctx context.Context, tableID uint64, col string, count int) (uint64, uint64, error)
+	Create(ctx context.Context, tableID uint64, cols []AutoColumn, txnOp client.TxnOperator) error
+	// Allocate allocate new range for auto-increment column.
+	Allocate(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator) (uint64, uint64, error)
 	// UpdateMinValue update auto column min value to specified value.
-	UpdateMinValue(ctx context.Context, tableID uint64, col string, minValue uint64) error
+	UpdateMinValue(ctx context.Context, tableID uint64, col string, minValue uint64, txnOp client.TxnOperator) error
 	// Delete remove metadata records from catalog.AutoIncrTableName.
 	Delete(ctx context.Context, tableID uint64) error
 	// Close the store
@@ -139,7 +160,7 @@ func GetAutoColumnFromDef(def *plan.TableDef) []AutoColumn {
 				ColName:  col.Name,
 				TableID:  def.TblId,
 				Step:     1,
-				Offset:   0,
+				Offset:   def.AutoIncrOffset,
 				ColIndex: i,
 			})
 		}

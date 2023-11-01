@@ -19,14 +19,17 @@ package logservice
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/lni/dragonboat/v4"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -34,6 +37,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/util"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
@@ -56,7 +61,7 @@ func firstError(err1 error, err2 error) error {
 // Service is the top layer component of a log service node. It manages the
 // underlying log store which in turn manages all log shards including the
 // HAKeeper shard. The Log Service component communicates with LogService
-// clients owned by DN nodes and the HAKeeper service via network, it can
+// clients owned by TN nodes and the HAKeeper service via network, it can
 // be considered as the interface layer of the LogService.
 type Service struct {
 	cfg         Config
@@ -68,6 +73,7 @@ type Service struct {
 	stopper     *stopper.Stopper
 	haClient    LogHAKeeperClient
 	fileService fileservice.FileService
+	shutdownC   chan struct{}
 
 	options struct {
 		// morpc client would filter remote backend via this
@@ -80,22 +86,28 @@ type Service struct {
 		holder         taskservice.TaskServiceHolder
 		storageFactory taskservice.TaskStorageFactory
 	}
+
+	config *util.ConfigData
 }
 
 func NewService(
 	cfg Config,
 	fileService fileservice.FileService,
+	shutdownC chan struct{},
 	opts ...Option,
 ) (*Service, error) {
 	cfg.Fill()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+	configKVMap, _ := dumpLogConfig(cfg)
+	opts = append(opts, WithConfigData(configKVMap))
 
 	service := &Service{
 		cfg:         cfg,
 		stopper:     stopper.NewStopper("log-service"),
 		fileService: fileService,
+		shutdownC:   shutdownC,
 	}
 	for _, opt := range opts {
 		opt(service)
@@ -140,7 +152,7 @@ func NewService(
 
 	// TODO: check and fix all these magic numbers
 	codec := morpc.NewMessageCodec(mf, codecOpts...)
-	server, err := morpc.NewRPCServer(LogServiceRPCName, cfg.ServiceListenAddress, codec,
+	server, err := morpc.NewRPCServer(LogServiceRPCName, cfg.LogServiceListenAddr(), codec,
 		morpc.WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(i interface{}) {
 			msg := i.(morpc.RPCMessage)
 			if !msg.InternalMessage() {
@@ -182,6 +194,7 @@ func NewService(
 		}
 	}
 	service.initTaskHolder()
+	service.initSqlWriterFactory()
 	return service, nil
 }
 
@@ -262,8 +275,8 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 		return s.handleCNHeartbeat(ctx, req), pb.LogRecordResponse{}
 	case pb.CN_ALLOCATE_ID:
 		return s.handleCNAllocateID(ctx, req), pb.LogRecordResponse{}
-	case pb.DN_HEARTBEAT:
-		return s.handleDNHeartbeat(ctx, req), pb.LogRecordResponse{}
+	case pb.TN_HEARTBEAT:
+		return s.handleTNHeartbeat(ctx, req), pb.LogRecordResponse{}
 	case pb.CHECK_HAKEEPER:
 		return s.handleCheckHAKeeper(ctx, req), pb.LogRecordResponse{}
 	case pb.GET_CLUSTER_DETAILS:
@@ -274,8 +287,20 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 		return s.handleGetShardInfo(ctx, req), pb.LogRecordResponse{}
 	case pb.UPDATE_CN_LABEL:
 		return s.handleUpdateCNLabel(ctx, req), pb.LogRecordResponse{}
+	case pb.UPDATE_CN_WORK_STATE:
+		return s.handleUpdateCNWorkState(ctx, req), pb.LogRecordResponse{}
+	case pb.PATCH_CN_STORE:
+		return s.handlePatchCNStore(ctx, req), pb.LogRecordResponse{}
+	case pb.DELETE_CN_STORE:
+		return s.handleDeleteCNStore(ctx, req), pb.LogRecordResponse{}
+	case pb.PROXY_HEARTBEAT:
+		return s.handleProxyHeartbeat(ctx, req), pb.LogRecordResponse{}
 	default:
-		panic("unknown log service method type")
+		resp := getResponse(req)
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(
+			moerr.NewNotSupported(ctx,
+				fmt.Sprintf("logservice method type %d", req.Method)))
+		return resp, pb.LogRecordResponse{}
 	}
 }
 
@@ -327,7 +352,7 @@ func (s *Service) handleTsoUpdate(ctx context.Context, req pb.Request) pb.Respon
 func (s *Service) handleConnect(ctx context.Context, req pb.Request) pb.Response {
 	r := req.LogRequest
 	resp := getResponse(req)
-	if err := s.store.getOrExtendDNLease(ctx, r.ShardID, r.DNID); err != nil {
+	if err := s.store.getOrExtendTNLease(ctx, r.ShardID, r.TNID); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	}
 	return resp
@@ -390,9 +415,14 @@ func (s *Service) handleGetTruncatedIndex(ctx context.Context, req pb.Request) p
 
 // TODO: add tests to see what happens when request is sent to non hakeeper stores
 func (s *Service) handleLogHeartbeat(ctx context.Context, req pb.Request) pb.Response {
+	start := time.Now()
+	defer func() {
+		v2.LogHeartbeatRecvHistogram.Observe(time.Since(start).Seconds())
+	}()
 	hb := req.LogHeartbeat
 	resp := getResponse(req)
 	if cb, err := s.store.addLogStoreHeartbeat(ctx, *hb); err != nil {
+		v2.LogHeartbeatRecvFailureCounter.Inc()
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
 	} else {
@@ -403,9 +433,14 @@ func (s *Service) handleLogHeartbeat(ctx context.Context, req pb.Request) pb.Res
 }
 
 func (s *Service) handleCNHeartbeat(ctx context.Context, req pb.Request) pb.Response {
+	start := time.Now()
+	defer func() {
+		v2.CNHeartbeatRecvHistogram.Observe(time.Since(start).Seconds())
+	}()
 	hb := req.CNHeartbeat
 	resp := getResponse(req)
 	if cb, err := s.store.addCNStoreHeartbeat(ctx, *hb); err != nil {
+		v2.CNHeartbeatRecvFailureCounter.Inc()
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
 	} else {
@@ -426,10 +461,15 @@ func (s *Service) handleCNAllocateID(ctx context.Context, req pb.Request) pb.Res
 	return resp
 }
 
-func (s *Service) handleDNHeartbeat(ctx context.Context, req pb.Request) pb.Response {
-	hb := req.DNHeartbeat
+func (s *Service) handleTNHeartbeat(ctx context.Context, req pb.Request) pb.Response {
+	start := time.Now()
+	defer func() {
+		v2.TNHeartbeatRecvHistogram.Observe(time.Since(start).Seconds())
+	}()
+	hb := req.TNHeartbeat
 	resp := getResponse(req)
-	if cb, err := s.store.addDNStoreHeartbeat(ctx, *hb); err != nil {
+	if cb, err := s.store.addTNStoreHeartbeat(ctx, *hb); err != nil {
+		v2.TNHeartbeatRecvFailureCounter.Inc()
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
 	} else {
@@ -453,6 +493,47 @@ func (s *Service) handleUpdateCNLabel(ctx context.Context, req pb.Request) pb.Re
 	if err := s.store.updateCNLabel(ctx, *label); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
+	}
+	return resp
+}
+
+func (s *Service) handleUpdateCNWorkState(ctx context.Context, req pb.Request) pb.Response {
+	workState := req.CNWorkState
+	resp := getResponse(req)
+	if err := s.store.updateCNWorkState(ctx, *workState); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+		return resp
+	}
+	return resp
+}
+
+func (s *Service) handlePatchCNStore(ctx context.Context, req pb.Request) pb.Response {
+	stateLabel := req.CNStateLabel
+	resp := getResponse(req)
+	if err := s.store.patchCNStore(ctx, *stateLabel); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+		return resp
+	}
+	return resp
+}
+
+func (s *Service) handleDeleteCNStore(ctx context.Context, req pb.Request) pb.Response {
+	cnStore := req.DeleteCNStore
+	resp := getResponse(req)
+	if err := s.store.deleteCNStore(ctx, *cnStore); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+		return resp
+	}
+	return resp
+}
+
+func (s *Service) handleProxyHeartbeat(ctx context.Context, req pb.Request) pb.Response {
+	resp := getResponse(req)
+	if cb, err := s.store.addProxyHeartbeat(ctx, *req.ProxyHeartbeat); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+		return resp
+	} else {
+		resp.CommandBatch = &cb
 	}
 	return resp
 }

@@ -50,34 +50,48 @@ func init() {
 
 var inited uint32
 
-func InitWithConfig(ctx context.Context, SV *config.ObservabilityParameters, opts ...TracerProviderOption) error {
+func InitWithConfig(ctx context.Context, SV *config.ObservabilityParameters, opts ...TracerProviderOption) (error, bool) {
 	opts = append(opts,
 		withMOVersion(SV.MoVersion),
 		EnableTracer(!SV.DisableTrace),
-		WithBatchProcessMode(SV.BatchProcessor),
 		WithExportInterval(SV.TraceExportInterval),
 		WithLongQueryTime(SV.LongQueryTime),
+		WithLongSpanTime(SV.LongSpanTime.Duration),
+		WithSpanDisable(SV.DisableSpan),
+		WithSkipRunningStmt(SV.SkipRunningStmt),
+		WithSQLWriterDisable(SV.DisableSqlWriter),
+		WithAggregatorDisable(SV.DisableStmtAggregation),
+		WithAggregatorWindow(SV.AggregationWindow.Duration),
+		WithSelectThreshold(SV.SelectAggrThreshold.Duration),
+		WithStmtMergeEnable(SV.EnableStmtMerge),
+
 		DebugMode(SV.EnableTraceDebug),
 		WithBufferSizeThreshold(SV.BufferSize),
 	)
 	return Init(ctx, opts...)
 }
 
-func Init(ctx context.Context, opts ...TracerProviderOption) error {
+// Init initializes the tracer with the given options.
+// If EnableTracer is set to false, this function does nothing.
+// If EnableTracer is set to true, the tracer is initialized.
+// Init only allow called once.
+func Init(ctx context.Context, opts ...TracerProviderOption) (err error, act bool) {
 	// fix multi-init in standalone
 	if !atomic.CompareAndSwapUint32(&inited, 0, 1) {
-		return nil
+		return nil, false
 	}
 
 	// init TraceProvider
 	SetTracerProvider(newMOTracerProvider(opts...))
 	config := &GetTracerProvider().tracerProviderConfig
 
-	// init Tracer
-	gTracer = GetTracerProvider().Tracer("MatrixOne")
-	_, span := gTracer.Start(ctx, "TraceInit")
-	defer span.End()
-	defer trace.SetDefaultTracer(gTracer)
+	if !config.disableSpan {
+		// init Tracer
+		gTracer = GetTracerProvider().Tracer("MatrixOne")
+		_, span := gTracer.Start(ctx, "TraceInit")
+		defer span.End()
+		defer trace.SetDefaultTracer(gTracer)
+	}
 
 	// init DefaultContext / DefaultSpanContext
 	var spanId trace.SpanID
@@ -89,17 +103,22 @@ func Init(ctx context.Context, opts ...TracerProviderOption) error {
 
 	// init Exporter
 	if err := initExporter(ctx, config); err != nil {
-		return err
+		return err, true
 	}
+
+	// init all mo_ctl controlled spans
+	trace.InitMOCtledSpan()
 
 	// init tool dependence
 	logutil.SetLogReporter(&logutil.TraceReporter{ReportZap: ReportZap, ContextField: trace.ContextField})
 	logutil.SpanFieldKey.Store(trace.SpanFieldKey)
 	errutil.SetErrorReporter(ReportError)
 
-	logutil.Infof("trace with LongQueryTime: %v", time.Duration(GetTracerProvider().longQueryTime))
+	logutil.Debugf("trace with LongQueryTime: %v", time.Duration(GetTracerProvider().longQueryTime))
+	logutil.Debugf("trace with LongSpanTime: %v", GetTracerProvider().longSpanTime)
+	logutil.Debugf("trace with DisableSpan: %v", GetTracerProvider().disableSpan)
 
-	return nil
+	return nil, true
 }
 
 func initExporter(ctx context.Context, config *tracerProviderConfig) error {
@@ -115,18 +134,10 @@ func initExporter(ctx context.Context, config *tracerProviderConfig) error {
 	defaultOptions := []BufferOption{BufferWithReminder(defaultReminder), BufferWithSizeThreshold(config.bufferSizeThreshold)}
 	var p = config.batchProcessor
 	// init BatchProcess for trace/log/error
-	switch {
-	case config.batchProcessMode == InternalExecutor:
-		// register buffer pipe implements
-		panic(moerr.NewNotSupported(ctx, "not support process mode: %s", config.batchProcessMode))
-	case config.batchProcessMode == FileService:
-		p.Register(&MOSpan{}, NewBufferPipe2CSVWorker(defaultOptions...))
-		p.Register(&MOZapLog{}, NewBufferPipe2CSVWorker(defaultOptions...))
-		p.Register(&StatementInfo{}, NewBufferPipe2CSVWorker(defaultOptions...))
-		p.Register(&MOErrorHolder{}, NewBufferPipe2CSVWorker(defaultOptions...))
-	default:
-		return moerr.NewInternalError(ctx, "unknown batchProcessMode: %s", config.batchProcessMode)
-	}
+	p.Register(&MOSpan{}, NewBufferPipe2CSVWorker(defaultOptions...))
+	p.Register(&MOZapLog{}, NewBufferPipe2CSVWorker(defaultOptions...))
+	p.Register(&StatementInfo{}, NewBufferPipe2CSVWorker(defaultOptions...))
+	p.Register(&MOErrorHolder{}, NewBufferPipe2CSVWorker(defaultOptions...))
 	logutil.Info("init GlobalBatchProcessor")
 	if !p.Start() {
 		return moerr.NewInternalError(ctx, "trace exporter already started")
@@ -139,14 +150,10 @@ func initExporter(ctx context.Context, config *tracerProviderConfig) error {
 // InitSchema
 // PS: only in standalone or CN node can init schema
 func InitSchema(ctx context.Context, sqlExecutor func() ie.InternalExecutor) error {
-	config := &GetTracerProvider().tracerProviderConfig
-	switch config.batchProcessMode {
-	case InternalExecutor, FileService:
-		if err := InitSchemaByInnerExecutor(ctx, sqlExecutor); err != nil {
-			return err
-		}
-	default:
-		return moerr.NewInternalError(ctx, "unknown batchProcessMode: %s", config.batchProcessMode)
+	c := &GetTracerProvider().tracerProviderConfig
+	WithSQLExecutor(sqlExecutor).apply(c)
+	if err := InitSchemaByInnerExecutor(ctx, sqlExecutor); err != nil {
+		return err
 	}
 	return nil
 }
@@ -199,6 +206,16 @@ func GetTracerProvider() *MOTracerProvider {
 	return gTracerProvider.Load().(*MOTracerProvider)
 }
 
+func GetSQLExecutorFactory() func() ie.InternalExecutor {
+	p := GetTracerProvider()
+	if p != nil {
+		p.mux.Lock()
+		defer p.mux.Unlock()
+		return p.tracerProviderConfig.sqlExecutor
+	}
+	return nil
+}
+
 type PipeImpl batchpipe.PipeImpl[batchpipe.HasName, any]
 
 type BatchProcessor interface {
@@ -206,6 +223,10 @@ type BatchProcessor interface {
 	Start() bool
 	Stop(graceful bool) error
 	Register(name batchpipe.HasName, impl PipeImpl)
+}
+
+type DiscardableCollector interface {
+	DiscardableCollect(context.Context, batchpipe.HasName) error
 }
 
 var _ BatchProcessor = &NoopBatchProcessor{}

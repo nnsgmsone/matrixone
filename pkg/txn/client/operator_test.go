@@ -31,11 +31,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func TestRead(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
-		result, err := tc.Read(ctx, []txn.TxnRequest{newDNRequest(1, 1), newDNRequest(2, 2)})
+		result, err := tc.Read(ctx, []txn.TxnRequest{newTNRequest(1, 1), newTNRequest(2, 2)})
 		assert.NoError(t, err)
 		assert.Equal(t, 2, len(result.Responses))
 		assert.Equal(t, []byte("r-1"), result.Responses[0].CNOpResponse.Payload)
@@ -45,33 +46,33 @@ func TestRead(t *testing.T) {
 
 func TestWrite(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
-		assert.Empty(t, tc.mu.txn.DNShards)
-		result, err := tc.Write(ctx, []txn.TxnRequest{newDNRequest(1, 1), newDNRequest(2, 2)})
+		assert.Empty(t, tc.mu.txn.TNShards)
+		result, err := tc.Write(ctx, []txn.TxnRequest{newTNRequest(1, 1), newTNRequest(2, 2)})
 		assert.NoError(t, err)
 		assert.Equal(t, 2, len(result.Responses))
 		assert.Equal(t, []byte("w-1"), result.Responses[0].CNOpResponse.Payload)
 		assert.Equal(t, []byte("w-2"), result.Responses[1].CNOpResponse.Payload)
 
-		assert.Equal(t, uint64(1), tc.mu.txn.DNShards[0].ShardID)
-		assert.Equal(t, 2, len(tc.mu.txn.DNShards))
+		assert.Equal(t, uint64(1), tc.mu.txn.TNShards[0].ShardID)
+		assert.Equal(t, 2, len(tc.mu.txn.TNShards))
 	})
 }
 
 func TestWriteWithCacheWriteEnabled(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
-		assert.Empty(t, tc.mu.txn.DNShards)
-		responses, err := tc.Write(ctx, []txn.TxnRequest{newDNRequest(1, 1), newDNRequest(2, 2)})
+		assert.Empty(t, tc.mu.txn.TNShards)
+		responses, err := tc.Write(ctx, []txn.TxnRequest{newTNRequest(1, 1), newTNRequest(2, 2)})
 		assert.NoError(t, err)
 		assert.Empty(t, responses)
-		assert.Equal(t, uint64(1), tc.mu.txn.DNShards[0].ShardID)
-		assert.Equal(t, 2, len(tc.mu.txn.DNShards))
+		assert.Equal(t, uint64(1), tc.mu.txn.TNShards[0].ShardID)
+		assert.Equal(t, 2, len(tc.mu.txn.TNShards))
 		assert.Empty(t, ts.getLastRequests())
 	}, WithTxnCacheWrite())
 }
 
 func TestRollback(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
-		tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 1}})
+		tc.mu.txn.TNShards = append(tc.mu.txn.TNShards, metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}})
 		err := tc.Rollback(ctx)
 		assert.NoError(t, err)
 
@@ -87,7 +88,7 @@ func TestRollbackWithClosedTxn(t *testing.T) {
 			return nil, moerr.NewTxnClosed(ctx, tc.txnID)
 		})
 
-		tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 1}})
+		tc.mu.txn.TNShards = append(tc.mu.txn.TNShards, metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}})
 		err := tc.Rollback(ctx)
 		assert.NoError(t, err)
 	})
@@ -111,7 +112,7 @@ func TestRollbackReadOnly(t *testing.T) {
 
 func TestCommit(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
-		tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 1}})
+		tc.mu.txn.TNShards = append(tc.mu.txn.TNShards, metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}})
 		err := tc.Commit(ctx)
 		assert.NoError(t, err)
 		assert.Equal(t, tc.mu.txn.SnapshotTS.Next(), tc.mu.txn.CommitTS)
@@ -155,7 +156,7 @@ func TestCommitWithLockTables(t *testing.T) {
 		tc.mu.txn.Mode = txn.TxnMode_Pessimistic
 		tc.option.lockService = s
 		tc.AddLockTable(lock.LockTable{Table: 1})
-		tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 1}})
+		tc.mu.txn.TNShards = append(tc.mu.txn.TNShards, metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}})
 		err := tc.Commit(ctx)
 		assert.NoError(t, err)
 
@@ -188,7 +189,7 @@ func TestMissingSenderWillPanic(t *testing.T) {
 		assert.Fail(t, "must panic")
 	}()
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	newTxnOperator(nil, txn.TxnMeta{})
+	newTxnOperator(nil, nil, txn.TxnMeta{})
 }
 
 func TestMissingTxnIDWillPanic(t *testing.T) {
@@ -199,7 +200,7 @@ func TestMissingTxnIDWillPanic(t *testing.T) {
 		assert.Fail(t, "must panic")
 	}()
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	newTxnOperator(newTestTxnSender(), txn.TxnMeta{})
+	newTxnOperator(nil, newTestTxnSender(), txn.TxnMeta{})
 }
 
 func TestEmptyTxnSnapshotTSWillPanic(t *testing.T) {
@@ -210,7 +211,7 @@ func TestEmptyTxnSnapshotTSWillPanic(t *testing.T) {
 		assert.Fail(t, "must panic")
 	}()
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	newTxnOperator(newTestTxnSender(), txn.TxnMeta{ID: []byte{1}})
+	newTxnOperator(nil, newTestTxnSender(), txn.TxnMeta{ID: []byte{1}})
 }
 
 func TestReadOnlyAndCacheWriteBothSetWillPanic(t *testing.T) {
@@ -222,6 +223,7 @@ func TestReadOnlyAndCacheWriteBothSetWillPanic(t *testing.T) {
 	}()
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 	newTxnOperator(
+		nil,
 		newTestTxnSender(),
 		txn.TxnMeta{ID: []byte{1}, SnapshotTS: timestamp.Timestamp{PhysicalTime: 1}},
 		WithTxnReadyOnly(),
@@ -270,7 +272,7 @@ func TestCacheWrites(t *testing.T) {
 
 func TestCacheWritesWillInsertBeforeRead(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
-		result, err := tc.Write(ctx, []txn.TxnRequest{newDNRequest(1, 1), newDNRequest(2, 2), newDNRequest(3, 3)})
+		result, err := tc.Write(ctx, []txn.TxnRequest{newTNRequest(1, 1), newTNRequest(2, 2), newTNRequest(3, 3)})
 		assert.NoError(t, err)
 		assert.Empty(t, result)
 		assert.Equal(t, 3, len(tc.mu.cachedWrites))
@@ -278,7 +280,7 @@ func TestCacheWritesWillInsertBeforeRead(t *testing.T) {
 		assert.Equal(t, 1, len(tc.mu.cachedWrites[2]))
 		assert.Equal(t, 1, len(tc.mu.cachedWrites[3]))
 
-		result, err = tc.Read(ctx, []txn.TxnRequest{newDNRequest(11, 1), newDNRequest(22, 2), newDNRequest(33, 3), newDNRequest(4, 4)})
+		result, err = tc.Read(ctx, []txn.TxnRequest{newTNRequest(11, 1), newTNRequest(22, 2), newTNRequest(33, 3), newTNRequest(4, 4)})
 		assert.NoError(t, err)
 		assert.Equal(t, 4, len(result.Responses))
 		assert.Equal(t, []byte("r-11"), result.Responses[0].CNOpResponse.Payload)
@@ -365,7 +367,9 @@ func TestSnapshotTxnOperator(t *testing.T) {
 
 		tc2, err := newTxnOperatorWithSnapshot(tc.sender, v)
 		assert.NoError(t, err)
+		assert.True(t, tc2.mu.txn.Mirror)
 
+		tc2.mu.txn.Mirror = false
 		assert.Equal(t, tc.mu.txn, tc2.mu.txn)
 		assert.False(t, tc2.option.coordinator)
 		tc2.option.coordinator = true
@@ -379,15 +383,15 @@ func TestApplySnapshotTxnOperator(t *testing.T) {
 		snapshot := &txn.CNTxnSnapshot{}
 		snapshot.Txn.ID = tc.mu.txn.ID
 		assert.NoError(t, tc.ApplySnapshot(protoc.MustMarshal(snapshot)))
-		assert.Equal(t, 0, len(tc.mu.txn.DNShards))
+		assert.Equal(t, 0, len(tc.mu.txn.TNShards))
 
-		snapshot.Txn.DNShards = append(snapshot.Txn.DNShards, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 1}})
+		snapshot.Txn.TNShards = append(snapshot.Txn.TNShards, metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}})
 		assert.NoError(t, tc.ApplySnapshot(protoc.MustMarshal(snapshot)))
-		assert.Equal(t, 1, len(tc.mu.txn.DNShards))
+		assert.Equal(t, 1, len(tc.mu.txn.TNShards))
 
-		snapshot.Txn.DNShards = append(snapshot.Txn.DNShards, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 2}})
+		snapshot.Txn.TNShards = append(snapshot.Txn.TNShards, metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 2}})
 		assert.NoError(t, tc.ApplySnapshot(protoc.MustMarshal(snapshot)))
-		assert.Equal(t, 2, len(tc.mu.txn.DNShards))
+		assert.Equal(t, 2, len(tc.mu.txn.TNShards))
 
 		snapshot.LockTables = append(snapshot.LockTables, lock.LockTable{Table: 1})
 		assert.NoError(t, tc.ApplySnapshot(protoc.MustMarshal(snapshot)))
@@ -419,29 +423,7 @@ func TestAddLockTable(t *testing.T) {
 	})
 }
 
-func TestUpdateSnaphotTS(t *testing.T) {
-	runTimestampWaiterTests(t, func(waiter *timestampWaiter) {
-		runOperatorTests(t,
-			func(
-				ctx context.Context,
-				tc *txnOperator,
-				_ *testTxnSender) {
-				tc.timestampWaiter = waiter
-				ts := int64(1000)
-				tc.mu.txn.SnapshotTS = newTestTimestamp(0)
-				require.NoError(t, tc.UpdateSnapshot(context.Background(), newTestTimestamp(ts)))
-				require.Equal(t, newTestTimestamp(ts), tc.Txn().SnapshotTS)
-
-				require.NoError(t, tc.UpdateSnapshot(context.Background(), newTestTimestamp(ts-1)))
-				require.Equal(t, newTestTimestamp(ts), tc.Txn().SnapshotTS)
-
-				require.NoError(t, tc.UpdateSnapshot(context.Background(), newTestTimestamp(ts+1)))
-				require.Equal(t, newTestTimestamp(ts+1), tc.Txn().SnapshotTS)
-			})
-	})
-}
-
-func TestUpdateSnaphotTSWithWaiter(t *testing.T) {
+func TestUpdateSnapshotTSWithWaiter(t *testing.T) {
 	runTimestampWaiterTests(t, func(waiter *timestampWaiter) {
 		runOperatorTests(t,
 			func(
@@ -450,6 +432,7 @@ func TestUpdateSnaphotTSWithWaiter(t *testing.T) {
 				_ *testTxnSender) {
 				tc.timestampWaiter = waiter
 				tc.mu.txn.SnapshotTS = newTestTimestamp(10)
+				tc.mu.txn.Isolation = txn.TxnIsolation_SI
 
 				ts := int64(100)
 				c := make(chan struct{})
@@ -464,24 +447,87 @@ func TestUpdateSnaphotTSWithWaiter(t *testing.T) {
 	})
 }
 
-func runOperatorTests(t *testing.T, tc func(context.Context, *txnOperator, *testTxnSender), options ...TxnOption) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	RunTxnTests(func(
-		c TxnClient,
-		ts rpc.TxnSender) {
-		txn, err := c.New(ctx, newTestTimestamp(0), options...)
-		assert.Nil(t, err)
-		tc(ctx, txn.(*txnOperator), ts.(*testTxnSender))
+func TestRollbackMultiTimes(t *testing.T) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+		require.NoError(t, tc.Rollback(ctx))
+		require.Error(t, tc.Rollback(ctx))
 	})
 }
 
-func newDNRequest(op uint32, dn uint64) txn.TxnRequest {
+func TestWaitCommittedLogAppliedInRCMode(t *testing.T) {
+	lockservice.RunLockServicesForTest(
+		zap.InfoLevel,
+		[]string{"s1"},
+		time.Second,
+		func(lta lockservice.LockTableAllocator, ls []lockservice.LockService) {
+			l := ls[0]
+			tw := NewTimestampWaiter()
+			initTS := newTestTimestamp(1)
+			tw.NotifyLatestCommitTS(initTS)
+			runOperatorTestsWithOptions(
+				t,
+				func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+					require.Equal(t, initTS.Next(), tc.mu.txn.SnapshotTS)
+
+					_, err := l.Lock(ctx, 1, [][]byte{[]byte("k1")}, tc.mu.txn.ID, lock.LockOptions{})
+					require.NoError(t, err)
+
+					tc.mu.txn.TNShards = append(tc.mu.txn.TNShards, metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}})
+
+					ctx2, cancel := context.WithTimeout(context.Background(), time.Second*10)
+					defer cancel()
+					st := time.Now()
+					c := make(chan struct{})
+					go func() {
+						defer close(c)
+						time.Sleep(time.Second)
+						tw.NotifyLatestCommitTS(initTS.Next().Next())
+					}()
+					require.NoError(t, tc.Commit(ctx2))
+					<-c
+					require.True(t, time.Since(st) > time.Second)
+				},
+				newTestTimestamp(0).Next(),
+				[]TxnOption{WithTxnMode(txn.TxnMode_Pessimistic), WithTxnIsolation(txn.TxnIsolation_RC)},
+				WithTimestampWaiter(tw),
+				WithEnableSacrificingFreshness(),
+				WithLockService(l))
+		},
+		nil)
+}
+
+func runOperatorTests(
+	t *testing.T,
+	tc func(context.Context, *txnOperator, *testTxnSender),
+	options ...TxnOption) {
+	runOperatorTestsWithOptions(t, tc, newTestTimestamp(0), options)
+}
+
+func runOperatorTestsWithOptions(
+	t *testing.T,
+	tc func(context.Context, *txnOperator, *testTxnSender),
+	minTS timestamp.Timestamp,
+	options []TxnOption,
+	clientOptions ...TxnClientCreateOption) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	RunTxnTests(
+		func(
+			c TxnClient,
+			ts rpc.TxnSender) {
+			txn, err := c.New(ctx, minTS, options...)
+			assert.Nil(t, err)
+			tc(ctx, txn.(*txnOperator), ts.(*testTxnSender))
+		},
+		clientOptions...)
+}
+
+func newTNRequest(op uint32, tn uint64) txn.TxnRequest {
 	return txn.NewTxnRequest(&txn.CNOpRequest{
 		OpCode: op,
-		Target: metadata.DNShard{
-			DNShardRecord: metadata.DNShardRecord{ShardID: dn},
+		Target: metadata.TNShard{
+			TNShardRecord: metadata.TNShardRecord{ShardID: tn},
 		},
 	})
 }

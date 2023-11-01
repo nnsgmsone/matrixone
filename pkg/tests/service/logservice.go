@@ -54,16 +54,13 @@ type LogService interface {
 	GetClusterState() (*logpb.CheckerState, error)
 
 	// SetInitialClusterInfo sets cluster initialize state.
-	SetInitialClusterInfo(numOfLogShards, numOfDNShards, numOfLogReplicas uint64) error
+	SetInitialClusterInfo(numOfLogShards, numOfTNShards, numOfLogReplicas uint64) error
 
 	// StartHAKeeperReplica starts hakeeper replicas.
 	StartHAKeeperReplica(replicaID uint64, initialReplicas map[uint64]dragonboat.Target, join bool) error
 
 	// GetTaskService returns the taskService
 	GetTaskService() (taskservice.TaskService, bool)
-
-	// CreateInitTasks create init task
-	CreateInitTasks() error
 }
 
 // logService wraps logservice.WrappedService.
@@ -124,10 +121,10 @@ func (ls *logService) GetClusterState() (*logpb.CheckerState, error) {
 }
 
 func (ls *logService) SetInitialClusterInfo(
-	numOfLogShards, numOfDNShards, numOfLogReplicas uint64,
+	numOfLogShards, numOfTNShards, numOfLogReplicas uint64,
 ) error {
 	return ls.svc.SetInitialClusterInfo(
-		numOfLogShards, numOfDNShards, numOfLogReplicas,
+		numOfLogShards, numOfTNShards, numOfLogReplicas,
 	)
 }
 
@@ -141,10 +138,6 @@ func (ls *logService) GetTaskService() (taskservice.TaskService, bool) {
 	return ls.svc.GetTaskService()
 }
 
-func (ls *logService) CreateInitTasks() error {
-	return ls.svc.CreateInitTasks()
-}
-
 // logOptions is options for a log service.
 type logOptions []logservice.Option
 
@@ -154,7 +147,7 @@ func newLogService(
 	fs fileservice.FileService,
 	opts logOptions,
 ) (LogService, error) {
-	svc, err := logservice.NewWrappedService(cfg, fs, opts...)
+	svc, err := logservice.NewWrappedService(cfg, fs, nil, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -165,17 +158,16 @@ func newLogService(
 func buildLogConfig(
 	index int, opt Options, address serviceAddresses,
 ) logservice.Config {
-	cfg := logservice.Config{
-		UUID:                  uuid.New().String(),
-		FS:                    vfs.NewStrictMem(),
-		DeploymentID:          defaultDeploymentID,
-		RTTMillisecond:        defaultRTTMillisecond,
-		ServiceAddress:        address.getLogListenAddress(index), // hakeeper client use this address
-		RaftAddress:           address.getLogRaftAddress(index),
-		GossipAddress:         address.getLogGossipAddress(index),
-		GossipSeedAddresses:   address.getLogGossipSeedAddresses(),
-		GossipAllowSelfAsSeed: opt.initial.logReplicaNum == 1,
-	}
+	cfg := logservice.DefaultConfig()
+	cfg.UUID = uuid.New().String()
+	cfg.FS = vfs.NewStrictMem()
+	cfg.DeploymentID = defaultDeploymentID
+	cfg.RTTMillisecond = defaultRTTMillisecond
+	cfg.LogServicePort = getPort(address.getLogListenAddress(index)) // hakeeper client use this address
+	cfg.RaftPort = getPort(address.getLogRaftAddress(index))
+	cfg.GossipPort = getPort(address.getLogGossipAddress(index))
+	cfg.GossipSeedAddresses = address.getLogGossipSeedAddresses()
+	cfg.GossipAllowSelfAsSeed = opt.initial.logReplicaNum == 1
 	cfg.DataDir = filepath.Join(opt.rootDataDir, cfg.UUID)
 	cfg.HeartbeatInterval.Duration = opt.heartbeat.log
 	cfg.HAKeeperCheckInterval.Duration = opt.hakeeper.checkInterval
@@ -183,11 +175,8 @@ func buildLogConfig(
 	// setting hakeeper configuration
 	cfg.HAKeeperConfig.TickPerSecond = opt.hakeeper.tickPerSecond
 	cfg.HAKeeperConfig.LogStoreTimeout.Duration = opt.hakeeper.logStoreTimeout
-	cfg.HAKeeperConfig.DNStoreTimeout.Duration = opt.hakeeper.dnStoreTimeout
+	cfg.HAKeeperConfig.TNStoreTimeout.Duration = opt.hakeeper.tnStoreTimeout
 	cfg.HAKeeperConfig.CNStoreTimeout.Duration = opt.hakeeper.cnStoreTimeout
-
-	// we must invoke Fill in order to set default configuration value.
-	cfg.Fill()
 
 	return cfg
 }
@@ -250,7 +239,7 @@ func (c *testCluster) setInitialClusterInfo() error {
 
 		err = selected[0].SetInitialClusterInfo(
 			c.opt.initial.logShardNum,
-			c.opt.initial.dnShardNum,
+			c.opt.initial.tnShartnum,
 			c.opt.initial.logReplicaNum,
 		)
 		if err != nil {

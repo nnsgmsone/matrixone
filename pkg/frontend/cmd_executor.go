@@ -16,9 +16,15 @@ package frontend
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -45,7 +51,83 @@ type CmdExecutorImpl struct {
 	CmdExecutor
 }
 
-type doComQueryFunc func(context.Context, string) error
+// UserInput
+// normally, just use the sql.
+// for some special statement, like 'set_var', we need to use the stmt.
+// if the stmt is not nil, we neglect the sql.
+type UserInput struct {
+	sql           string
+	stmt          tree.Statement
+	sqlSourceType []string
+}
+
+func (ui *UserInput) getSql() string {
+	return ui.sql
+}
+
+// getStmt if the stmt is not nil, we neglect the sql.
+func (ui *UserInput) getStmt() tree.Statement {
+	return ui.stmt
+}
+
+func (ui *UserInput) getSqlSourceTypes() []string {
+	return ui.sqlSourceType
+}
+
+// isInternal return true if the stmt is not nil.
+// it means the statement is not from any client.
+// currently, we use it to handle the 'set_var' statement.
+func (ui *UserInput) isInternal() bool {
+	return ui.getStmt() != nil
+}
+
+func (ui *UserInput) genSqlSourceType(ses *Session) {
+	sql := ui.getSql()
+	ui.sqlSourceType = nil
+	if ui.getStmt() != nil {
+		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
+		return
+	}
+	tenant := ses.GetTenantInfo()
+	if tenant == nil || strings.HasPrefix(sql, cmdFieldListSql) {
+		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
+		return
+	}
+	flag, _, _ := isSpecialUser(tenant.User)
+	if flag {
+		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
+		return
+	}
+	for len(sql) > 0 {
+		p1 := strings.Index(sql, "/*")
+		p2 := strings.Index(sql, "*/")
+		if p1 < 0 || p2 < 0 || p2 <= p1+1 {
+			ui.sqlSourceType = append(ui.sqlSourceType, constant.ExternSql)
+			return
+		}
+		source := strings.TrimSpace(sql[p1+2 : p2])
+		if source == cloudUserTag {
+			ui.sqlSourceType = append(ui.sqlSourceType, constant.CloudUserSql)
+		} else if source == cloudNoUserTag {
+			ui.sqlSourceType = append(ui.sqlSourceType, constant.CloudNoUserSql)
+		} else if source == saveResultTag {
+			ui.sqlSourceType = append(ui.sqlSourceType, constant.CloudUserSql)
+		} else {
+			ui.sqlSourceType = append(ui.sqlSourceType, constant.ExternSql)
+		}
+		sql = sql[p2+2:]
+	}
+}
+
+func (ui *UserInput) getSqlSourceType(i int) string {
+	sqlType := ui.sqlSourceType[0]
+	if i < len(ui.sqlSourceType) {
+		sqlType = ui.sqlSourceType[i]
+	}
+	return sqlType
+}
+
+type doComQueryFunc func(context.Context, *UserInput) error
 
 type stmtExecStatus int
 
@@ -127,7 +209,7 @@ func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec 
 
 	// only log if time of compile is longer than 1s
 	if time.Since(cmpBegin) > time.Second {
-		logInfof(ses.GetDebugString(), "time of Exec.Build : %s", time.Since(cmpBegin).String())
+		logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Build : %s", time.Since(cmpBegin).String()))
 	}
 
 	err = stmtExec.ResponseBeforeExec(ctx, ses)
@@ -144,7 +226,7 @@ func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec 
 
 	// only log if time of run is longer than 1s
 	if time.Since(runBegin) > time.Second {
-		logInfof(ses.GetDebugString(), "time of Exec.Run : %s", time.Since(runBegin).String())
+		logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
 	}
 
 	_ = stmtExec.RecordExecPlan(ctx)
@@ -173,7 +255,12 @@ type baseStmtExecutor struct {
 	ComputationWrapper
 	tenantName string
 	status     stmtExecStatus
+	runResult  *util.RunResult
 	err        error
+}
+
+func (bse *baseStmtExecutor) GetAffectedRows() uint64 {
+	return bse.runResult.AffectRows
 }
 
 func (bse *baseStmtExecutor) GetStatus() stmtExecStatus {
@@ -217,7 +304,7 @@ func (bse *baseStmtExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Sessi
 		if ses.InMultiStmtTransactionMode() && ses.InActiveTransaction() {
 			ses.SetOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
 		}
-		logError(ses.GetDebugString(), bse.err.Error())
+		logError(ses, ses.GetDebugString(), bse.err.Error())
 		txnErr = ses.TxnRollbackSingleStatement(stmt)
 		if txnErr != nil {
 			incTransactionErrorsCounter(tenant, metric.SQLTypeRollback)
@@ -230,7 +317,9 @@ func (bse *baseStmtExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Sessi
 }
 
 func (bse *baseStmtExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	return bse.Run(0)
+	runResult, err := bse.Run(0)
+	bse.runResult = runResult
+	return err
 }
 
 func (bse *baseStmtExecutor) Setup(ctx context.Context, ses *Session) error {
@@ -300,7 +389,7 @@ func (bse *baseStmtExecutor) ResponseBeforeExec(ctx context.Context, ses *Sessio
 func (bse *baseStmtExecutor) ResponseAfterExec(ctx context.Context, ses *Session) error {
 	var err, retErr error
 	if bse.GetStatus() == stmtExecSuccess {
-		resp := NewOkResponse(bse.GetAffectedRows(), 0, 0, 0, int(COM_QUERY), "")
+		resp := NewOkResponse(bse.GetAffectedRows(), 0, 0, bse.GetServerStatus(), int(COM_QUERY), "")
 		if err = ses.GetMysqlProtocol().SendResponse(ctx, resp); err != nil {
 			retErr = moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
 			logStatementStatus(ctx, ses, bse.GetAst(), fail, retErr)

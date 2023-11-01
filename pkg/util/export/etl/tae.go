@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -36,6 +37,8 @@ const BatchSize = 8192
 
 var _ table.RowWriter = (*TAEWriter)(nil)
 
+// TAEWriter implements table.RowWriter and writes data to a tae file.
+// Deprecated
 type TAEWriter struct {
 	ctx          context.Context
 	columnsTypes []types.Type
@@ -51,6 +54,8 @@ type TAEWriter struct {
 	flushRows int
 }
 
+// NewTAEWriter returns a new instance of TAEWriter
+// Deprecated
 func NewTAEWriter(ctx context.Context, tbl *table.Table, mp *mpool.MPool, filePath string, fs fileservice.FileService) *TAEWriter {
 	w := &TAEWriter{
 		ctx:       ctx,
@@ -116,6 +121,7 @@ func (w *TAEWriter) WriteStrings(Line []string) error {
 			elems[colIdx] = table.Float64Field(val)
 		case types.T_char, types.T_varchar,
 			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+			//TAEWriter is deprecated. So no need to add T_array here.
 			elems[colIdx] = table.StringField(field)
 		case types.T_json:
 			elems[colIdx] = table.StringField(field)
@@ -211,6 +217,7 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []table.ColumnFie
 			cols[rowIdx] = field.GetFloat64()
 		case types.T_char, types.T_varchar,
 			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+			//TODO: How to handle T_array here?
 			switch field.Type {
 			case table.TVarchar, table.TText:
 				err := vector.SetStringAt(vec, rowIdx, field.String, mp)
@@ -218,8 +225,7 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []table.ColumnFie
 					return err
 				}
 			case table.TBytes:
-				dst := field.EncodeBytes()
-				err := vector.SetStringAt(vec, rowIdx, dst, mp)
+				err := vector.SetBytesAt(vec, rowIdx, field.Bytes, mp)
 				if err != nil {
 					return err
 				}
@@ -233,15 +239,28 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []table.ColumnFie
 				return moerr.NewInternalError(ctx, "not Support string type %v", field.Type)
 			}
 		case types.T_json:
-			// convert normal json-string to bytejson-bytes
-			jsonBytes, err := bytejson.ParseJsonByteFromString(field.String)
-			if err != nil {
-				return moerr.NewInternalError(ctx, "the input value is not json type for column %d: %v", colIdx, field)
+			switch field.Type {
+			case table.TVarchar, table.TText:
+				// convert normal json-string to bytejson-bytes
+				jsonBytes, err := bytejson.ParseJsonByteFromString(field.String)
+				if err != nil {
+					return moerr.NewInternalError(ctx, "the input value is not json type for column %d: %v", colIdx, field)
+				}
+				err = vector.SetBytesAt(vec, rowIdx, jsonBytes, mp)
+				if err != nil {
+					return err
+				}
+			case table.TBytes:
+				val := field.Bytes
+				if len(val) == 0 {
+					val = util.UnsafeStringToBytes(field.String)
+				}
+				err := vector.SetBytesAt(vec, rowIdx, val, mp)
+				if err != nil {
+					return err
+				}
 			}
-			err = vector.SetBytesAt(vec, rowIdx, jsonBytes, mp)
-			if err != nil {
-				return err
-			}
+
 		case types.T_datetime:
 			cols := vector.MustFixedCol[types.Datetime](vec)
 			switch field.Type {
@@ -274,6 +293,8 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []table.ColumnFie
 	return nil
 }
 
+// TAEReader implements the io.Reader interface for reading a tae file.
+// Deprecated
 type TAEReader struct {
 	ctx      context.Context
 	filepath string
@@ -291,6 +312,8 @@ type TAEReader struct {
 	rowIdx   int
 }
 
+// NewTaeReader returns a TAEReader.
+// Deprecated
 func NewTaeReader(ctx context.Context, tbl *table.Table, filePath string, filesize int64, fs fileservice.FileService, mp *mpool.MPool) (*TAEReader, error) {
 	var err error
 	r := &TAEReader{
@@ -369,7 +392,8 @@ func GetVectorArrayLen(ctx context.Context, vec *vector.Vector) (int, error) {
 	case types.T_float64:
 		cols := vector.MustFixedCol[float64](vec)
 		return len(cols), nil
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64:
 		cols := vector.MustFixedCol[types.Varlena](vec)
 		return len(cols), nil
 	case types.T_json:
@@ -379,7 +403,7 @@ func GetVectorArrayLen(ctx context.Context, vec *vector.Vector) (int, error) {
 		cols := vector.MustFixedCol[types.Datetime](vec)
 		return len(cols), nil
 	default:
-		return 0, moerr.NewInternalError(ctx, "the value type %d is not support now", *vec.GetType())
+		return 0, moerr.NewInternalError(ctx, "the value type with oid %d is not support now", vec.GetType().Oid)
 	}
 }
 
@@ -399,6 +423,12 @@ func ValToString(ctx context.Context, vec *vector.Vector, rowIdx int) (string, e
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		cols, area := vector.MustVarlenaRawData(vec)
 		return cols[rowIdx].GetString(area), nil
+	case types.T_array_float32:
+		cols, area := vector.MustVarlenaRawData(vec)
+		return types.ArrayToString[float32](types.GetArray[float32](&cols[rowIdx], area)), nil
+	case types.T_array_float64:
+		cols, area := vector.MustVarlenaRawData(vec)
+		return types.ArrayToString[float64](types.GetArray[float64](&cols[rowIdx], area)), nil
 	case types.T_json:
 		cols, area := vector.MustVarlenaRawData(vec)
 		val := cols[rowIdx].GetByteSlice(area)
@@ -408,6 +438,6 @@ func ValToString(ctx context.Context, vec *vector.Vector, rowIdx int) (string, e
 		cols := vector.MustFixedCol[types.Datetime](vec)
 		return table.Time2DatetimeString(cols[rowIdx].ConvertToGoTime(time.Local)), nil
 	default:
-		return "", moerr.NewInternalError(ctx, "the value type %d is not support now", *vec.GetType())
+		return "", moerr.NewInternalError(ctx, "the value type with oid %d is not support now", vec.GetType().Oid)
 	}
 }

@@ -53,6 +53,10 @@ func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 			if err != nil {
 				return nil, err
 			}
+		} else if _, ok := expr.Expr.(*plan.Expr_P); ok {
+			targetType := types.T_int64.ToType()
+			planTargetType := makePlan2Type(&targetType)
+			return appendCastBeforeExpr(b.GetContext(), expr, planTargetType)
 		} else {
 			return nil, moerr.NewSyntaxError(b.GetContext(), "only int64 support in limit/offset clause")
 		}
@@ -75,4 +79,8 @@ func (b *LimitBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth
 
 func (b *LimitBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
 	return nil, moerr.NewSyntaxError(b.GetContext(), "subquery not allowed in limit clause")
+}
+
+func (b *LimitBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
+	return nil, moerr.NewInvalidInput(b.GetContext(), "cannot bind time window functions '%s'", funcName)
 }

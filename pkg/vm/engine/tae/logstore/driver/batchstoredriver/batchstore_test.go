@@ -15,12 +15,11 @@
 package batchstoredriver
 
 import (
-	"os"
 	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	storeEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -28,12 +27,15 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+const (
+	Modulename = "batchstoredriver"
+)
+
 func initEnv(t *testing.T) *baseStore {
-	dir := "/tmp/logstore/teststore/batchstoredriver"
+	dir := testutils.InitTestEnv(Modulename, t)
 	name := "mock"
-	os.RemoveAll(dir)
 	cfg := &StoreCfg{
-		RotateChecker: NewMaxSizeRotateChecker(int(common.K) * 3),
+		RotateChecker: NewMaxSizeRotateChecker(int(mpool.KB) * 3),
 	}
 	s, err := NewBaseStore(dir, name, cfg)
 	assert.NoError(t, err)
@@ -48,7 +50,7 @@ func restartStore(s *baseStore, t *testing.T) *baseStore {
 	// 	logutil.Infof("v%d lsn%v",ver,lsns.Intervals)
 	// }
 	cfg := &StoreCfg{
-		RotateChecker: NewMaxSizeRotateChecker(int(common.K) * 3),
+		RotateChecker: NewMaxSizeRotateChecker(int(mpool.KB) * 3),
 	}
 	s, err = NewBaseStore(s.dir, s.name, cfg)
 	assert.NoError(t, err)

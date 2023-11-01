@@ -16,9 +16,10 @@ package compile
 
 import (
 	"context"
+	"fmt"
 	"hash/crc32"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"runtime/debug"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -32,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
@@ -48,45 +50,49 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
 )
 
-func DebugPrintScope(prefix []byte, ss []*Scope) {
-	for _, s := range ss {
-		DebugPrintScope(append(prefix, '\t'), s.PreScopes)
-		p := pipeline.NewMerge(s.Instructions, nil)
-		logutil.Debugf("%s:%v %v", prefix, s.Magic, p)
-	}
-}
-
 // Run read data from storage engine and run the instructions of scope.
 func (s *Scope) Run(c *Compile) (err error) {
+	var p *pipeline.Pipeline
+	defer func() {
+		if e := recover(); e != nil {
+			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
+		}
+		p.Cleanup(s.Proc, err != nil, err)
+	}()
+
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	// DataSource == nil specify the empty scan
 	if s.DataSource == nil {
-		p := pipeline.New(nil, s.Instructions, s.Reg)
+		p = pipeline.New(nil, s.Instructions, s.Reg)
 		if _, err = p.ConstRun(nil, s.Proc); err != nil {
 			return err
 		}
 	} else {
-		p := pipeline.New(s.DataSource.Attributes, s.Instructions, s.Reg)
+		p = pipeline.New(s.DataSource.Attributes, s.Instructions, s.Reg)
 		if s.DataSource.Bat != nil {
-			if _, err = p.ConstRun(s.DataSource.Bat, s.Proc); err != nil {
-				return err
-			}
+			_, err = p.ConstRun(s.DataSource.Bat, s.Proc)
 		} else {
-			if _, err = p.Run(s.DataSource.R, s.Proc); err != nil {
-				return err
-			}
+			_, err = p.Run(s.DataSource.R, s.Proc)
 		}
 	}
 
-	return nil
+	select {
+	case <-s.Proc.Ctx.Done():
+		err = nil
+	default:
+	}
+	return err
 }
 
 func (s *Scope) SetContextRecursively(ctx context.Context) {
@@ -102,20 +108,27 @@ func (s *Scope) SetContextRecursively(ctx context.Context) {
 // MergeRun range and run the scope's pre-scopes by go-routine, and finally run itself to do merge work.
 func (s *Scope) MergeRun(c *Compile) error {
 	errChan := make(chan error, len(s.PreScopes))
-	for _, scope := range s.PreScopes {
-		switch scope.Magic {
-		case Normal:
-			go func(cs *Scope) { errChan <- cs.Run(c) }(scope)
-		case Merge, MergeInsert:
-			go func(cs *Scope) { errChan <- cs.MergeRun(c) }(scope)
-		case Remote:
-			go func(cs *Scope) { errChan <- cs.RemoteRun(c) }(scope)
-		case Parallel:
-			go func(cs *Scope) { errChan <- cs.ParallelRun(c, cs.IsRemote) }(scope)
-		case Pushdown:
-			go func(cs *Scope) { errChan <- cs.PushdownRun() }(scope)
-		}
+	var wg sync.WaitGroup
+	for i := range s.PreScopes {
+		scope := s.PreScopes[i]
+		wg.Add(1)
+		ants.Submit(func() {
+			switch scope.Magic {
+			case Normal:
+				errChan <- scope.Run(c)
+			case Merge, MergeInsert:
+				errChan <- scope.MergeRun(c)
+			case Remote:
+				errChan <- scope.RemoteRun(c)
+			case Parallel:
+				errChan <- scope.ParallelRun(c, scope.IsRemote)
+			case Pushdown:
+				errChan <- scope.PushdownRun()
+			}
+			wg.Done()
+		})
 	}
+	defer wg.Wait()
 
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	var errReceiveChan chan error
@@ -125,11 +138,19 @@ func (s *Scope) MergeRun(c *Compile) error {
 	}
 	p := pipeline.NewMerge(s.Instructions, s.Reg)
 	if _, err := p.MergeRun(s.Proc); err != nil {
-		return err
+		select {
+		case <-s.Proc.Ctx.Done():
+		default:
+			p.Cleanup(s.Proc, true, err)
+			return err
+		}
 	}
-	// check sub-goroutine's error
-	if errReceiveChan == nil {
-		// check sub-goroutine's error
+	p.Cleanup(s.Proc, false, nil)
+
+	// receive and check error from pre-scopes and remote scopes.
+	preScopeCount := len(s.PreScopes)
+	remoteScopeCount := len(s.RemoteReceivRegInfos)
+	if remoteScopeCount == 0 {
 		for i := 0; i < len(s.PreScopes); i++ {
 			if err := <-errChan; err != nil {
 				return err
@@ -138,23 +159,22 @@ func (s *Scope) MergeRun(c *Compile) error {
 		return nil
 	}
 
-	slen := len(s.PreScopes)
-	rlen := len(s.RemoteReceivRegInfos)
 	for {
 		select {
 		case err := <-errChan:
 			if err != nil {
 				return err
 			}
-			slen--
+			preScopeCount--
+
 		case err := <-errReceiveChan:
 			if err != nil {
 				return err
 			}
-			rlen--
+			remoteScopeCount--
 		}
 
-		if slen == 0 && rlen == 0 {
+		if preScopeCount == 0 && remoteScopeCount == 0 {
 			return nil
 		}
 	}
@@ -164,8 +184,11 @@ func (s *Scope) MergeRun(c *Compile) error {
 // if no target node information, just execute it at local.
 func (s *Scope) RemoteRun(c *Compile) error {
 	// if send to itself, just run it parallel at local.
-	if len(s.NodeInfo.Addr) == 0 || !cnclient.IsCNClientReady() ||
-		len(c.addr) == 0 || isSameCN(c.addr, s.NodeInfo.Addr) {
+	if len(s.NodeInfo.Addr) == 0 || len(c.addr) == 0 || isSameCN(c.addr, s.NodeInfo.Addr) {
+		return s.ParallelRun(c, s.IsRemote)
+	}
+
+	if !cnclient.IsCNClientReady() {
 		return s.ParallelRun(c, s.IsRemote)
 	}
 
@@ -173,11 +196,17 @@ func (s *Scope) RemoteRun(c *Compile) error {
 		Debug("remote run pipeline",
 			zap.String("local-address", c.addr),
 			zap.String("remote-address", s.NodeInfo.Addr))
+
 	err := s.remoteRun(c)
-	// tell connect operator that it's over
-	arg := s.Instructions[len(s.Instructions)-1].Arg.(*connector.Argument)
-	arg.Free(s.Proc, err != nil)
-	return err
+	select {
+	case <-s.Proc.Ctx.Done():
+		// if context has done, it means other pipeline stop the query normally.
+		// so there is no need to return the error again.
+		return nil
+
+	default:
+		return err
+	}
 }
 
 // ParallelRun try to execute the scope in parallel way.
@@ -194,10 +223,110 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 	if s.DataSource == nil {
 		return s.MergeRun(c)
 	}
+
 	mcpu := s.NodeInfo.Mcpu
+	var err error
+
+	if len(s.DataSource.RuntimeFilterSpecs) > 0 {
+		exprs := make([]*plan.Expr, 0, len(s.DataSource.RuntimeFilterSpecs))
+		filters := make([]*pbpipeline.RuntimeFilter, 0, len(exprs))
+
+		for _, spec := range s.DataSource.RuntimeFilterSpecs {
+			c.lock.RLock()
+			receiver, ok := c.runtimeFilterReceiverMap[spec.Tag]
+			c.lock.RUnlock()
+			if !ok {
+				continue
+			}
+
+		FOR_LOOP:
+			for i := 0; i < receiver.size; i++ {
+				select {
+				case <-s.Proc.Ctx.Done():
+					return nil
+
+				case filter := <-receiver.ch:
+					switch filter.Typ {
+					case pbpipeline.RuntimeFilter_PASS:
+						continue
+
+					case pbpipeline.RuntimeFilter_DROP:
+						exprs = nil
+						// FIXME: Should give an empty "Data" and then early return
+						s.NodeInfo.Data = s.NodeInfo.Data[:1]
+						break FOR_LOOP
+
+					case pbpipeline.RuntimeFilter_IN:
+						inExpr := &plan.Expr{
+							Typ: &plan.Type{
+								Id:          int32(types.T_bool),
+								NotNullable: spec.Expr.Typ.NotNullable,
+							},
+							Expr: &plan.Expr_F{
+								F: &plan.Function{
+									Func: &plan.ObjectRef{
+										Obj:     function.InFunctionEncodedID,
+										ObjName: function.InFunctionName,
+									},
+									Args: []*plan.Expr{
+										spec.Expr,
+										{
+											Typ: &plan.Type{
+												Id: int32(types.T_tuple),
+											},
+											Expr: &plan.Expr_Bin{
+												Bin: &plan.BinaryData{
+													Data: filter.Data,
+												},
+											},
+										},
+									},
+								},
+							},
+						}
+
+						if s.DataSource.Expr == nil {
+							s.DataSource.Expr = inExpr
+						} else {
+							s.DataSource.Expr = &plan.Expr{
+								Typ: &plan.Type{
+									Id:          int32(types.T_bool),
+									NotNullable: s.DataSource.Expr.Typ.NotNullable && inExpr.Typ.NotNullable,
+								},
+								Expr: &plan.Expr_F{
+									F: &plan.Function{
+										Func: &plan.ObjectRef{
+											Obj:     function.AndFunctionEncodedID,
+											ObjName: function.AndFunctionName,
+										},
+										Args: []*plan.Expr{
+											s.DataSource.Expr,
+											inExpr,
+										},
+									},
+								},
+							}
+						}
+
+						// TODO: implement BETWEEN expression
+					}
+
+					exprs = append(exprs, spec.Expr)
+					filters = append(filters, filter)
+				}
+			}
+		}
+
+		if len(exprs) > 0 {
+			s.NodeInfo.Data, err = ApplyRuntimeFilters(c.ctx, s.Proc, s.DataSource.TableDef, s.NodeInfo.Data, exprs, filters)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
 	switch {
 	case remote:
-		var err error
 		ctx := c.ctx
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
@@ -206,20 +335,20 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(s.DataSource.AccountId.GetTenantId()))
 		}
 		rds, err = c.e.NewBlockReader(ctx, mcpu, s.DataSource.Timestamp, s.DataSource.Expr,
-			s.NodeInfo.Data, s.DataSource.TableDef)
+			s.NodeInfo.Data, s.DataSource.TableDef, c.proc)
 		if err != nil {
 			return err
 		}
 		s.NodeInfo.Data = nil
-	case s.NodeInfo.Rel != nil:
-		var err error
 
+	case s.NodeInfo.Rel != nil:
 		if rds, err = s.NodeInfo.Rel.NewReader(c.ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
 			return err
 		}
 		s.NodeInfo.Data = nil
+
+	//FIXME:: s.NodeInfo.Rel == nil, partition table?
 	default:
-		var err error
 		var db engine.Database
 		var rel engine.Relation
 
@@ -231,32 +360,69 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		if err != nil {
 			return err
 		}
-		rel, err = db.Relation(ctx, s.DataSource.RelationName)
+		rel, err = db.Relation(ctx, s.DataSource.RelationName, c.proc)
 		if err != nil {
 			var e error // avoid contamination of error messages
 			db, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, s.Proc.TxnOperator)
 			if e != nil {
 				return e
 			}
-			rel, e = db.Relation(c.ctx, engine.GetTempTableName(s.DataSource.SchemaName, s.DataSource.RelationName))
+			rel, e = db.Relation(c.ctx, engine.GetTempTableName(s.DataSource.SchemaName, s.DataSource.RelationName), c.proc)
 			if e != nil {
 				return err
 			}
 		}
-		if mainRds, err := rel.NewReader(ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
-			return err
-		} else {
+		if rel.GetEngineType() == engine.Memory ||
+			s.DataSource.PartitionRelationNames == nil {
+			mainRds, err := rel.NewReader(
+				ctx,
+				mcpu,
+				s.DataSource.Expr,
+				s.NodeInfo.Data)
+			if err != nil {
+				return err
+			}
 			rds = append(rds, mainRds...)
-		}
+		} else {
+			//handle partition table.
+			dirtyRanges := make(map[int][][]byte, 0)
+			cleanRanges := make([][]byte, 0, len(s.NodeInfo.Data))
+			ranges := s.NodeInfo.Data[1:]
+			for _, r := range ranges {
+				blkInfo := catalog.DecodeBlockInfo(r)
+				if !blkInfo.CanRemote {
+					if _, ok := dirtyRanges[blkInfo.PartitionNum]; !ok {
+						newRanges := make([][]byte, 0, 1)
+						newRanges = append(newRanges, []byte{})
+						dirtyRanges[blkInfo.PartitionNum] = newRanges
+					}
+					dirtyRanges[blkInfo.PartitionNum] =
+						append(dirtyRanges[blkInfo.PartitionNum], r)
+					continue
+				}
+				cleanRanges = append(cleanRanges, r)
+			}
 
-		// get readers of partitioned tables
-		if s.DataSource.PartitionRelationNames != nil {
-			for _, relName := range s.DataSource.PartitionRelationNames {
-				subrel, err := db.Relation(c.ctx, relName)
+			if len(cleanRanges) > 0 {
+				// create readers for reading clean blocks from main table.
+				mainRds, err := rel.NewReader(
+					ctx,
+					mcpu,
+					s.DataSource.Expr,
+					cleanRanges)
 				if err != nil {
 					return err
 				}
-				memRds, err := subrel.NewReader(c.ctx, mcpu, s.DataSource.Expr, nil)
+				rds = append(rds, mainRds...)
+
+			}
+			// create readers for reading dirty blocks from partition table.
+			for num, relName := range s.DataSource.PartitionRelationNames {
+				subrel, err := db.Relation(c.ctx, relName, c.proc)
+				if err != nil {
+					return err
+				}
+				memRds, err := subrel.NewReader(c.ctx, mcpu, s.DataSource.Expr, dirtyRanges[num])
 				if err != nil {
 					return err
 				}
@@ -297,7 +463,10 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
-	newScope := newParallelScope(s, ss)
+	newScope, err := newParallelScope(s, ss)
+	if err != nil {
+		return err
+	}
 	newScope.SetContextRecursively(s.Proc.Ctx)
 	return newScope.MergeRun(c)
 }
@@ -310,15 +479,15 @@ func (s *Scope) PushdownRun() error {
 	for {
 		bat := <-reg.Ch
 		if bat == nil {
-			s.Proc.Reg.InputBatch = bat
+			s.Proc.SetInputBatch(bat)
 			_, err = vm.Run(s.Instructions, s.Proc)
 			s.Proc.Cancel()
 			return err
 		}
-		if bat.Length() == 0 {
+		if bat.RowCount() == 0 {
 			continue
 		}
-		s.Proc.Reg.InputBatch = bat
+		s.Proc.SetInputBatch(bat)
 		if end, err = vm.Run(s.Instructions, s.Proc); err != nil || end {
 			return err
 		}
@@ -327,8 +496,20 @@ func (s *Scope) PushdownRun() error {
 
 func (s *Scope) JoinRun(c *Compile) error {
 	mcpu := s.NodeInfo.Mcpu
-	if mcpu < 1 {
-		mcpu = 1
+	{
+		fmt.Printf("++++isRight: %v, %v: right semi: %v\n", mcpu, s.isRight(),
+			s != nil && s.Instructions[0].Op == vm.RightSemi)
+	}
+	if mcpu <= 1 { // no need to parallel
+		buildScope := c.newJoinBuildScope(s, nil)
+		s.PreScopes = append(s.PreScopes, buildScope)
+		if s.BuildIdx > 1 {
+			probeScope := c.newJoinProbeScope(s, nil)
+			s.PreScopes = append(s.PreScopes, probeScope)
+		}
+		// this is for shuffle join probe scope
+		s.Proc.Reg.MergeReceivers[0].Ch = make(chan *batch.Batch, shuffleJoinProbeChannelBufferSize)
+		return s.MergeRun(c)
 	}
 
 	isRight := s.isRight()
@@ -337,6 +518,7 @@ func (s *Scope) JoinRun(c *Compile) error {
 	for i := range chp {
 		chp[i].IsEnd = true
 	}
+
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = &Scope{
@@ -347,10 +529,14 @@ func (s *Scope) JoinRun(c *Compile) error {
 		ss[i].Proc.Reg.MergeReceivers[1].Ch = make(chan *batch.Batch, 10)
 	}
 	probe_scope, build_scope := c.newJoinProbeScope(s, ss), c.newJoinBuildScope(s, ss)
-	s = newParallelScope(s, ss)
+	var err error
+	s, err = newParallelScope(s, ss)
+	if err != nil {
+		return err
+	}
 
 	if isRight {
-		channel := make(chan *bitmap.Bitmap)
+		channel := make(chan *bitmap.Bitmap, mcpu)
 		for i := range s.PreScopes {
 			switch arg := s.PreScopes[i].Instructions[0].Arg.(type) {
 			case *right.Argument:
@@ -377,10 +563,19 @@ func (s *Scope) JoinRun(c *Compile) error {
 		}
 	}
 	s.PreScopes = append(s.PreScopes, chp...)
-	s.PreScopes = append(s.PreScopes, probe_scope)
 	s.PreScopes = append(s.PreScopes, build_scope)
+	s.PreScopes = append(s.PreScopes, probe_scope)
 
 	return s.MergeRun(c)
+}
+
+func (s *Scope) isShuffle() bool {
+	// the pipeline is merge->group->xxx
+	if s != nil && len(s.Instructions) > 1 && (s.Instructions[1].Op == vm.Group) {
+		arg := s.Instructions[1].Arg.(*group.Argument)
+		return arg.IsShuffle
+	}
+	return false
 }
 
 func (s *Scope) isRight() bool {
@@ -393,7 +588,7 @@ func (s *Scope) LoadRun(c *Compile) error {
 	bat := batch.NewWithSize(1)
 	{
 		bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, c.proc.Mp())
-		bat.InitZsOne(1)
+		bat.SetRowCount(1)
 	}
 	for i := 0; i < mcpu; i++ {
 		ss[i] = &Scope{
@@ -405,12 +600,15 @@ func (s *Scope) LoadRun(c *Compile) error {
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
-	newScope := newParallelScope(s, ss)
+	newScope, err := newParallelScope(s, ss)
+	if err != nil {
+		return err
+	}
 
 	return newScope.MergeRun(c)
 }
 
-func newParallelScope(s *Scope, ss []*Scope) *Scope {
+func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 	var flg bool
 
 	for i, in := range s.Instructions {
@@ -421,7 +619,7 @@ func newParallelScope(s *Scope, ss []*Scope) *Scope {
 		case vm.Top:
 			flg = true
 			arg := in.Arg.(*top.Argument)
-			s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
+			s.Instructions = s.Instructions[i:]
 			s.Instructions[0] = vm.Instruction{
 				Op:  vm.MergeTop,
 				Idx: in.Idx,
@@ -430,8 +628,8 @@ func newParallelScope(s *Scope, ss []*Scope) *Scope {
 					Limit: arg.Limit,
 				},
 			}
-			for i := range ss {
-				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+			for j := range ss {
+				ss[j].appendInstruction(vm.Instruction{
 					Op:      vm.Top,
 					Idx:     in.Idx,
 					IsFirst: in.IsFirst,
@@ -444,28 +642,28 @@ func newParallelScope(s *Scope, ss []*Scope) *Scope {
 		case vm.Order:
 			flg = true
 			arg := in.Arg.(*order.Argument)
-			s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
+			s.Instructions = s.Instructions[i:]
 			s.Instructions[0] = vm.Instruction{
 				Op:  vm.MergeOrder,
 				Idx: in.Idx,
 				Arg: &mergeorder.Argument{
-					Fs: arg.Fs,
+					OrderBySpecs: arg.OrderBySpec,
 				},
 			}
-			for i := range ss {
-				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+			for j := range ss {
+				ss[j].appendInstruction(vm.Instruction{
 					Op:      vm.Order,
 					Idx:     in.Idx,
 					IsFirst: in.IsFirst,
 					Arg: &order.Argument{
-						Fs: arg.Fs,
+						OrderBySpec: arg.OrderBySpec,
 					},
 				})
 			}
 		case vm.Limit:
 			flg = true
 			arg := in.Arg.(*limit.Argument)
-			s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
+			s.Instructions = s.Instructions[i:]
 			s.Instructions[0] = vm.Instruction{
 				Op:  vm.MergeLimit,
 				Idx: in.Idx,
@@ -473,8 +671,8 @@ func newParallelScope(s *Scope, ss []*Scope) *Scope {
 					Limit: arg.Limit,
 				},
 			}
-			for i := range ss {
-				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+			for j := range ss {
+				ss[j].appendInstruction(vm.Instruction{
 					Op:      vm.Limit,
 					Idx:     in.Idx,
 					IsFirst: in.IsFirst,
@@ -486,7 +684,7 @@ func newParallelScope(s *Scope, ss []*Scope) *Scope {
 		case vm.Group:
 			flg = true
 			arg := in.Arg.(*group.Argument)
-			s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
+			s.Instructions = s.Instructions[i:]
 			s.Instructions[0] = vm.Instruction{
 				Op:  vm.MergeGroup,
 				Idx: in.Idx,
@@ -494,23 +692,24 @@ func newParallelScope(s *Scope, ss []*Scope) *Scope {
 					NeedEval: false,
 				},
 			}
-			for i := range ss {
-				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+			for j := range ss {
+				ss[j].appendInstruction(vm.Instruction{
 					Op:      vm.Group,
 					Idx:     in.Idx,
 					IsFirst: in.IsFirst,
 					Arg: &group.Argument{
-						Aggs:      arg.Aggs,
-						Exprs:     arg.Exprs,
-						Types:     arg.Types,
-						MultiAggs: arg.MultiAggs,
+						Aggs:           arg.Aggs,
+						Exprs:          arg.Exprs,
+						Types:          arg.Types,
+						MultiAggs:      arg.MultiAggs,
+						PartialResults: arg.PartialResults,
 					},
 				})
 			}
 		case vm.Offset:
 			flg = true
 			arg := in.Arg.(*offset.Argument)
-			s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
+			s.Instructions = s.Instructions[i:]
 			s.Instructions[0] = vm.Instruction{
 				Op:  vm.MergeOffset,
 				Idx: in.Idx,
@@ -518,8 +717,8 @@ func newParallelScope(s *Scope, ss []*Scope) *Scope {
 					Offset: arg.Offset,
 				},
 			}
-			for i := range ss {
-				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+			for j := range ss {
+				ss[j].appendInstruction(vm.Instruction{
 					Op:      vm.Offset,
 					Idx:     in.Idx,
 					IsFirst: in.IsFirst,
@@ -531,7 +730,7 @@ func newParallelScope(s *Scope, ss []*Scope) *Scope {
 		case vm.Output:
 		default:
 			for j := range ss {
-				ss[j].Instructions = append(ss[j].Instructions, dupInstruction(&in, nil, j))
+				ss[j].appendInstruction(dupInstruction(&in, nil, j))
 			}
 		}
 	}
@@ -543,6 +742,14 @@ func newParallelScope(s *Scope, ss []*Scope) *Scope {
 			Op:  vm.Merge,
 			Idx: s.Instructions[0].Idx, // TODO: remove it
 			Arg: &merge.Argument{},
+		}
+		//Add log for cn panic which reported on issue 10656
+		//If you find this log is printed, please report the repro details
+		if len(s.Instructions) < 2 {
+			logutil.Error("the length of s.Instructions is too short!"+DebugShowScopes([]*Scope{s}),
+				zap.String("stack", string(debug.Stack())),
+			)
+			return nil, moerr.NewInternalErrorNoCtx("the length of s.Instructions is too short !")
 		}
 		s.Instructions[1] = s.Instructions[len(s.Instructions)-1]
 		s.Instructions = s.Instructions[:2]
@@ -577,7 +784,7 @@ func newParallelScope(s *Scope, ss []*Scope) *Scope {
 			j++
 		}
 	}
-	return s
+	return s, nil
 }
 
 func (s *Scope) appendInstruction(in vm.Instruction) {
@@ -586,120 +793,32 @@ func (s *Scope) appendInstruction(in vm.Instruction) {
 	}
 }
 
-/*
-func dupScopeList(ss []*Scope) []*Scope {
-	rs := make([]*Scope, len(ss))
-	regMap := make(map[*process.WaitRegister]*process.WaitRegister)
-	var err error
-	for i := range ss {
-		rs[i], err = copyScope(ss[i], regMap)
-		if err != nil {
-			return nil
-		}
-	}
-
-	for i := range ss {
-		err = fillInstructionsByCopyScope(rs[i], ss[i], regMap)
-		if err != nil {
-			return nil
-		}
-	}
-	return rs
-}
-
-func copyScope(srcScope *Scope, regMap map[*process.WaitRegister]*process.WaitRegister) (*Scope, error) {
-	var err error
-	newScope := &Scope{
-		Magic:        srcScope.Magic,
-		IsJoin:       srcScope.IsJoin,
-		IsEnd:        srcScope.IsEnd,
-		IsRemote:     srcScope.IsRemote,
-		Plan:         srcScope.Plan,
-		PreScopes:    make([]*Scope, len(srcScope.PreScopes)),
-		Instructions: make([]vm.Instruction, len(srcScope.Instructions)),
-		NodeInfo: engine.Node{
-			Rel:  srcScope.NodeInfo.Rel,
-			Mcpu: srcScope.NodeInfo.Mcpu,
-			Id:   srcScope.NodeInfo.Id,
-			Addr: srcScope.NodeInfo.Addr,
-			Data: make([][]byte, len(srcScope.NodeInfo.Data)),
-		},
-		RemoteReceivRegInfos: srcScope.RemoteReceivRegInfos,
-	}
-
-	// copy node.Data
-	copy(newScope.NodeInfo.Data, srcScope.NodeInfo.Data)
-
-	if srcScope.DataSource != nil {
-		newScope.DataSource = &Source{
-			PushdownId:   srcScope.DataSource.PushdownId,
-			PushdownAddr: srcScope.DataSource.PushdownAddr,
-			SchemaName:   srcScope.DataSource.SchemaName,
-			RelationName: srcScope.DataSource.RelationName,
-			Attributes:   srcScope.DataSource.Attributes,
-			Timestamp: timestamp.Timestamp{
-				PhysicalTime: srcScope.DataSource.Timestamp.PhysicalTime,
-				LogicalTime:  srcScope.DataSource.Timestamp.LogicalTime,
-				NodeID:       srcScope.DataSource.Timestamp.NodeID,
-			},
-			// read only.
-			Expr:     srcScope.DataSource.Expr,
-			TableDef: srcScope.DataSource.TableDef,
-		}
-
-		// IF const run.
-		if srcScope.DataSource.Bat != nil {
-			newScope.DataSource.Bat, _ = constructValueScanBatch(context.TODO(), nil, nil)
-		}
-	}
-
-	newScope.Proc = process.NewFromProc(srcScope.Proc, srcScope.Proc.Ctx, len(srcScope.Proc.Reg.MergeReceivers))
-	for i := range srcScope.Proc.Reg.MergeReceivers {
-		regMap[srcScope.Proc.Reg.MergeReceivers[i]] = newScope.Proc.Reg.MergeReceivers[i]
-	}
-
-	//copy preScopes.
-	for i := range srcScope.PreScopes {
-		newScope.PreScopes[i], err = copyScope(srcScope.PreScopes[i], regMap)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return newScope, nil
-}
-
-func fillInstructionsByCopyScope(targetScope *Scope, srcScope *Scope,
-	regMap map[*process.WaitRegister]*process.WaitRegister) error {
-	var err error
-
-	for i := range srcScope.PreScopes {
-		if err = fillInstructionsByCopyScope(targetScope.PreScopes[i], srcScope.PreScopes[i], regMap); err != nil {
-			return err
-		}
-	}
-
-	for i := range srcScope.Instructions {
-		targetScope.Instructions[i] = dupInstruction(&srcScope.Instructions[i], regMap)
-	}
-	return nil
-}
-*/
-
 func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 	for i := range s.RemoteReceivRegInfos {
 		op := &s.RemoteReceivRegInfos[i]
+
 		go func(info *RemoteReceivRegInfo, reg *process.WaitRegister) {
+			// if context has done, it means other pipeline stop the query normally.
+			closeWithError := func(err error) {
+				if reg != nil {
+					reg.Ch <- nil
+					close(reg.Ch)
+				}
+
+				select {
+				case <-s.Proc.Ctx.Done():
+					errChan <- nil
+				default:
+					errChan <- err
+				}
+			}
 
 			streamSender, errStream := cnclient.GetStreamSender(info.FromAddr)
 			if errStream != nil {
-				close(reg.Ch)
-				errChan <- errStream
+				closeWithError(errStream)
 				return
 			}
-			defer func(streamSender morpc.Stream) {
-				close(reg.Ch)
-				_ = streamSender.Close(true)
-			}(streamSender)
+			defer streamSender.Close(true)
 
 			message := cnclient.AcquireMessage()
 			{
@@ -709,25 +828,21 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 				message.Uuid = info.Uuid[:]
 			}
 			if errSend := streamSender.Send(s.Proc.Ctx, message); errSend != nil {
-				errChan <- errSend
+				closeWithError(errSend)
 				return
 			}
 
 			messagesReceive, errReceive := streamSender.Receive()
 			if errReceive != nil {
-				errChan <- errReceive
+				closeWithError(errReceive)
 				return
 			}
 			var ch chan *batch.Batch
 			if reg != nil {
 				ch = reg.Ch
 			}
-			if err := receiveMsgAndForward(s.Proc, messagesReceive, ch); err != nil {
-				errChan <- err
-				return
-			}
-			reg.Ch <- nil
-			errChan <- nil
+			err := receiveMsgAndForward(s.Proc, messagesReceive, ch)
+			closeWithError(err)
 		}(op, s.Proc.Reg.MergeReceivers[op.Idx])
 	}
 }
@@ -737,10 +852,11 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 	var dataBuffer []byte
 	var ok bool
 	var m *pbpipeline.Message
+
 	for {
 		select {
 		case <-proc.Ctx.Done():
-			logutil.Errorf("proc ctx done during forward")
+			logutil.Warnf("proc ctx done during forward")
 			return nil
 		case val, ok = <-receiveCh:
 			if val == nil || !ok {
@@ -764,7 +880,12 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 		}
 
 		// normal receive
-		dataBuffer = append(dataBuffer, m.Data...)
+		if dataBuffer == nil {
+			dataBuffer = m.Data
+		} else {
+			dataBuffer = append(dataBuffer, m.Data...)
+		}
+
 		switch m.GetSid() {
 		case pbpipeline.WaitingNext:
 			continue
@@ -786,4 +907,24 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 			dataBuffer = nil
 		}
 	}
+}
+
+func (s *Scope) replace(c *Compile) error {
+	tblName := s.Plan.GetQuery().Nodes[0].ReplaceCtx.TableDef.Name
+	deleteCond := s.Plan.GetQuery().Nodes[0].ReplaceCtx.DeleteCond
+
+	delAffectedRows := uint64(0)
+	if deleteCond != "" {
+		result, err := c.runSqlWithResult(fmt.Sprintf("delete from %s where %s", tblName, deleteCond))
+		if err != nil {
+			return err
+		}
+		delAffectedRows = result.AffectedRows
+	}
+	result, err := c.runSqlWithResult("insert " + c.sql[7:])
+	if err != nil {
+		return err
+	}
+	c.addAffectedRows(result.AffectedRows + delAffectedRows)
+	return nil
 }

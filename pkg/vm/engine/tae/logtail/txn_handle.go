@@ -15,9 +15,13 @@
 package logtail
 
 import (
+	"context"
 	"fmt"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"sort"
+	"time"
 
+	"github.com/RoaringBitmap/roaring"
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -25,7 +29,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
@@ -39,14 +45,17 @@ const (
 	dataDelBatch
 	dbInsBatch
 	dbDelBatch
+	dbSpecialDeleteBatch
 	tblInsBatch
 	tblDelBatch
+	tblSpecialDeleteBatch
 	columnInsBatch
 	columnDelBatch
 	batchTotalNum
 )
 
 type TxnLogtailRespBuilder struct {
+	rt                        *dbutils.Runtime
 	currDBName, currTableName string
 	currDBID, currTableID     uint64
 	txn                       txnif.AsyncTxn
@@ -54,17 +63,32 @@ type TxnLogtailRespBuilder struct {
 	batches []*containers.Batch
 
 	logtails *[]logtail.TableLogtail
+
+	batchToClose []*containers.Batch
+	insertBatch  *roaring.Bitmap
 }
 
-func NewTxnLogtailRespBuilder() *TxnLogtailRespBuilder {
+func NewTxnLogtailRespBuilder(rt *dbutils.Runtime) *TxnLogtailRespBuilder {
 	logtails := make([]logtail.TableLogtail, 0)
 	return &TxnLogtailRespBuilder{
-		batches:  make([]*containers.Batch, batchTotalNum),
-		logtails: &logtails,
+		rt:           rt,
+		batches:      make([]*containers.Batch, batchTotalNum),
+		logtails:     &logtails,
+		batchToClose: make([]*containers.Batch, 0),
+		insertBatch:  roaring.New(),
 	}
 }
 
-func (b *TxnLogtailRespBuilder) CollectLogtail(txn txnif.AsyncTxn) *[]logtail.TableLogtail {
+func (b *TxnLogtailRespBuilder) Close() {
+	for _, bat := range b.batchToClose {
+		bat.Close()
+	}
+}
+
+func (b *TxnLogtailRespBuilder) CollectLogtail(txn txnif.AsyncTxn) (*[]logtail.TableLogtail, func()) {
+	now := time.Now()
+	defer v2.LogTailCollectDurationHistogram.Observe(time.Since(now).Seconds())
+
 	b.txn = txn
 	txn.GetStore().ObserveTxn(
 		b.visitDatabase,
@@ -78,7 +102,7 @@ func (b *TxnLogtailRespBuilder) CollectLogtail(txn txnif.AsyncTxn) *[]logtail.Ta
 	logtails := b.logtails
 	newlogtails := make([]logtail.TableLogtail, 0)
 	b.logtails = &newlogtails
-	return logtails
+	return logtails, b.Close
 }
 
 func (b *TxnLogtailRespBuilder) visitSegment(iseg any) {
@@ -89,7 +113,7 @@ func (b *TxnLogtailRespBuilder) visitSegment(iseg any) {
 	}
 
 	deleteAt := b.txn.GetPrepareTS()
-	rowid := segid2rowid(&seg.ID)
+	rowid := objectio.HackSegid2Rowid(&seg.ID)
 
 	if b.batches[segMetaDelBatch] == nil {
 		b.batches[segMetaDelBatch] = makeRespBatchFromSchema(DelSchema)
@@ -128,8 +152,13 @@ func (b *TxnLogtailRespBuilder) visitAppend(ibat any) {
 	// sort by seqnums
 	sort.Sort(src)
 	mybat := containers.NewBatchWithCapacity(int(src.NextSeqnum) + 2)
-	mybat.AddVector(catalog.AttrRowID, src.GetVectorByName(catalog.AttrRowID).CloneWindow(0, src.Length()))
-	commitVec := containers.MakeVector(types.T_TS.ToType())
+	mybat.AddVector(
+		catalog.AttrRowID,
+		src.GetVectorByName(catalog.AttrRowID).CloneWindowWithPool(0, src.Length(), b.rt.VectorPool.Small),
+	)
+	tsType := types.T_TS.ToType()
+	commitVec := b.rt.VectorPool.Small.GetVector(&tsType)
+	commitVec.PreExtend(src.Length())
 	for i := 0; i < src.Length(); i++ {
 		commitVec.Append(b.txn.GetPrepareTS(), false)
 	}
@@ -142,7 +171,8 @@ func (b *TxnLogtailRespBuilder) visitAppend(ibat any) {
 		for len(mybat.Vecs) < 2+int(seqnum) {
 			mybat.AppendPlaceholder()
 		}
-		mybat.AddVector(src.Attrs[i], src.Vecs[i].TryConvertConst())
+		vec := src.Vecs[i].CloneWindowWithPool(0, src.Length(), b.rt.VectorPool.Small)
+		mybat.AddVector(src.Attrs[i], vec)
 	}
 
 	if b.batches[dataInsBatch] == nil {
@@ -153,13 +183,17 @@ func (b *TxnLogtailRespBuilder) visitAppend(ibat any) {
 	}
 }
 
-func (b *TxnLogtailRespBuilder) visitDelete(vnode txnif.DeleteNode) {
+func (b *TxnLogtailRespBuilder) visitDelete(ctx context.Context, vnode txnif.DeleteNode) {
+	if vnode.IsPersistedDeletedNode() {
+		return
+	}
 	if b.batches[dataDelBatch] == nil {
 		b.batches[dataDelBatch] = makeRespBatchFromSchema(DelSchema)
 	}
 	node := vnode.(*updates.DeleteNode)
 	meta := node.GetMeta()
-	pkDef := meta.GetSchema().GetPrimaryKey()
+	schema := meta.GetSchema()
+	pkDef := schema.GetPrimaryKey()
 	deletes := node.GetRowMaskRefLocked()
 
 	batch := b.batches[dataDelBatch]
@@ -174,20 +208,33 @@ func (b *TxnLogtailRespBuilder) visitDelete(vnode txnif.DeleteNode) {
 	}
 
 	it := deletes.Iterator()
+	rowid2PK := node.DeletedPK()
 	for it.HasNext() {
 		del := it.Next()
 		rowid := objectio.NewRowid(&meta.ID, del)
 		rowIDVec.Append(*rowid, false)
 		commitTSVec.Append(b.txn.GetPrepareTS(), false)
+
+		v, ok := rowid2PK[del]
+		if ok {
+			pkVec.Extend(v)
+		}
+		//if !ok {
+		//	panic(fmt.Sprintf("rowid %d 's pk not found in rowid2PK.\n", del))
+		//}
+		//pkVec.Extend(v)
 	}
-	_ = meta.GetBlockData().Foreach(
-		pkDef.Idx,
-		func(v any, isNull bool, row int) error {
-			pkVec.Append(v, false)
-			return nil
-		},
-		deletes,
-	)
+
+	//_ = meta.GetBlockData().Foreach(
+	//	ctx,
+	//	schema,
+	//	pkDef.Idx,
+	//	func(v any, isNull bool, row int) error {
+	//		pkVec.Append(v, false)
+	//		return nil
+	//	},
+	//	&dels,
+	//)
 }
 
 func (b *TxnLogtailRespBuilder) visitTable(itbl any) {
@@ -196,16 +243,19 @@ func (b *TxnLogtailRespBuilder) visitTable(itbl any) {
 	// delete table
 	if node.DeletedAt.Equal(txnif.UncommitTS) {
 		if b.batches[columnDelBatch] == nil {
-			b.batches[columnDelBatch] = makeRespBatchFromSchema(DelSchema)
+			b.batches[columnDelBatch] = makeRespBatchFromSchema(ColumnDelSchema)
 		}
 		for _, usercol := range node.BaseNode.Schema.ColDefs {
-			b.batches[columnDelBatch].GetVectorByName(catalog.AttrRowID).Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", tbl.ID, usercol.Name))), false)
+			b.batches[columnDelBatch].GetVectorByName(catalog.AttrRowID).Append(objectio.HackBytes2Rowid([]byte(fmt.Sprintf("%d-%s", tbl.ID, usercol.Name))), false)
 			b.batches[columnDelBatch].GetVectorByName(catalog.AttrCommitTs).Append(b.txn.GetPrepareTS(), false)
+			b.batches[columnDelBatch].GetVectorByName(pkgcatalog.SystemColAttr_UniqName).Append([]byte(fmt.Sprintf("%d-%s", tbl.GetID(), usercol.Name)), false)
 		}
 		if b.batches[tblDelBatch] == nil {
-			b.batches[tblDelBatch] = makeRespBatchFromSchema(DelSchema)
+			b.batches[tblDelBatch] = makeRespBatchFromSchema(TblDelSchema)
+			b.batches[tblSpecialDeleteBatch] = makeRespBatchFromSchema(TBLSpecialDeleteSchema)
 		}
-		catalogEntry2Batch(b.batches[tblDelBatch], tbl, node, DelSchema, txnimpl.FillTableRow, u64ToRowID(tbl.GetID()), b.txn.GetPrepareTS())
+		catalogEntry2Batch(b.batches[tblDelBatch], tbl, node, TblDelSchema, txnimpl.FillTableRow, objectio.HackU64ToRowid(tbl.GetID()), b.txn.GetPrepareTS())
+		catalogEntry2Batch(b.batches[tblSpecialDeleteBatch], tbl, node, TBLSpecialDeleteSchema, txnimpl.FillTableRow, objectio.HackU64ToRowid(tbl.GetID()), b.txn.GetPrepareTS())
 	}
 	// create table
 	if node.CreatedAt.Equal(txnif.UncommitTS) {
@@ -216,13 +266,13 @@ func (b *TxnLogtailRespBuilder) visitTable(itbl any) {
 			txnimpl.FillColumnRow(tbl, node, syscol.Name, b.batches[columnInsBatch].GetVectorByName(syscol.Name))
 		}
 		for _, usercol := range node.BaseNode.Schema.ColDefs {
-			b.batches[columnInsBatch].GetVectorByName(catalog.AttrRowID).Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", tbl.ID, usercol.Name))), false)
+			b.batches[columnInsBatch].GetVectorByName(catalog.AttrRowID).Append(objectio.HackBytes2Rowid([]byte(fmt.Sprintf("%d-%s", tbl.ID, usercol.Name))), false)
 			b.batches[columnInsBatch].GetVectorByName(catalog.AttrCommitTs).Append(b.txn.GetPrepareTS(), false)
 		}
 		if b.batches[tblInsBatch] == nil {
 			b.batches[tblInsBatch] = makeRespBatchFromSchema(catalog.SystemTableSchema)
 		}
-		catalogEntry2Batch(b.batches[tblInsBatch], tbl, node, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(tbl.GetID()), b.txn.GetPrepareTS())
+		catalogEntry2Batch(b.batches[tblInsBatch], tbl, node, catalog.SystemTableSchema, txnimpl.FillTableRow, objectio.HackU64ToRowid(tbl.GetID()), b.txn.GetPrepareTS())
 	}
 	// alter table
 	if !node.CreatedAt.Equal(txnif.UncommitTS) && !node.DeletedAt.Equal(txnif.UncommitTS) {
@@ -230,23 +280,24 @@ func (b *TxnLogtailRespBuilder) visitTable(itbl any) {
 			b.batches[columnInsBatch] = makeRespBatchFromSchema(catalog.SystemColumnSchema)
 		}
 		if b.batches[columnDelBatch] == nil {
-			b.batches[columnDelBatch] = makeRespBatchFromSchema(DelSchema)
+			b.batches[columnDelBatch] = makeRespBatchFromSchema(ColumnDelSchema)
 		}
 		for _, syscol := range catalog.SystemColumnSchema.ColDefs {
 			txnimpl.FillColumnRow(tbl, node, syscol.Name, b.batches[columnInsBatch].GetVectorByName(syscol.Name))
 		}
 		for _, usercol := range node.BaseNode.Schema.ColDefs {
-			b.batches[columnInsBatch].GetVectorByName(catalog.AttrRowID).Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", tbl.ID, usercol.Name))), false)
+			b.batches[columnInsBatch].GetVectorByName(catalog.AttrRowID).Append(objectio.HackBytes2Rowid([]byte(fmt.Sprintf("%d-%s", tbl.ID, usercol.Name))), false)
 			b.batches[columnInsBatch].GetVectorByName(catalog.AttrCommitTs).Append(b.txn.GetPrepareTS(), false)
 		}
 		for _, name := range node.BaseNode.Schema.Extra.DroppedAttrs {
-			b.batches[columnDelBatch].GetVectorByName(catalog.AttrRowID).Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", tbl.ID, name))), false)
+			b.batches[columnDelBatch].GetVectorByName(catalog.AttrRowID).Append(objectio.HackBytes2Rowid([]byte(fmt.Sprintf("%d-%s", tbl.ID, name))), false)
 			b.batches[columnDelBatch].GetVectorByName(catalog.AttrCommitTs).Append(b.txn.GetPrepareTS(), false)
+			b.batches[columnDelBatch].GetVectorByName(pkgcatalog.SystemColAttr_UniqName).Append([]byte(fmt.Sprintf("%d-%s", tbl.GetID(), name)), false)
 		}
 		if b.batches[tblInsBatch] == nil {
 			b.batches[tblInsBatch] = makeRespBatchFromSchema(catalog.SystemTableSchema)
 		}
-		catalogEntry2Batch(b.batches[tblInsBatch], tbl, node, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(tbl.GetID()), b.txn.GetPrepareTS())
+		catalogEntry2Batch(b.batches[tblInsBatch], tbl, node, catalog.SystemTableSchema, txnimpl.FillTableRow, objectio.HackU64ToRowid(tbl.GetID()), b.txn.GetPrepareTS())
 	}
 }
 func (b *TxnLogtailRespBuilder) visitDatabase(idb any) {
@@ -254,15 +305,17 @@ func (b *TxnLogtailRespBuilder) visitDatabase(idb any) {
 	node := db.GetLatestNodeLocked()
 	if node.DeletedAt.Equal(txnif.UncommitTS) {
 		if b.batches[dbDelBatch] == nil {
-			b.batches[dbDelBatch] = makeRespBatchFromSchema(DelSchema)
+			b.batches[dbDelBatch] = makeRespBatchFromSchema(DBDelSchema)
+			b.batches[dbSpecialDeleteBatch] = makeRespBatchFromSchema(DBSpecialDeleteSchema)
 		}
-		catalogEntry2Batch(b.batches[dbDelBatch], db, node, DelSchema, txnimpl.FillDBRow, u64ToRowID(db.GetID()), b.txn.GetPrepareTS())
+		catalogEntry2Batch(b.batches[dbDelBatch], db, node, DBDelSchema, txnimpl.FillDBRow, objectio.HackU64ToRowid(db.GetID()), b.txn.GetPrepareTS())
+		catalogEntry2Batch(b.batches[dbSpecialDeleteBatch], db, node, DBSpecialDeleteSchema, txnimpl.FillDBRow, objectio.HackU64ToRowid(db.GetID()), b.txn.GetPrepareTS())
 	}
 	if node.CreatedAt.Equal(txnif.UncommitTS) {
 		if b.batches[dbInsBatch] == nil {
 			b.batches[dbInsBatch] = makeRespBatchFromSchema(catalog.SystemDBSchema)
 		}
-		catalogEntry2Batch(b.batches[dbInsBatch], db, node, catalog.SystemDBSchema, txnimpl.FillDBRow, u64ToRowID(db.GetID()), b.txn.GetPrepareTS())
+		catalogEntry2Batch(b.batches[dbInsBatch], db, node, catalog.SystemDBSchema, txnimpl.FillDBRow, objectio.HackU64ToRowid(db.GetID()), b.txn.GetPrepareTS())
 	}
 }
 
@@ -272,13 +325,21 @@ func (b *TxnLogtailRespBuilder) buildLogtailEntry(tid, dbid uint64, tableName, d
 		return
 	}
 	apiBat, err := containersBatchToProtoBatch(bat)
-	logutil.Debugf("[logtail] from table %d-%s, delete %v, batch length %d @%s", tid, tableName, delete, bat.Length(), b.txn.GetPrepareTS().ToString())
+	common.DoIfDebugEnabled(func() {
+		logutil.Debugf(
+			"[logtail] from table %d-%s, delete %v, batch length %d @%s",
+			tid, tableName, delete, bat.Length(), b.txn.GetPrepareTS().ToString(),
+		)
+	})
 	if err != nil {
 		panic(err)
 	}
 	entryType := api.Entry_Insert
 	if delete {
 		entryType = api.Entry_Delete
+	}
+	if batchIdx == dbSpecialDeleteBatch || batchIdx == tblSpecialDeleteBatch {
+		entryType = api.Entry_SpecialDelete
 	}
 	entry := &api.Entry{
 		EntryType:    entryType,
@@ -298,33 +359,57 @@ func (b *TxnLogtailRespBuilder) buildLogtailEntry(tid, dbid uint64, tableName, d
 		Table:    tableID,
 		Commands: []api.Entry{*entry},
 	}
+	// specail delete batch and delete batch should be in the same TableLogtail
+	if batchIdx == dbDelBatch || batchIdx == tblDelBatch {
+		var bat2 *containers.Batch
+		if batchIdx == dbDelBatch {
+			bat2 = b.batches[dbSpecialDeleteBatch]
+		}
+		if batchIdx == tblDelBatch {
+			bat2 = b.batches[tblSpecialDeleteBatch]
+		}
+		apiBat2, err := containersBatchToProtoBatch(bat2)
+		if err != nil {
+			panic(err)
+		}
+		entry2 := &api.Entry{
+			EntryType:    api.Entry_SpecialDelete,
+			TableId:      tid,
+			TableName:    tableName,
+			DatabaseId:   dbid,
+			DatabaseName: dbName,
+			Bat:          apiBat2,
+		}
+		tail.Commands = append(tail.Commands, *entry2)
+	}
 	*b.logtails = append(*b.logtails, tail)
 }
 
 func (b *TxnLogtailRespBuilder) rotateTable(dbName, tableName string, dbid, tid uint64) {
 	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_meta", b.currTableID), b.currDBName, blkMetaInsBatch, false)
 	if b.batches[blkMetaInsBatch] != nil {
-		b.batches[blkMetaInsBatch].Close()
+		b.batchToClose = append(b.batchToClose, b.batches[blkMetaInsBatch])
 		b.batches[blkMetaInsBatch] = nil
 	}
 	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_meta", b.currTableID), b.currDBName, blkMetaDelBatch, true)
 	if b.batches[blkMetaDelBatch] != nil {
-		b.batches[blkMetaDelBatch].Close()
+		b.batchToClose = append(b.batchToClose, b.batches[blkMetaDelBatch])
 		b.batches[blkMetaDelBatch] = nil
 	}
 	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_seg", b.currTableID), b.currDBName, segMetaDelBatch, true)
 	if b.batches[segMetaDelBatch] != nil {
-		b.batches[segMetaDelBatch].Close()
+		b.batchToClose = append(b.batchToClose, b.batches[segMetaDelBatch])
 		b.batches[segMetaDelBatch] = nil
 	}
 	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataDelBatch, true)
 	if b.batches[dataDelBatch] != nil {
-		b.batches[dataDelBatch].Close()
+		b.batchToClose = append(b.batchToClose, b.batches[dataDelBatch])
 		b.batches[dataDelBatch] = nil
 	}
 	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataInsBatch, false)
 	if b.batches[dataInsBatch] != nil {
-		b.batches[dataInsBatch].Close()
+		b.insertBatch.Add(uint32(len(b.batchToClose)))
+		b.batchToClose = append(b.batchToClose, b.batches[dataInsBatch])
 		b.batches[dataInsBatch] = nil
 	}
 	b.currTableID = tid
@@ -348,7 +433,10 @@ func (b *TxnLogtailRespBuilder) BuildResp() {
 	b.buildLogtailEntry(pkgcatalog.MO_DATABASE_ID, pkgcatalog.MO_CATALOG_ID, pkgcatalog.MO_DATABASE, pkgcatalog.MO_CATALOG, dbDelBatch, true)
 	for i := range b.batches {
 		if b.batches[i] != nil {
-			b.batches[i].Close()
+			if int8(i) == dataInsBatch {
+				b.insertBatch.Add(uint32(len(b.batchToClose)))
+			}
+			b.batchToClose = append(b.batchToClose, b.batches[i])
 			b.batches[i] = nil
 		}
 	}

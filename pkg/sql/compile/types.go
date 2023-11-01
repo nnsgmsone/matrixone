@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 
 	"github.com/google/uuid"
@@ -35,10 +36,6 @@ import (
 
 type (
 	TxnOperator = client.TxnOperator
-)
-
-const (
-	MinBlockNum = 200
 )
 
 type magicType int
@@ -68,6 +65,7 @@ const (
 	DropSequence
 	AlterSequence
 	MagicDelete
+	Replace
 )
 
 // Source contains information of a relation which will be used in execution,
@@ -84,6 +82,8 @@ type Source struct {
 	TableDef               *plan.TableDef
 	Timestamp              timestamp.Timestamp
 	AccountId              *plan.PubInfo
+
+	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 }
 
 // Col is the information of attribute
@@ -128,6 +128,10 @@ type Scope struct {
 	Reg *process.WaitRegister
 
 	RemoteReceivRegInfos []RemoteReceivRegInfo
+
+	BuildIdx       int
+	ShuffleCnt     int
+	PartialResults []any
 }
 
 // scopeContext contextual information to assist in the generation of pipeline.Pipeline.
@@ -167,6 +171,7 @@ func (a *anaylze) Nodes() []*process.AnalyzeInfo {
 type Compile struct {
 	scope []*Scope
 
+	pn   *plan.Plan
 	info plan2.ExecInfo
 
 	u any
@@ -197,13 +202,26 @@ type Compile struct {
 	// ast
 	stmt tree.Statement
 
-	s3CounterSet perfcounter.CounterSet
+	counterSet perfcounter.CounterSet
 
-	stepRegs map[int32][]*process.WaitRegister
+	nodeRegs map[[2]int32]*process.WaitRegister
+	stepRegs map[int32][][2]int32
+
+	runtimeFilterReceiverMap map[int32]*runtimeFilterReceiver
+
+	lock sync.RWMutex
 
 	isInternal bool
+
 	// cnLabel is the CN labels which is received from proxy when build connection.
 	cnLabel map[string]string
+
+	buildPlanFunc func() (*plan2.Plan, error)
+}
+
+type runtimeFilterReceiver struct {
+	size int
+	ch   chan *pipeline.RuntimeFilter
 }
 
 type RemoteReceivRegInfo struct {

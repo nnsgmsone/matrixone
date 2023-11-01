@@ -21,6 +21,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -29,6 +31,9 @@ import (
 )
 
 func calcNdvUsingZonemap(zm objectio.ZoneMap, t *types.Type) float64 {
+	if !zm.IsInited() {
+		return -1 /*for new added column, its zonemap will be empty and not initialized*/
+	}
 	switch t.Oid {
 	case types.T_bool:
 		return 2
@@ -66,8 +71,14 @@ func calcNdvUsingZonemap(zm objectio.ZoneMap, t *types.Type) float64 {
 		return float64(types.DecodeFixed[types.Time](zm.GetMaxBuf())) - float64(types.DecodeFixed[types.Time](zm.GetMinBuf())) + 1
 	case types.T_datetime:
 		return float64(types.DecodeFixed[types.Datetime](zm.GetMaxBuf())) - float64(types.DecodeFixed[types.Datetime](zm.GetMinBuf())) + 1
-	case types.T_uuid, types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
+	case types.T_uuid, types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text,
+		types.T_array_float32, types.T_array_float64:
+		//NDV Function
+		// An aggregate function that returns an approximate value similar to the result of COUNT(DISTINCT col),
+		// the "number of distinct values".
 		return -1
+	case types.T_enum:
+		return float64(types.DecodeFixed[types.Enum](zm.GetMaxBuf())) - float64(types.DecodeFixed[types.Enum](zm.GetMinBuf())) + 1
 	default:
 		return -1
 	}
@@ -79,17 +90,27 @@ func getInfoFromZoneMap(ctx context.Context, blocks []catalog.BlockInfo, tableDe
 	lenCols := len(tableDef.Cols) - 1 /* row-id */
 	info := plan2.NewInfoFromZoneMap(lenCols)
 
-	var err error
-	var objectMeta objectio.ObjectMeta
+	var objMeta objectio.ObjectMeta
+	var objectMeta objectio.ObjectDataMeta
 	lenobjs := 0
 
 	var init bool
+	fs, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
+	if err != nil {
+		return nil, err
+	}
 	for _, blk := range blocks {
 		location := blk.MetaLocation()
+		fs, err := fileservice.Get[fileservice.FileService](fs, defines.SharedFileServiceName)
+		if err != nil {
+			return nil, err
+		}
+
 		if !objectio.IsSameObjectLocVsMeta(location, objectMeta) {
-			if objectMeta, err = objectio.FastLoadObjectMeta(ctx, &location, proc.FileService); err != nil {
+			if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 				return nil, err
 			}
+			objectMeta = objMeta.MustDataMeta()
 			lenobjs++
 			tableCnt += float64(objectMeta.BlockHeader().Rows())
 			if !init {

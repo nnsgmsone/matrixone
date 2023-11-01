@@ -118,6 +118,12 @@ func WithDisableGCCatalog() func(*Options) {
 	}
 }
 
+func WithReserveWALEntryCount(count uint64) func(*Options) {
+	return func(r *Options) {
+		r.CheckpointCfg.ReservedWALEntryCount = count
+	}
+}
+
 func (o *Options) FillDefaults(dirname string) *Options {
 	if o == nil {
 		o = &Options{}
@@ -189,9 +195,13 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		if ioworkers < runtime.NumCPU() {
 			ioworkers = runtime.NumCPU()
 		}
+		workers := runtime.NumCPU() / 4
+		if workers < 1 {
+			workers = 1
+		}
 		o.SchedulerCfg = &SchedulerCfg{
 			IOWorkers:    ioworkers,
-			AsyncWorkers: DefaultAsyncWorkers,
+			AsyncWorkers: workers,
 		}
 	}
 

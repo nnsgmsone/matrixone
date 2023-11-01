@@ -73,31 +73,38 @@ func (rel *TxnRelation) MakeSegmentItOnSnap() handle.SegmentIt                  
 func (rel *TxnRelation) MakeBlockIt() handle.BlockIt                              { return nil }
 func (rel *TxnRelation) BatchDedup(col containers.Vector) error                   { return nil }
 func (rel *TxnRelation) Append(ctx context.Context, data *containers.Batch) error { return nil }
-func (rel *TxnRelation) AddBlksWithMetaLoc([]objectio.Location) error {
+func (rel *TxnRelation) AddBlksWithMetaLoc(context.Context, []objectio.Location) error {
 	return nil
 }
-func (rel *TxnRelation) GetMeta() any                                                        { return nil }
-func (rel *TxnRelation) GetDB() (handle.Database, error)                                     { return nil, nil }
-func (rel *TxnRelation) GetSegment(id *types.Segmentid) (seg handle.Segment, err error)      { return }
-func (rel *TxnRelation) SoftDeleteSegment(id *types.Segmentid) (err error)                   { return }
-func (rel *TxnRelation) CreateSegment(bool) (seg handle.Segment, err error)                  { return }
-func (rel *TxnRelation) CreateNonAppendableSegment(bool) (seg handle.Segment, err error)     { return }
-func (rel *TxnRelation) GetValue(*common.ID, uint32, uint16) (v any, isNull bool, err error) { return }
-func (rel *TxnRelation) GetValueByPhyAddrKey(any, int) (v any, isNull bool, err error)       { return }
-func (rel *TxnRelation) Update(*common.ID, uint32, uint16, any, bool) (err error)            { return }
-func (rel *TxnRelation) DeleteByPhyAddrKey(any) (err error)                                  { return }
-func (rel *TxnRelation) DeleteByPhyAddrKeys(containers.Vector) (err error)                   { return }
+func (rel *TxnRelation) GetMeta() any                                                         { return nil }
+func (rel *TxnRelation) GetDB() (handle.Database, error)                                      { return nil, nil }
+func (rel *TxnRelation) GetSegment(id *types.Segmentid) (seg handle.Segment, err error)       { return }
+func (rel *TxnRelation) SoftDeleteSegment(id *types.Segmentid) (err error)                    { return }
+func (rel *TxnRelation) CreateSegment(bool) (seg handle.Segment, err error)                   { return }
+func (rel *TxnRelation) CreateNonAppendableSegment(bool) (seg handle.Segment, err error)      { return }
+func (rel *TxnRelation) GetValue(*common.ID, uint32, uint16) (v any, isNull bool, err error)  { return }
+func (rel *TxnRelation) GetValueByPhyAddrKey(any, int) (v any, isNull bool, err error)        { return }
+func (rel *TxnRelation) Update(*common.ID, uint32, uint16, any, bool) (err error)             { return }
+func (rel *TxnRelation) DeleteByPhyAddrKey(any) (err error)                                   { return }
+func (rel *TxnRelation) DeleteByPhyAddrKeys(containers.Vector, containers.Vector) (err error) { return }
 func (rel *TxnRelation) RangeDelete(*common.ID, uint32, uint32, handle.DeleteType) (err error) {
 	return
 }
-func (rel *TxnRelation) GetByFilter(*handle.Filter) (id *common.ID, offset uint32, err error) { return }
-func (rel *TxnRelation) GetValueByFilter(filter *handle.Filter, col int) (v any, isNull bool, err error) {
+func (rel *TxnRelation) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Location) (ok bool, err error) {
 	return
 }
-func (rel *TxnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any, isNull bool) (err error) {
+func (rel *TxnRelation) GetByFilter(context.Context, *handle.Filter) (id *common.ID, offset uint32, err error) {
 	return
 }
-func (rel *TxnRelation) DeleteByFilter(filter *handle.Filter) (err error) { return }
+func (rel *TxnRelation) GetValueByFilter(ctx context.Context, filter *handle.Filter, col int) (v any, isNull bool, err error) {
+	return
+}
+func (rel *TxnRelation) UpdateByFilter(ctx context.Context, filter *handle.Filter, col uint16, v any, isNull bool) (err error) {
+	return
+}
+func (rel *TxnRelation) DeleteByFilter(ctx context.Context, filter *handle.Filter) (err error) {
+	return
+}
 func (rel *TxnRelation) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err error) {
 	return
 }

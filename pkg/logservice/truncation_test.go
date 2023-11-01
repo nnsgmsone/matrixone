@@ -19,7 +19,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/assert"
 )
@@ -29,12 +31,12 @@ func TestTruncationExportSnapshot(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 		defer cancel()
 
-		dnID := uint64(100)
+		tnID := uint64(100)
 		req := pb.Request{
 			Method: pb.CONNECT_RO,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
-				DNID:    dnID,
+				TNID:    tnID,
 			},
 		}
 		resp := s.handleConnect(ctx, req)
@@ -42,7 +44,7 @@ func TestTruncationExportSnapshot(t *testing.T) {
 
 		for i := 0; i < 10; i++ {
 			data := make([]byte, 8)
-			cmd := getTestAppendCmd(dnID, data)
+			cmd := getTestAppendCmd(tnID, data)
 			req = pb.Request{
 				Method: pb.APPEND,
 				LogRequest: pb.LogRequest{
@@ -91,12 +93,12 @@ func TestTruncationImportSnapshot(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 		defer cancel()
 
-		dnID := uint64(100)
+		tnID := uint64(100)
 		req := pb.Request{
 			Method: pb.CONNECT_RO,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
-				DNID:    dnID,
+				TNID:    tnID,
 			},
 		}
 		resp := s.handleConnect(ctx, req)
@@ -104,7 +106,7 @@ func TestTruncationImportSnapshot(t *testing.T) {
 
 		for i := 0; i < 10; i++ {
 			data := make([]byte, 8)
-			cmd := getTestAppendCmd(dnID, data)
+			cmd := getTestAppendCmd(tnID, data)
 			req = pb.Request{
 				Method: pb.APPEND,
 				LogRequest: pb.LogRequest{
@@ -169,7 +171,7 @@ func TestTruncationImportSnapshot(t *testing.T) {
 
 		for i := 0; i < 10; i++ {
 			data := make([]byte, 8)
-			cmd := getTestAppendCmd(dnID, data)
+			cmd := getTestAppendCmd(tnID, data)
 			req = pb.Request{
 				Method: pb.APPEND,
 				LogRequest: pb.LogRequest{
@@ -199,4 +201,53 @@ func TestTruncationImportSnapshot(t *testing.T) {
 		assert.Equal(t, 0, s.store.snapshotMgr.Count(1, 1))
 	}
 	runServiceTest(t, false, true, fn)
+}
+
+func TestHAKeeperTruncation(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
+		defer cancel()
+		req := pb.Request{
+			Method: pb.LOG_HEARTBEAT,
+			LogHeartbeat: &pb.LogStoreHeartbeat{
+				UUID: "uuid1",
+			},
+		}
+		for i := 0; i < 10; i++ {
+			resp := s.handleLogHeartbeat(ctx, req)
+			assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		}
+		v, err := s.store.read(ctx, hakeeper.DefaultHAKeeperShardID, &hakeeper.IndexQuery{})
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(12), v.(uint64))
+
+		err = s.store.processHAKeeperTruncation(ctx)
+		assert.NoError(t, err)
+
+		checkTick := time.NewTicker(time.Millisecond * 100)
+		defer checkTick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				panic("failed to truncate logs")
+			case <-checkTick.C:
+				rs, err := s.store.nh.QueryRaftLog(hakeeper.DefaultHAKeeperShardID,
+					1, 100, 1024*100)
+				assert.NoError(t, err)
+				select {
+				case v := <-rs.ResultC():
+					// We cannot fetch the logs because they are truncated.
+					if v.RequestOutOfRange() {
+						return
+					}
+				case <-ctx.Done():
+					panic("failed to truncate logs")
+				}
+
+			}
+		}
+	}
+	runServiceTest(t, true, true, fn)
 }

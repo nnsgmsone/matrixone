@@ -16,6 +16,13 @@ package vm
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fill"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/stream"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/timewin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
@@ -80,6 +87,8 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 	Order:       order.String,
 	Group:       group.String,
 	Window:      window.String,
+	TimeWin:     timewin.String,
+	Fill:        fill.String,
 	Merge:       merge.String,
 	Output:      output.String,
 	Offset:      offset.String,
@@ -99,18 +108,21 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 	LoopAnti:    loopanti.String,
 	LoopMark:    loopmark.String,
 
-	MergeTop:    mergetop.String,
-	MergeLimit:  mergelimit.String,
-	MergeOrder:  mergeorder.String,
-	MergeGroup:  mergegroup.String,
-	MergeOffset: mergeoffset.String,
+	MergeTop:       mergetop.String,
+	MergeLimit:     mergelimit.String,
+	MergeOrder:     mergeorder.String,
+	MergeGroup:     mergegroup.String,
+	MergeOffset:    mergeoffset.String,
+	MergeRecursive: mergerecursive.String,
+	MergeCTE:       mergecte.String,
 
-	Deletion:        deletion.String,
-	Insert:          insert.String,
-	OnDuplicateKey:  onduplicatekey.String,
-	PreInsert:       preinsert.String,
-	PreInsertUnique: preinsertunique.String,
-	External:        external.String,
+	Deletion:                deletion.String,
+	Insert:                  insert.String,
+	OnDuplicateKey:          onduplicatekey.String,
+	PreInsert:               preinsert.String,
+	PreInsertUnique:         preinsertunique.String,
+	PreInsertSecondaryIndex: preinsertsecondaryindex.String,
+	External:                external.String,
 
 	Minus:        minus.String,
 	Intersect:    intersect.String,
@@ -121,6 +133,9 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 	TableFunction: table_function.String,
 
 	LockOp: lockop.String,
+
+	Shuffle: shuffle.String,
+	Stream:  stream.String,
 }
 
 var prepareFunc = [...]func(*process.Process, any) error{
@@ -136,6 +151,8 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	Order:       order.Prepare,
 	Group:       group.Prepare,
 	Window:      window.Prepare,
+	TimeWin:     timewin.Prepare,
+	Fill:        fill.Prepare,
 	Merge:       merge.Prepare,
 	Output:      output.Prepare,
 	Offset:      offset.Prepare,
@@ -155,18 +172,21 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	LoopAnti:    loopanti.Prepare,
 	LoopMark:    loopmark.Prepare,
 
-	MergeTop:    mergetop.Prepare,
-	MergeLimit:  mergelimit.Prepare,
-	MergeOrder:  mergeorder.Prepare,
-	MergeGroup:  mergegroup.Prepare,
-	MergeOffset: mergeoffset.Prepare,
+	MergeTop:       mergetop.Prepare,
+	MergeLimit:     mergelimit.Prepare,
+	MergeOrder:     mergeorder.Prepare,
+	MergeGroup:     mergegroup.Prepare,
+	MergeOffset:    mergeoffset.Prepare,
+	MergeRecursive: mergerecursive.Prepare,
+	MergeCTE:       mergecte.Prepare,
 
-	Deletion:        deletion.Prepare,
-	Insert:          insert.Prepare,
-	OnDuplicateKey:  onduplicatekey.Prepare,
-	PreInsert:       preinsert.Prepare,
-	PreInsertUnique: preinsertunique.Prepare,
-	External:        external.Prepare,
+	Deletion:                deletion.Prepare,
+	Insert:                  insert.Prepare,
+	OnDuplicateKey:          onduplicatekey.Prepare,
+	PreInsert:               preinsert.Prepare,
+	PreInsertUnique:         preinsertunique.Prepare,
+	PreInsertSecondaryIndex: preinsertsecondaryindex.Prepare,
+	External:                external.Prepare,
 
 	Minus:        minus.Prepare,
 	Intersect:    intersect.Prepare,
@@ -177,9 +197,12 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	TableFunction: table_function.Prepare,
 
 	LockOp: lockop.Prepare,
+
+	Shuffle: shuffle.Prepare,
+	Stream:  stream.Prepare,
 }
 
-var execFunc = [...]func(int, *process.Process, any, bool, bool) (bool, error){
+var execFunc = [...]func(int, *process.Process, any, bool, bool) (process.ExecStatus, error){
 	Top:         top.Call,
 	Join:        join.Call,
 	Semi:        semi.Call,
@@ -192,6 +215,8 @@ var execFunc = [...]func(int, *process.Process, any, bool, bool) (bool, error){
 	Order:       order.Call,
 	Group:       group.Call,
 	Window:      window.Call,
+	TimeWin:     timewin.Call,
+	Fill:        fill.Call,
 	Merge:       merge.Call,
 	Output:      output.Call,
 	Offset:      offset.Call,
@@ -211,19 +236,22 @@ var execFunc = [...]func(int, *process.Process, any, bool, bool) (bool, error){
 	LoopAnti:    loopanti.Call,
 	LoopMark:    loopmark.Call,
 
-	MergeTop:    mergetop.Call,
-	MergeLimit:  mergelimit.Call,
-	MergeOrder:  mergeorder.Call,
-	MergeGroup:  mergegroup.Call,
-	MergeOffset: mergeoffset.Call,
+	MergeTop:       mergetop.Call,
+	MergeLimit:     mergelimit.Call,
+	MergeOrder:     mergeorder.Call,
+	MergeGroup:     mergegroup.Call,
+	MergeOffset:    mergeoffset.Call,
+	MergeRecursive: mergerecursive.Call,
+	MergeCTE:       mergecte.Call,
 
 	Deletion: deletion.Call,
 	Insert:   insert.Call,
 	External: external.Call,
 
-	OnDuplicateKey:  onduplicatekey.Call,
-	PreInsert:       preinsert.Call,
-	PreInsertUnique: preinsertunique.Call,
+	OnDuplicateKey:          onduplicatekey.Call,
+	PreInsert:               preinsert.Call,
+	PreInsertUnique:         preinsertunique.Call,
+	PreInsertSecondaryIndex: preinsertsecondaryindex.Call,
 
 	Minus:        minus.Call,
 	Intersect:    intersect.Call,
@@ -234,4 +262,7 @@ var execFunc = [...]func(int, *process.Process, any, bool, bool) (bool, error){
 	TableFunction: table_function.Call,
 
 	LockOp: lockop.Call,
+
+	Shuffle: shuffle.Call,
+	Stream:  stream.Call,
 }

@@ -200,8 +200,7 @@ func TestHandler_Handle(t *testing.T) {
 	defer func() {
 		require.NoError(t, stopFn())
 	}()
-	mc.ForceRefresh()
-	time.Sleep(time.Millisecond * 200)
+	mc.ForceRefresh(true)
 
 	// start proxy.
 	s, err := NewServer(ctx, cfg, WithRuntime(runtime.DefaultRuntime()),
@@ -247,6 +246,70 @@ func TestHandler_Handle(t *testing.T) {
 	require.Equal(t, int64(1), s.counterSet.connTotal.Load())
 }
 
+func TestHandler_HandleErr(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	temp := os.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rt := runtime.DefaultRuntime()
+	runtime.SetupProcessLevelRuntime(rt)
+	listenAddr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(listenAddr))
+	cfg := Config{
+		ListenAddress:     "unix://" + listenAddr,
+		RebalanceDisabled: true,
+	}
+	hc := &mockHAKeeperClient{}
+	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
+	defer mc.Close()
+	rt.SetGlobalVariables(runtime.ClusterService, mc)
+	addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr))
+
+	// start proxy.
+	s, err := NewServer(ctx, cfg, WithRuntime(runtime.DefaultRuntime()),
+		WithHAKeeperClient(hc))
+	defer func() {
+		err := s.Close()
+		require.NoError(t, err)
+	}()
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	err = s.Start()
+	require.NoError(t, err)
+
+	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@unix(%s)/db1", listenAddr))
+	// connect to server.
+	require.NoError(t, err)
+	require.NotNil(t, db)
+	defer func() {
+		_ = db.Close()
+		timeout := time.NewTimer(time.Second * 15)
+		tick := time.NewTicker(time.Millisecond * 100)
+		var connTotal int64
+		tt := false
+		for {
+			select {
+			case <-tick.C:
+				connTotal = s.counterSet.connTotal.Load()
+			case <-timeout.C:
+				tt = true
+			}
+			if connTotal == 0 || tt {
+				break
+			}
+		}
+		tick.Stop()
+		timeout.Stop()
+		require.Equal(t, int64(0), connTotal)
+	}()
+	_, err = db.Exec("anystmt")
+	require.Error(t, err)
+
+	require.Equal(t, int64(1), s.counterSet.connAccepted.Load())
+}
+
 func TestHandler_HandleWithSSL(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
@@ -278,8 +341,7 @@ func TestHandler_HandleWithSSL(t *testing.T) {
 	defer func() {
 		require.NoError(t, stopFn())
 	}()
-	mc.ForceRefresh()
-	time.Sleep(time.Millisecond * 200)
+	mc.ForceRefresh(true)
 
 	// start proxy.
 	s, err := NewServer(ctx, cfg, WithRuntime(runtime.DefaultRuntime()),
@@ -320,11 +382,10 @@ func TestHandler_HandleWithSSL(t *testing.T) {
 		_ = db.Close()
 	}()
 	_, _ = db.Exec("any stmt")
-	// FIXME: Although the functional code is ok, but this test case
-	// occasionally fails.
-	// require.NoError(t, err)
-	// require.Equal(t, int64(1), s.counterSet.connAccepted.Load())
-	// require.Equal(t, int64(1), s.counterSet.connTotal.Load())
+	_, err = db.Exec("any stmt")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), s.counterSet.connAccepted.Load())
+	require.Equal(t, int64(1), s.counterSet.connTotal.Load())
 }
 
 func testWithServer(t *testing.T, fn func(*testing.T, string, *Server)) {
@@ -354,8 +415,7 @@ func testWithServer(t *testing.T, fn func(*testing.T, string, *Server)) {
 	defer func() {
 		require.NoError(t, stopFn())
 	}()
-	mc.ForceRefresh()
-	time.Sleep(time.Millisecond * 200)
+	mc.ForceRefresh(true)
 
 	// start proxy.
 	s, err := NewServer(ctx, cfg, WithRuntime(runtime.DefaultRuntime()),
@@ -432,7 +492,7 @@ func TestHandler_HandleEventSetVar(t *testing.T) {
 	})
 }
 
-func TestHandler_HandleEventSuspendAccount(t *testing.T) {
+func TestHandler_HandleTxn(t *testing.T) {
 	testWithServer(t, func(t *testing.T, addr string, s *Server) {
 		db1, err := sql.Open("mysql", fmt.Sprintf("a1#root:111@unix(%s)/db1", addr))
 		// connect to server.
@@ -444,78 +504,27 @@ func TestHandler_HandleEventSuspendAccount(t *testing.T) {
 		_, err = db1.Exec("select 1")
 		require.NoError(t, err)
 
-		db2, err := sql.Open("mysql", fmt.Sprintf("dump:111@unix(%s)/db1", addr))
-		// connect to server.
-		require.NoError(t, err)
-		require.NotNil(t, db2)
-		defer func() {
-			_ = db2.Close()
-		}()
-
-		_, err = db2.Exec("alter account a1 suspend")
-		require.NoError(t, err)
-
-		time.Sleep(time.Millisecond * 200)
-		res, err := db1.Query("show global variables")
-		require.NoError(t, err)
-		defer res.Close()
-		var rows int
-		var varName, varValue string
-		for res.Next() {
-			rows += 1
-			err := res.Scan(&varName, &varValue)
-			require.NoError(t, err)
-			require.Equal(t, "killed", varName)
-			require.Equal(t, "yes", varValue)
-		}
-		require.Equal(t, 1, rows)
-		err = res.Err()
-		require.NoError(t, err)
-
-		require.Equal(t, int64(2), s.counterSet.connAccepted.Load())
 	})
 }
 
-func TestHandler_HandleEventDropAccount(t *testing.T) {
+func TestHandler_HandleEventPrepare(t *testing.T) {
 	testWithServer(t, func(t *testing.T, addr string, s *Server) {
-		db1, err := sql.Open("mysql", fmt.Sprintf("a1#root:111@unix(%s)/db1", addr))
+		db1, err := sql.Open("mysql", fmt.Sprintf("dump:111@unix(%s)/db1", addr))
 		// connect to server.
 		require.NoError(t, err)
 		require.NotNil(t, db1)
 		defer func() {
 			_ = db1.Close()
 		}()
-		_, err = db1.Exec("select 1")
+		_, err = db1.Exec("prepare p1 from 'select ?'")
 		require.NoError(t, err)
 
-		db2, err := sql.Open("mysql", fmt.Sprintf("dump:111@unix(%s)/db1", addr))
-		// connect to server.
-		require.NoError(t, err)
-		require.NotNil(t, db2)
-		defer func() {
-			_ = db2.Close()
-		}()
-
-		_, err = db2.Exec("drop account a1")
-		require.NoError(t, err)
-
-		time.Sleep(time.Millisecond * 200)
-		res, err := db1.Query("show global variables")
+		res, err := db1.Query("execute p1 using @pp") // we're just searching the PREPARE stmt.
 		require.NoError(t, err)
 		defer res.Close()
-		var rows int
-		var varName, varValue string
-		for res.Next() {
-			rows += 1
-			err := res.Scan(&varName, &varValue)
-			require.NoError(t, err)
-			require.Equal(t, "killed", varName)
-			require.Equal(t, "yes", varValue)
-		}
-		require.Equal(t, 1, rows)
 		err = res.Err()
 		require.NoError(t, err)
 
-		require.Equal(t, int64(2), s.counterSet.connAccepted.Load())
+		require.Equal(t, int64(1), s.counterSet.connAccepted.Load())
 	})
 }

@@ -65,7 +65,7 @@ func isSetLeaseHolderUpdate(cmd []byte) bool {
 
 func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 	meta := storeMeta{
-		serviceAddress: cfg.ServiceAddress,
+		serviceAddress: cfg.LogServiceServiceAddr(),
 	}
 	if cfg.GossipProbeInterval.Duration == 0 {
 		panic("cfg.GossipProbeInterval.Duration is 0")
@@ -84,8 +84,8 @@ func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 		NodeHostDir:         cfg.DataDir,
 		RTTMillisecond:      cfg.RTTMillisecond,
 		AddressByNodeHostID: true,
-		RaftAddress:         cfg.RaftAddress,
-		ListenAddress:       cfg.RaftListenAddress,
+		RaftAddress:         cfg.RaftServiceAddr(),
+		ListenAddress:       cfg.RaftListenAddr(),
 		Expert: config.ExpertConfig{
 			FS:           cfg.FS,
 			LogDBFactory: logdbFactory,
@@ -95,8 +95,8 @@ func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 			LogDB:                   logdb,
 		},
 		Gossip: config.GossipConfig{
-			BindAddress:      cfg.GossipListenAddress,
-			AdvertiseAddress: cfg.GossipAddress,
+			BindAddress:      cfg.GossipListenAddr(),
+			AdvertiseAddress: cfg.GossipServiceAddr(),
 			Seed:             cfg.GossipSeedAddresses,
 			Meta:             meta.marshal(),
 			CanUseSelfAsSeed: cfg.GossipAllowSelfAsSeed,
@@ -150,7 +150,7 @@ func newLogStore(cfg Config,
 	hakeeperConfig := cfg.GetHAKeeperConfig()
 	rt.SubLogger(runtime.SystemInit).Info("HAKeeper Timeout Configs",
 		zap.Int64("LogStoreTimeout", int64(hakeeperConfig.LogStoreTimeout)),
-		zap.Int64("DNStoreTimeout", int64(hakeeperConfig.DNStoreTimeout)),
+		zap.Int64("DNStoreTimeout", int64(hakeeperConfig.TNStoreTimeout)),
 		zap.Int64("CNStoreTimeout", int64(hakeeperConfig.CNStoreTimeout)),
 	)
 	ls := &store{
@@ -352,10 +352,10 @@ func (l *store) read(ctx context.Context,
 	}
 }
 
-func (l *store) getOrExtendDNLease(ctx context.Context,
-	shardID uint64, dnID uint64) error {
+func (l *store) getOrExtendTNLease(ctx context.Context,
+	shardID uint64, tnID uint64) error {
 	session := l.nh.GetNoOPSession(shardID)
-	cmd := getSetLeaseHolderCmd(dnID)
+	cmd := getSetLeaseHolderCmd(tnID)
 	_, err := l.propose(ctx, session, cmd)
 	return err
 }
@@ -466,10 +466,10 @@ func (l *store) cnAllocateID(ctx context.Context,
 	return result.Value, nil
 }
 
-func (l *store) addDNStoreHeartbeat(ctx context.Context,
-	hb pb.DNStoreHeartbeat) (pb.CommandBatch, error) {
+func (l *store) addTNStoreHeartbeat(ctx context.Context,
+	hb pb.TNStoreHeartbeat) (pb.CommandBatch, error) {
 	data := MustMarshal(&hb)
-	cmd := hakeeper.GetDNStoreHeartbeatCmd(data)
+	cmd := hakeeper.GetTNStoreHeartbeatCmd(data)
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	if result, err := l.propose(ctx, session, cmd); err != nil {
 		l.runtime.Logger().Error("propose failed", zap.Error(err))
@@ -547,6 +547,86 @@ func (l *store) updateCNLabel(ctx context.Context, label pb.CNStoreLabel) error 
 		var cb pb.CommandBatch
 		MustUnmarshal(&cb, result.Data)
 		return nil
+	}
+}
+
+func (l *store) updateCNWorkState(ctx context.Context, workState pb.CNWorkState) error {
+	state, err := l.getCheckerState()
+	if err != nil {
+		return err
+	}
+	if _, ok := state.CNState.Stores[workState.UUID]; !ok {
+		return moerr.NewInternalError(ctx, "CN [%s] does not exist", workState.UUID)
+	}
+	cmd := hakeeper.GetUpdateCNWorkStateCmd(workState)
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	if result, err := l.propose(ctx, session, cmd); err != nil {
+		l.runtime.Logger().Error("failed to propose CN work state",
+			zap.String("state", state.String()),
+			zap.Error(err))
+		return handleNotHAKeeperError(ctx, err)
+	} else {
+		var cb pb.CommandBatch
+		MustUnmarshal(&cb, result.Data)
+		return nil
+	}
+}
+
+func (l *store) patchCNStore(ctx context.Context, stateLabel pb.CNStateLabel) error {
+	state, err := l.getCheckerState()
+	if err != nil {
+		return err
+	}
+	if _, ok := state.CNState.Stores[stateLabel.UUID]; !ok {
+		return moerr.NewInternalError(ctx, "CN [%s] does not exist", stateLabel.UUID)
+	}
+	cmd := hakeeper.GetPatchCNStoreCmd(stateLabel)
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	if result, err := l.propose(ctx, session, cmd); err != nil {
+		l.runtime.Logger().Error("failed to propose CN patch store",
+			zap.String("state", state.String()),
+			zap.Error(err))
+		return handleNotHAKeeperError(ctx, err)
+	} else {
+		var cb pb.CommandBatch
+		MustUnmarshal(&cb, result.Data)
+		return nil
+	}
+}
+
+func (l *store) deleteCNStore(ctx context.Context, cnStore pb.DeleteCNStore) error {
+	state, err := l.getCheckerState()
+	if err != nil {
+		return err
+	}
+	if _, ok := state.CNState.Stores[cnStore.StoreID]; !ok {
+		return nil
+	}
+	cmd := hakeeper.GetDeleteCNStoreCmd(cnStore)
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	if result, err := l.propose(ctx, session, cmd); err != nil {
+		l.runtime.Logger().Error("failed to propose delete CN store",
+			zap.String("state", state.String()),
+			zap.Error(err))
+		return handleNotHAKeeperError(ctx, err)
+	} else {
+		var cb pb.CommandBatch
+		MustUnmarshal(&cb, result.Data)
+		return nil
+	}
+}
+
+func (l *store) addProxyHeartbeat(ctx context.Context, hb pb.ProxyHeartbeat) (pb.CommandBatch, error) {
+	data := MustMarshal(&hb)
+	cmd := hakeeper.GetProxyHeartbeatCmd(data)
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	if result, err := l.propose(ctx, session, cmd); err != nil {
+		l.runtime.Logger().Error("propose failed", zap.Error(err))
+		return pb.CommandBatch{}, handleNotHAKeeperError(ctx, err)
+	} else {
+		var cb pb.CommandBatch
+		MustUnmarshal(&cb, result.Data)
+		return cb, nil
 	}
 }
 
@@ -667,6 +747,34 @@ func (l *store) queryLog(ctx context.Context, shardID uint64,
 	}
 }
 
+func (l *store) tickerForTaskSchedule(ctx context.Context, duration time.Duration) {
+	ticker := time.NewTicker(duration)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			state, _ := l.getCheckerStateFromLeader()
+			if state != nil && state.State == pb.HAKeeperRunning {
+				l.taskSchedule(state)
+			}
+
+		case <-ctx.Done():
+			return
+		}
+
+		// l.taskSchedule could be blocking a long time, this extra select
+		// can give a chance immediately to check the ctx status when it resumes.
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			// nothing to do
+		}
+	}
+
+}
+
 func (l *store) ticker(ctx context.Context) {
 	if l.cfg.HAKeeperTickInterval.Duration == 0 {
 		panic("invalid HAKeeperTickInterval")
@@ -684,6 +792,12 @@ func (l *store) ticker(ctx context.Context) {
 	}()
 	haTicker := time.NewTicker(l.cfg.HAKeeperCheckInterval.Duration)
 	defer haTicker.Stop()
+
+	// moving task schedule from the ticker normal routine to a
+	// separate goroutine can avoid the hakeeper's health check and tick update
+	// operations being blocked by task schedule, or the tick will be skipped and
+	// can not correctly estimate the time passing.
+	go l.tickerForTaskSchedule(ctx, l.cfg.HAKeeperCheckInterval.Duration)
 
 	for {
 		select {
@@ -735,9 +849,9 @@ func (l *store) hakeeperTick() {
 func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
 	m := pb.LogStoreHeartbeat{
 		UUID:           l.id(),
-		RaftAddress:    l.cfg.RaftAddress,
-		ServiceAddress: l.cfg.ServiceAddress,
-		GossipAddress:  l.cfg.GossipAddress,
+		RaftAddress:    l.cfg.RaftServiceAddr(),
+		ServiceAddress: l.cfg.LogServiceServiceAddr(),
+		GossipAddress:  l.cfg.GossipServiceAddr(),
 		Replicas:       make([]pb.LogReplicaInfo, 0),
 	}
 	opts := dragonboat.NodeHostInfoOption{

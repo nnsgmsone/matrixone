@@ -70,28 +70,6 @@ func TestEntireEngineNew(t *testing.T) {
 	assert.Equal(t, first_engine_then_tempengine, ee.state)
 }
 
-func TestEntireEngineCommit(t *testing.T) {
-	ctx := context.TODO()
-	op := newtestOperator()
-	ee := buildEntireEngineWithoutTempEngine()
-	ee.Commit(ctx, op)
-	assert.Equal(t, only_engine, ee.state)
-	ee = buildEntireEngineWithTempEngine()
-	ee.Commit(ctx, op)
-	assert.Equal(t, first_engine_then_tempengine, ee.state)
-}
-
-func TestEntireEngineRollback(t *testing.T) {
-	ctx := context.TODO()
-	op := newtestOperator()
-	ee := buildEntireEngineWithoutTempEngine()
-	ee.Rollback(ctx, op)
-	assert.Equal(t, only_engine, ee.state)
-	ee = buildEntireEngineWithTempEngine()
-	ee.Rollback(ctx, op)
-	assert.Equal(t, first_engine_then_tempengine, ee.state)
-}
-
 func TestEntireEngineDelete(t *testing.T) {
 	ctx := context.TODO()
 	op := newtestOperator()
@@ -159,10 +137,10 @@ func TestEntireEngineHints(t *testing.T) {
 func TestEntireEngineNewBlockReader(t *testing.T) {
 	ctx := context.TODO()
 	ee := buildEntireEngineWithoutTempEngine()
-	ee.NewBlockReader(ctx, 1, timestamp.Timestamp{}, nil, nil, nil)
+	ee.NewBlockReader(ctx, 1, timestamp.Timestamp{}, nil, nil, nil, nil)
 	assert.Equal(t, only_engine, ee.state)
 	ee = buildEntireEngineWithTempEngine()
-	ee.NewBlockReader(ctx, 1, timestamp.Timestamp{}, nil, nil, nil)
+	ee.NewBlockReader(ctx, 1, timestamp.Timestamp{}, nil, nil, nil, nil)
 	assert.Equal(t, only_engine, ee.state)
 }
 
@@ -291,7 +269,7 @@ func (e *testEngine) Hints() (h Hints) {
 }
 
 func (e *testEngine) NewBlockReader(_ context.Context, _ int, _ timestamp.Timestamp,
-	_ *plan.Expr, _ [][]byte, _ *plan.TableDef) ([]Reader, error) {
+	_ *plan.Expr, _ [][]byte, _ *plan.TableDef, proc any) ([]Reader, error) {
 	e.parent.step = e.parent.step + 1
 	if e.name == origin {
 		e.parent.state = e.parent.state + e.parent.step*e.parent.state
@@ -352,6 +330,14 @@ func (o *testOperator) Txn() txn.TxnMeta {
 	return txn.TxnMeta{}
 }
 
+func (o *testOperator) SnapshotTS() timestamp.Timestamp {
+	panic("should not call")
+}
+
+func (o *testOperator) Status() txn.TxnStatus {
+	panic("should not call")
+}
+
 func (o *testOperator) TxnRef() *txn.TxnMeta {
 	return &txn.TxnMeta{}
 }
@@ -365,5 +351,33 @@ func (o *testOperator) AddLockTable(lock.LockTable) error {
 }
 
 func (o *testOperator) UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error {
+	panic("should not call")
+}
+
+func (o *testOperator) ResetRetry(retry bool) {
+	panic("unimplemented")
+}
+
+func (o *testOperator) IsRetry() bool {
+	panic("unimplemented")
+}
+
+func (o *testOperator) AppendEventCallback(event client.EventType, callbacks ...func(txn.TxnMeta)) {
+	panic("unimplemented")
+}
+
+func (o *testOperator) Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
+	panic("unimplemented")
+}
+
+func (o *testOperator) AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64 {
+	panic("should not call")
+}
+
+func (o *testOperator) RemoveWaitLock(key uint64) {
+	panic("should not call")
+}
+
+func (o *testOperator) GetOverview() client.TxnOverview {
 	panic("should not call")
 }

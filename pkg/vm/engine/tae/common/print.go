@@ -38,7 +38,7 @@ const (
 	PPL3
 )
 
-const PrintN = 3
+const DefaultMaxRowsToPrint = 3
 
 func RepeatStr(str string, times int) string {
 	for i := 0; i < times; i++ {
@@ -68,7 +68,7 @@ func DoIfInfoEnabled(fn func()) {
 	}
 }
 func DoIfDebugEnabled(fn func()) {
-	if logutil.GetSkip1Logger().Core().Enabled(zapcore.InfoLevel) {
+	if logutil.GetSkip1Logger().Core().Enabled(zapcore.DebugLevel) {
 		fn()
 	}
 }
@@ -124,6 +124,11 @@ func TypeStringValue(t types.Type, v any, isNull bool, opts ...TypePrintOpt) str
 		} else {
 			return fmt.Sprintf("%x", buf)
 		}
+	case types.T_array_float32:
+		// The parent function is mostly used to print the vector content for debugging.
+		return types.BytesToArrayToString[float32](v.([]byte))
+	case types.T_array_float64:
+		return types.BytesToArrayToString[float64](v.([]byte))
 	case types.T_date:
 		val := v.(types.Date)
 		return val.String()
@@ -163,6 +168,9 @@ func TypeStringValue(t types.Type, v any, isNull bool, opts ...TypePrintOpt) str
 	case types.T_Blockid:
 		val := v.(types.Blockid)
 		return val.String()
+	case types.T_enum:
+		val := v.(types.Enum)
+		return fmt.Sprintf("%v", val)
 	default:
 		return fmt.Sprintf("%v", v)
 	}
@@ -186,7 +194,7 @@ func vec2Str[T any](vec []T, v *vector.Vector) string {
 	return w.String()
 }
 
-func moVec2String(v *vector.Vector, printN int) string {
+func MoVectorToString(v *vector.Vector, printN int) string {
 	switch v.GetType().Oid {
 	case types.T_bool:
 		return vec2Str(vector.MustFixedCol[bool](v)[:printN], v)
@@ -218,6 +226,8 @@ func moVec2String(v *vector.Vector, printN int) string {
 		return vec2Str(vector.MustFixedCol[types.Time](v)[:printN], v)
 	case types.T_timestamp:
 		return vec2Str(vector.MustFixedCol[types.Timestamp](v)[:printN], v)
+	case types.T_enum:
+		return vec2Str(vector.MustFixedCol[types.Enum](v)[:printN], v)
 	case types.T_decimal64:
 		return vec2Str(vector.MustFixedCol[types.Decimal64](v)[:printN], v)
 	case types.T_decimal128:
@@ -237,29 +247,29 @@ func moVec2String(v *vector.Vector, printN int) string {
 	return fmt.Sprintf("unkown type vec... %v", *v.GetType())
 }
 
-func PrintMoBatch(moBat *batch.Batch, printN int) string {
-	n := moBat.Length()
+func MoBatchToString(moBat *batch.Batch, printN int) string {
+	n := moBat.RowCount()
 	if n > printN {
 		n = printN
 	}
 	buf := new(bytes.Buffer)
 	for i, vec := range moBat.Vecs {
-		fmt.Fprintf(buf, "[%v] = %v\n", moBat.Attrs[i], moVec2String(vec, n))
+		fmt.Fprintf(buf, "[%v] = %v\n", moBat.Attrs[i], MoVectorToString(vec, n))
 	}
 	return buf.String()
 }
 
-func PrintApiBatch(apiBat *api.Batch, printN int) string {
+func ApiBatchToString(apiBat *api.Batch, printN int) string {
 	if apiBat == nil {
 		return ""
 	}
 	bat, _ := batch.ProtoBatchToBatch(apiBat)
-	return PrintMoBatch(bat, printN)
+	return MoBatchToString(bat, printN)
 }
 
 func DebugMoBatch(moBat *batch.Batch) string {
 	if !logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 		return "not debug level"
 	}
-	return PrintMoBatch(moBat, PrintN)
+	return MoBatchToString(moBat, DefaultMaxRowsToPrint)
 }

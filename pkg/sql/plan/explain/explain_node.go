@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 var _ NodeDescribe = &NodeDescribeImpl{}
@@ -57,6 +56,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = TableScan
 	case plan.Node_EXTERNAL_SCAN:
 		pname = ExternalScan
+	case plan.Node_STREAM_SCAN:
+		pname = "Stream Scan"
 	case plan.Node_MATERIAL_SCAN:
 		pname = "Material Scan"
 	case plan.Node_PROJECT:
@@ -65,12 +66,14 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "External Function"
 	case plan.Node_MATERIAL:
 		pname = "Material"
-	case plan.Node_RECURSIVE_CTE:
-		pname = "Recursive CTE"
 	case plan.Node_SINK:
 		pname = "Sink"
 	case plan.Node_SINK_SCAN:
 		pname = "Sink Scan"
+	case plan.Node_RECURSIVE_SCAN:
+		pname = "Recursive Scan"
+	case plan.Node_RECURSIVE_CTE:
+		pname = "CTE Scan"
 	case plan.Node_AGG:
 		pname = "Aggregate"
 	case plan.Node_DISTINCT:
@@ -91,6 +94,10 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Unique"
 	case plan.Node_WINDOW:
 		pname = "Window"
+	case plan.Node_TIME_WINDOW:
+		pname = "Time window"
+	case plan.Node_Fill:
+		pname = "Fill"
 	case plan.Node_BROADCAST:
 		pname = "Broadcast"
 	case plan.Node_SPLIT:
@@ -117,6 +124,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "PreInsert"
 	case plan.Node_PRE_INSERT_UK:
 		pname = "PreInsert UniqueKey"
+	case plan.Node_PRE_INSERT_SK:
+		pname = "PreInsert SecondaryKey"
 	case plan.Node_PRE_DELETE:
 		pname = "PreDelete"
 	case plan.Node_ON_DUPLICATE_KEY:
@@ -133,7 +142,7 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		switch ndesc.Node.NodeType {
 		case plan.Node_VALUE_SCAN:
 			buf.WriteString(" \"*VALUES*\" ")
-		case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_INSERT:
+		case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_INSERT, plan.Node_STREAM_SCAN:
 			buf.WriteString(" on ")
 			if ndesc.Node.ObjRef != nil {
 				buf.WriteString(ndesc.Node.ObjRef.GetSchemaName() + "." + ndesc.Node.ObjRef.GetObjName())
@@ -227,6 +236,16 @@ func (ndesc *NodeDescribeImpl) GetTableDef(ctx context.Context, options *Explain
 
 func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *ExplainOptions) ([]string, error) {
 	lines := make([]string, 0)
+
+	// Get partition prune information
+	if ndesc.Node.NodeType == plan.Node_TABLE_SCAN && ndesc.Node.TableDef.Partition != nil {
+		partPruneInfo, err := ndesc.GetPartitionPruneInfo(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, partPruneInfo)
+	}
+
 	// Get Sort list info
 	if len(ndesc.Node.OrderBy) > 0 {
 		orderByInfo, err := ndesc.GetOrderByInfo(ctx, options)
@@ -263,8 +282,21 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		lines = append(lines, groupByInfo)
 	}
 
+	if ndesc.Node.NodeType == plan.Node_Fill {
+		fillCoslInfo, err := ndesc.GetFillColsInfo(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, fillCoslInfo)
+		fillModelInfo, err := ndesc.GetFillModeInfo(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, fillModelInfo)
+	}
+
 	// Get Aggregate function info
-	if len(ndesc.Node.AggList) > 0 {
+	if len(ndesc.Node.AggList) > 0 && ndesc.Node.NodeType != plan.Node_Fill {
 		aggListInfo, err := ndesc.GetAggregationInfo(ctx, options)
 		if err != nil {
 			return nil, err
@@ -293,6 +325,22 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 	// Get Block Filter list info
 	if len(ndesc.Node.BlockFilterList) > 0 {
 		filterInfo, err := ndesc.GetBlockFilterConditionInfo(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, filterInfo)
+	}
+
+	if len(ndesc.Node.RuntimeFilterProbeList) > 0 {
+		filterInfo, err := ndesc.GetRuntimeFilteProbeInfo(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, filterInfo)
+	}
+
+	if len(ndesc.Node.RuntimeFilterBuildList) > 0 {
+		filterInfo, err := ndesc.GetRuntimeFilterBuildInfo(ctx, options)
 		if err != nil {
 			return nil, err
 		}
@@ -343,6 +391,14 @@ func (ndesc *NodeDescribeImpl) GetProjectListInfo(ctx context.Context, options *
 
 func (ndesc *NodeDescribeImpl) GetJoinTypeInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	result := "Join Type: " + ndesc.Node.JoinType.String()
+	if ndesc.Node.BuildOnLeft {
+		if ndesc.Node.JoinType == plan.Node_SEMI || ndesc.Node.JoinType == plan.Node_ANTI {
+			result = "Join Type: RIGHT " + ndesc.Node.JoinType.String()
+		}
+	}
+	if ndesc.Node.Stats.HashmapStats != nil && ndesc.Node.Stats.HashmapStats.HashOnPK {
+		result += "   hashOnPK"
+	}
 	return result, nil
 }
 
@@ -353,6 +409,61 @@ func (ndesc *NodeDescribeImpl) GetJoinConditionInfo(ctx context.Context, options
 	err := exprs.GetDescription(ctx, options, buf)
 	if err != nil {
 		return "", err
+	}
+
+	if ndesc.Node.Stats.HashmapStats.Shuffle {
+		idx := ndesc.Node.Stats.HashmapStats.ShuffleColIdx
+		shuffleType := ndesc.Node.Stats.HashmapStats.ShuffleType
+		var hashCol *plan.Expr
+		switch exprImpl := ndesc.Node.OnList[idx].Expr.(type) {
+		case *plan.Expr_F:
+			hashCol = exprImpl.F.Args[0]
+		}
+
+		if shuffleType == plan.ShuffleType_Hash {
+			buf.WriteString(" shuffle: hash(")
+			err := describeExpr(ctx, hashCol, options, buf)
+			if err != nil {
+				return "", err
+			}
+			buf.WriteString(")")
+		} else {
+			buf.WriteString(" shuffle: range(")
+			err := describeExpr(ctx, hashCol, options, buf)
+			if err != nil {
+				return "", err
+			}
+			buf.WriteString(")")
+		}
+
+		if ndesc.Node.Stats.HashmapStats.ShuffleTypeForMultiCN == plan.ShuffleTypeForMultiCN_Hybrid {
+			buf.WriteString(" HYBRID ")
+		}
+	}
+
+	return buf.String(), nil
+}
+
+func (ndesc *NodeDescribeImpl) GetPartitionPruneInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	buf.WriteString("Hit Partition: ")
+	if options.Format == EXPLAIN_FORMAT_TEXT {
+		if ndesc.Node.PartitionPrune != nil {
+			first := true
+			for _, v := range ndesc.Node.PartitionPrune.SelectedPartitions {
+				if !first {
+					buf.WriteString(", ")
+				}
+				first = false
+				buf.WriteString(v.PartitionName)
+			}
+		} else {
+			buf.WriteString("all partitions")
+		}
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return "", moerr.NewNYI(ctx, "explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return "", moerr.NewNYI(ctx, "explain format dot")
 	}
 	return buf.String(), nil
 }
@@ -403,6 +514,52 @@ func (ndesc *NodeDescribeImpl) GetBlockFilterConditionInfo(ctx context.Context, 
 	return buf.String(), nil
 }
 
+func (ndesc *NodeDescribeImpl) GetRuntimeFilteProbeInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	buf.WriteString("Runtime Filter Probe: ")
+	if options.Format == EXPLAIN_FORMAT_TEXT {
+		first := true
+		for _, v := range ndesc.Node.RuntimeFilterProbeList {
+			if !first {
+				buf.WriteString(", ")
+			}
+			first = false
+			err := describeExpr(ctx, v.Expr, options, buf)
+			if err != nil {
+				return "", err
+			}
+		}
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return "", moerr.NewNYI(ctx, "explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return "", moerr.NewNYI(ctx, "explain format dot")
+	}
+	return buf.String(), nil
+}
+
+func (ndesc *NodeDescribeImpl) GetRuntimeFilterBuildInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	buf.WriteString("Runtime Filter Build: ")
+	if options.Format == EXPLAIN_FORMAT_TEXT {
+		first := true
+		for _, v := range ndesc.Node.RuntimeFilterBuildList {
+			if !first {
+				buf.WriteString(", ")
+			}
+			first = false
+			err := describeExpr(ctx, v.Expr, options, buf)
+			if err != nil {
+				return "", err
+			}
+		}
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return "", moerr.NewNYI(ctx, "explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return "", moerr.NewNYI(ctx, "explain format dot")
+	}
+	return buf.String(), nil
+}
+
 func (ndesc *NodeDescribeImpl) GetGroupByInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, 300))
 	buf.WriteString("Group Key: ")
@@ -424,12 +581,31 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(ctx context.Context, options *Expl
 		return "", moerr.NewNYI(ctx, "explain format dot")
 	}
 
-	idx := plan2.GetShuffleIndexForGroupBy(ndesc.Node)
-	if idx >= 0 {
-		buf.WriteString(" shuffle: ")
-		err := describeExpr(ctx, ndesc.Node.GroupBy[idx], options, buf)
-		if err != nil {
-			return "", err
+	if ndesc.Node.Stats.HashmapStats != nil && ndesc.Node.Stats.HashmapStats.Shuffle {
+		idx := ndesc.Node.Stats.HashmapStats.ShuffleColIdx
+		shuffleType := ndesc.Node.Stats.HashmapStats.ShuffleType
+		if ndesc.Node.Stats.HashmapStats.ShuffleMethod != plan.ShuffleMethod_Reuse {
+			if shuffleType == plan.ShuffleType_Hash {
+				buf.WriteString(" shuffle: hash(")
+				err := describeExpr(ctx, ndesc.Node.GroupBy[idx], options, buf)
+				if err != nil {
+					return "", err
+				}
+				buf.WriteString(")")
+			} else {
+				buf.WriteString(" shuffle: range(")
+				err := describeExpr(ctx, ndesc.Node.GroupBy[idx], options, buf)
+				if err != nil {
+					return "", err
+				}
+				buf.WriteString(")")
+			}
+		}
+
+		if ndesc.Node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
+			buf.WriteString(" shuffle: REUSE ")
+		} else if ndesc.Node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reshuffle {
+			buf.WriteString(" RESHUFFLE ")
 		}
 	}
 	return buf.String(), nil
@@ -448,6 +624,69 @@ func (ndesc *NodeDescribeImpl) GetAggregationInfo(ctx context.Context, options *
 			err := describeExpr(ctx, v, options, buf)
 			if err != nil {
 				return "", err
+			}
+		}
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return "", moerr.NewNYI(ctx, "explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return "", moerr.NewNYI(ctx, "explain format dot")
+	}
+	return buf.String(), nil
+}
+
+func (ndesc *NodeDescribeImpl) GetFillColsInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	buf.WriteString("Fill Columns: ")
+	if options.Format == EXPLAIN_FORMAT_TEXT {
+		first := true
+		for _, v := range ndesc.Node.GetAggList() {
+			if !first {
+				buf.WriteString(", ")
+			}
+			first = false
+			err := describeExpr(ctx, v, options, buf)
+			if err != nil {
+				return "", err
+			}
+		}
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return "", moerr.NewNYI(ctx, "explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return "", moerr.NewNYI(ctx, "explain format dot")
+	}
+	return buf.String(), nil
+}
+
+func (ndesc *NodeDescribeImpl) GetFillModeInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	buf.WriteString("Fill Mode: ")
+	if options.Format == EXPLAIN_FORMAT_TEXT {
+		switch ndesc.Node.FillType {
+		case plan.Node_NONE:
+			buf.WriteString("None")
+		case plan.Node_LINEAR:
+			buf.WriteString("Linear")
+		case plan.Node_NULL:
+			buf.WriteString("Null")
+		case plan.Node_VALUE:
+			buf.WriteString("Value")
+		case plan.Node_PREV:
+			buf.WriteString("Prev")
+		case plan.Node_NEXT:
+			buf.WriteString("Next")
+		}
+		if len(ndesc.Node.FillVal) > 0 {
+			buf.WriteString(" Fill Value: ")
+			first := true
+			for _, v := range ndesc.Node.GetFillVal() {
+				if !first {
+					buf.WriteString(", ")
+				}
+				first = false
+				err := describeExpr(ctx, v, options, buf)
+				if err != nil {
+					return "", err
+				}
 			}
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
@@ -560,8 +799,8 @@ func (c *CostDescribeImpl) GetDescription(ctx context.Context, options *ExplainO
 		if c.Stats.BlockNum > 0 {
 			blockNumStr = " blockNum=" + strconv.FormatInt(int64(c.Stats.BlockNum), 10)
 		}
-		if c.Stats.HashmapSize > 0 {
-			hashmapSizeStr = " hashmapSize=" + strconv.FormatFloat(c.Stats.HashmapSize, 'f', 2, 64)
+		if c.Stats.HashmapStats != nil && c.Stats.HashmapStats.HashmapSize > 0 {
+			hashmapSizeStr = " hashmapSize=" + strconv.FormatFloat(c.Stats.HashmapStats.HashmapSize, 'f', 2, 64)
 		}
 		buf.WriteString(" (cost=" + strconv.FormatFloat(c.Stats.Cost, 'f', 2, 64) +
 			" outcnt=" + strconv.FormatFloat(c.Stats.Outcnt, 'f', 2, 64) +

@@ -16,6 +16,7 @@ package testutil
 
 import (
 	"context"
+	"encoding/binary"
 	"math/rand"
 	"strconv"
 	"time"
@@ -48,6 +49,7 @@ func SetupAutoIncrService() {
 	rt.SetGlobalVariables(
 		runtime.AutoIncrmentService,
 		incrservice.NewIncrService(
+			"",
 			incrservice.NewMemStore(),
 			incrservice.Config{}))
 }
@@ -60,6 +62,9 @@ func NewProcessWithMPool(mp *mpool.MPool) *process.Process {
 		nil, // no txn client can be set
 		nil, // no txn operator can be set
 		NewFS(),
+		nil,
+		nil,
+		nil,
 		nil,
 		nil,
 	)
@@ -100,7 +105,7 @@ func NewFS() *fileservice.FileServices {
 
 func NewBatch(ts []types.Type, random bool, n int, m *mpool.MPool) *batch.Batch {
 	bat := batch.NewWithSize(len(ts))
-	bat.InitZsOne(n)
+	bat.SetRowCount(n)
 	for i := range bat.Vecs {
 		bat.Vecs[i] = NewVector(n, ts[i], m, random, nil)
 		// XXX do we need to init nulls here?   can we be lazy?
@@ -111,7 +116,7 @@ func NewBatch(ts []types.Type, random bool, n int, m *mpool.MPool) *batch.Batch 
 
 func NewBatchWithNulls(ts []types.Type, random bool, n int, m *mpool.MPool) *batch.Batch {
 	bat := batch.NewWithSize(len(ts))
-	bat.InitZsOne(n)
+	bat.SetRowCount(n)
 	for i := range bat.Vecs {
 		bat.Vecs[i] = NewVector(n, ts[i], m, random, nil)
 		bat.Vecs[i].GetNulls().InitWithSize(n)
@@ -132,7 +137,7 @@ func NewBatchWithVectors(vs []*vector.Vector, zs []int64) *batch.Batch {
 		if zs == nil {
 			zs = MakeBatchZs(l, false)
 		}
-		bat.Zs = append([]int64{}, zs...)
+		bat.SetRowCount(len(zs))
 		bat.Vecs = vs
 	}
 	return bat
@@ -231,6 +236,16 @@ func NewVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 			return NewStringVector(n, typ, m, random, vs)
 		}
 		return NewStringVector(n, typ, m, random, nil)
+	case types.T_array_float32:
+		if vs, ok := Values.([][]float32); ok {
+			return NewArrayVector[float32](n, typ, m, random, vs)
+		}
+		return NewArrayVector[float32](n, typ, m, random, nil)
+	case types.T_array_float64:
+		if vs, ok := Values.([][]float64); ok {
+			return NewArrayVector[float64](n, typ, m, random, vs)
+		}
+		return NewArrayVector[float64](n, typ, m, random, nil)
 	case types.T_json:
 		if vs, ok := Values.([]string); ok {
 			return NewJsonVector(n, typ, m, random, vs)
@@ -251,6 +266,11 @@ func NewVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 			return NewBlockidVector(n, typ, m, random, vs)
 		}
 		return NewBlockidVector(n, typ, m, random, nil)
+	case types.T_enum:
+		if vs, ok := Values.([]uint16); ok {
+			return NewUInt16Vector(n, typ, m, random, vs)
+		}
+		return NewUInt16Vector(n, typ, m, random, nil)
 	default:
 		panic(moerr.NewInternalErrorNoCtx("unsupport vector's type '%v", typ))
 	}
@@ -291,10 +311,12 @@ func NewRowidVector(n int, typ types.Type, m *mpool.MPool, _ bool, vs []types.Ro
 		return vec
 	}
 	for i := 0; i < n; i++ {
-		var rowId [2]int64
-
-		rowId[1] = int64(i)
-		if err := vector.AppendFixed(vec, *(*types.Rowid)(unsafe.Pointer(&rowId[0])), false, m); err != nil {
+		var rowId types.Rowid
+		binary.LittleEndian.PutUint64(
+			unsafe.Slice(&rowId[types.RowidSize/2], 8),
+			uint64(i),
+		)
+		if err := vector.AppendFixed(vec, rowId, false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}
@@ -314,10 +336,12 @@ func NewBlockidVector(n int, typ types.Type, m *mpool.MPool, _ bool, vs []types.
 		return vec
 	}
 	for i := 0; i < n; i++ {
-		var blockId [2]int64
-
-		blockId[1] = int64(i)
-		if err := vector.AppendFixed(vec, *(*types.Blockid)(unsafe.Pointer(&blockId[0])), false, m); err != nil {
+		var blockId types.Blockid
+		binary.LittleEndian.PutUint64(
+			unsafe.Slice(&blockId[types.BlockidSize/2], 8),
+			uint64(i),
+		)
+		if err := vector.AppendFixed(vec, blockId, false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}
@@ -797,6 +821,30 @@ func NewStringVector(n int, typ types.Type, m *mpool.MPool, random bool, vs []st
 			v = rand.Int()
 		}
 		if err := vector.AppendBytes(vec, []byte(strconv.Itoa(v)), false, m); err != nil {
+			vec.Free(m)
+			return nil
+		}
+	}
+	return vec
+}
+
+func NewArrayVector[T types.RealNumbers](n int, typ types.Type, m *mpool.MPool, random bool, vs [][]T) *vector.Vector {
+	vec := vector.NewVec(typ)
+	if vs != nil {
+		for i := range vs {
+			if err := vector.AppendArray[T](vec, vs[i], false, m); err != nil {
+				vec.Free(m)
+				return nil
+			}
+		}
+		return vec
+	}
+	for i := 0; i < n; i++ {
+		v := i
+		if random {
+			v = rand.Int()
+		}
+		if err := vector.AppendArray[T](vec, []T{T(v), T(v + 1)}, false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}

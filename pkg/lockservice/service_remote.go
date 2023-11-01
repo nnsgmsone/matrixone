@@ -15,6 +15,7 @@
 package lockservice
 
 import (
+	"bytes"
 	"context"
 	"time"
 
@@ -38,7 +39,7 @@ func (s *service) initRemote() {
 	s.remote.client = rpcClient
 	s.remote.server = rpcServer
 	s.remote.keeper = NewLockTableKeeper(
-		s.cfg.ServiceID,
+		s.serviceID,
 		rpcClient,
 		s.cfg.KeepBindDuration.Duration,
 		s.cfg.KeepRemoteLockDuration.Duration,
@@ -55,6 +56,8 @@ func (s *service) initRemote() {
 func (s *service) initRemoteHandler() {
 	s.remote.server.RegisterMethodHandler(pb.Method_Lock,
 		s.handleRemoteLock)
+	s.remote.server.RegisterMethodHandler(pb.Method_ForwardLock,
+		s.handleForwardLock)
 	s.remote.server.RegisterMethodHandler(pb.Method_Unlock,
 		s.handleRemoteUnlock)
 	s.remote.server.RegisterMethodHandler(pb.Method_GetTxnLock,
@@ -67,6 +70,7 @@ func (s *service) initRemoteHandler() {
 
 func (s *service) handleRemoteLock(
 	ctx context.Context,
+	cancel context.CancelFunc,
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
@@ -75,10 +79,21 @@ func (s *service) handleRemoteLock(
 		l == nil {
 		// means that the lockservice sending the lock request holds a stale
 		// lock table binding.
-		writeResponse(ctx, resp, err, cs)
+		writeResponse(ctx, cancel, resp, err, cs)
 		return
 	}
+
 	txn := s.activeTxnHolder.getActiveTxn(req.Lock.TxnID, true, req.Lock.ServiceID)
+	txn.Lock()
+	defer txn.Unlock()
+	if !bytes.Equal(txn.txnID, req.Lock.TxnID) {
+		writeResponse(ctx, cancel, resp, ErrTxnNotFound, cs)
+		return
+	}
+	if txn.deadlockFound {
+		writeResponse(ctx, cancel, resp, ErrDeadLockDetected, cs)
+		return
+	}
 
 	l.lock(
 		ctx,
@@ -87,12 +102,53 @@ func (s *service) handleRemoteLock(
 		LockOptions{LockOptions: req.Lock.Options, async: true},
 		func(result pb.Result, err error) {
 			resp.Lock.Result = result
-			writeResponse(ctx, resp, err, cs)
+			writeResponse(ctx, cancel, resp, err, cs)
+		})
+}
+
+func (s *service) handleForwardLock(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	req *pb.Request,
+	resp *pb.Response,
+	cs morpc.ClientSession) {
+	l, err := s.getLockTable(req.LockTable.Table)
+	if err != nil ||
+		l == nil {
+		// means that the lockservice sending the lock request holds a stale
+		// lock table binding.
+		writeResponse(ctx, cancel, resp, err, cs)
+		return
+	}
+
+	txn := s.activeTxnHolder.getActiveTxn(req.Lock.TxnID, true, "")
+	txn.Lock()
+	if !bytes.Equal(txn.txnID, req.Lock.TxnID) {
+		txn.Unlock()
+		writeResponse(ctx, cancel, resp, ErrTxnNotFound, cs)
+		return
+	}
+	if txn.deadlockFound {
+		txn.Unlock()
+		writeResponse(ctx, cancel, resp, ErrDeadLockDetected, cs)
+		return
+	}
+
+	l.lock(
+		ctx,
+		txn,
+		req.Lock.Rows,
+		LockOptions{LockOptions: req.Lock.Options, async: true},
+		func(result pb.Result, err error) {
+			txn.Unlock()
+			resp.Lock.Result = result
+			writeResponse(ctx, cancel, resp, err, cs)
 		})
 }
 
 func (s *service) handleRemoteUnlock(
 	ctx context.Context,
+	cancel context.CancelFunc,
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
@@ -101,15 +157,16 @@ func (s *service) handleRemoteUnlock(
 		l == nil {
 		// means that the lockservice sending the lock request holds a stale lock
 		// table binding.
-		writeResponse(ctx, resp, err, cs)
+		writeResponse(ctx, cancel, resp, err, cs)
 		return
 	}
 	err = s.Unlock(ctx, req.Unlock.TxnID, req.Unlock.CommitTS)
-	writeResponse(ctx, resp, err, cs)
+	writeResponse(ctx, cancel, resp, err, cs)
 }
 
 func (s *service) handleRemoteGetLock(
 	ctx context.Context,
+	cancel context.CancelFunc,
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
@@ -118,69 +175,54 @@ func (s *service) handleRemoteGetLock(
 		l == nil {
 		// means that the lockservice sending the lock request holds a stale lock
 		// table binding.
-		writeResponse(ctx, resp, err, cs)
+		writeResponse(ctx, cancel, resp, err, cs)
 		return
 	}
+
 	l.getLock(
-		req.GetTxnLock.TxnID,
 		req.GetTxnLock.Row,
+		pb.WaitTxn{TxnID: req.GetTxnLock.TxnID},
 		func(lock Lock) {
-			n := lock.waiter.waiters.len()
-			if n > 0 {
-				resp.GetTxnLock.Value = int32(lock.value)
-				values := make([]pb.WaitTxn, 0, n)
-				lock.waiter.waiters.iter(func(w *waiter) bool {
-					txn := s.activeTxnHolder.getActiveTxn(w.txnID, false, "")
-					if txn != nil {
-						values = append(values, txn.toWaitTxn(s.cfg.ServiceID, false))
-					}
-					return true
-				})
-				resp.GetTxnLock.WaitingList = values
-			}
+			resp.GetTxnLock.Value = int32(lock.value)
+			values := make([]pb.WaitTxn, 0)
+			lock.waiters.iter(func(w *waiter) bool {
+				values = append(values, w.txn)
+				return true
+			})
+			resp.GetTxnLock.WaitingList = values
 		})
-	writeResponse(ctx, resp, err, cs)
+	writeResponse(ctx, cancel, resp, err, cs)
 }
 
 func (s *service) handleRemoteGetWaitingList(
 	ctx context.Context,
+	cancel context.CancelFunc,
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
-	txn := s.activeTxnHolder.getActiveTxn(
-		req.GetWaitingList.Txn.TxnID,
-		false,
-		"")
-	if txn == nil {
-		writeResponse(ctx, resp, nil, cs)
+	select {
+	case s.fetchWhoWaitingListC <- who{ctx: ctx, cancel: cancel, cs: cs, resp: resp, txnID: req.GetWaitingList.Txn.TxnID}:
 		return
+	default:
+		writeResponse(ctx, cancel, resp, ErrDeadLockDetected, cs)
 	}
-	txn.fetchWhoWaitingMe(
-		s.cfg.ServiceID,
-		req.GetWaitingList.Txn.TxnID,
-		s.activeTxnHolder,
-		func(w pb.WaitTxn) bool {
-			resp.GetWaitingList.WaitingList = append(resp.GetWaitingList.WaitingList, w)
-			return true
-		},
-		s.getLockTable)
-	writeResponse(ctx, resp, nil, cs)
 }
 
 func (s *service) handleKeepRemoteLock(
 	ctx context.Context,
+	cancel context.CancelFunc,
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
 	l, err := s.getLocalLockTable(req, resp)
 	if err != nil ||
 		l == nil {
-		writeResponse(ctx, resp, err, cs)
+		writeResponse(ctx, cancel, resp, err, cs)
 		return
 	}
 
 	s.activeTxnHolder.keepRemoteActiveTxn(req.KeepRemoteLock.ServiceID)
-	writeResponse(ctx, resp, nil, cs)
+	writeResponse(ctx, cancel, resp, nil, cs)
 }
 
 func (s *service) getLocalLockTable(
@@ -274,4 +316,40 @@ func getLockTableBind(
 	defer releaseResponse(resp)
 	v := resp.GetBind.LockTable
 	return v, nil
+}
+
+type who struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+	resp   *pb.Response
+	cs     morpc.ClientSession
+	txnID  []byte
+}
+
+func (s *service) handleFetchWhoWaitingMe(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case w := <-s.fetchWhoWaitingListC:
+			txn := s.activeTxnHolder.getActiveTxn(
+				w.txnID,
+				false,
+				"")
+			if txn == nil {
+				writeResponse(w.ctx, w.cancel, w.resp, nil, w.cs)
+				continue
+			}
+			txn.fetchWhoWaitingMe(
+				s.serviceID,
+				w.txnID,
+				s.activeTxnHolder,
+				func(wt pb.WaitTxn) bool {
+					w.resp.GetWaitingList.WaitingList = append(w.resp.GetWaitingList.WaitingList, wt)
+					return true
+				},
+				s.getLockTable)
+			writeResponse(w.ctx, w.cancel, w.resp, nil, w.cs)
+		}
+	}
 }

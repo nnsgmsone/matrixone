@@ -47,7 +47,7 @@ type Argument struct {
 	Typs   []types.Type
 }
 
-func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (ap *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := ap.ctr
 	if ctr != nil {
 		ctr.FreeAllReg()
@@ -71,5 +71,6 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 func (ctr *container) cleanExprExecutor() {
 	if ctr.expr != nil {
 		ctr.expr.Free()
+		ctr.expr = nil
 	}
 }

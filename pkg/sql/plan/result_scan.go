@@ -16,6 +16,7 @@ package plan
 
 import (
 	"encoding/json"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -33,7 +34,11 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 	if err == nil {
 		if v, _ := val.(int8); v == 0 {
 			return 0, moerr.NewNoConfig(builder.GetContext(), "save query result")
+		} else {
+			logutil.Infof("buildResultScan : save query result: %v", v)
 		}
+	} else {
+		return 0, err
 	}
 	ctx.binder = NewTableBinder(builder, ctx)
 	exprs := make([]*plan.Expr, 0, len(tbl.Func.Exprs))
@@ -51,11 +56,9 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 	if err != nil {
 		return 0, err
 	}
-	// calculate uuid
-	bat := batch.NewWithSize(0)
-	bat.Zs = []int64{1}
 
-	vec, err := colexec.EvalExpressionOnce(builder.compCtx.GetProcess(), exprs[0], []*batch.Batch{bat})
+	// calculate uuid
+	vec, err := colexec.EvalExpressionOnce(builder.compCtx.GetProcess(), exprs[0], []*batch.Batch{batch.EmptyForConstFoldBatch})
 	if err != nil {
 		return 0, err
 	}

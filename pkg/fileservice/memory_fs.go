@@ -33,7 +33,7 @@ type MemoryFS struct {
 	name string
 	sync.RWMutex
 	tree            *btree.BTreeG[*_MemFSEntry]
-	diskCache       *DiskCache
+	caches          []IOVectorCache
 	perfCounterSets []*perfcounter.CounterSet
 	asyncUpdate     bool
 }
@@ -53,23 +53,6 @@ func NewMemoryFS(
 		}),
 		perfCounterSets: perfCounterSets,
 	}
-
-	//if diskCacheCapacity > DisableCacheCapacity && diskCachePath != "" {
-	//	var err error
-	//	fs.diskCache, err = NewDiskCache(
-	//		diskCachePath,
-	//		diskCacheCapacity,
-	//		fs.perfCounterSets,
-	//	)
-	//	if err != nil {
-	//		return nil, err
-	//	}
-	//	logutil.Info("fileservice: disk cache initialized",
-	//		zap.Any("fs-name", fs.name),
-	//		zap.Any("capacity", diskCacheCapacity),
-	//		zap.Any("path", diskCachePath),
-	//	)
-	//}
 
 	return fs, nil
 }
@@ -175,7 +158,17 @@ func (m *MemoryFS) write(ctx context.Context, vector IOVector) error {
 		return vector.Entries[i].Offset < vector.Entries[j].Offset
 	})
 
-	r := newIOEntriesReader(ctx, vector.Entries)
+	var r io.Reader
+	r = newIOEntriesReader(ctx, vector.Entries)
+
+	if vector.Hash.Sum != nil && vector.Hash.New != nil {
+		h := vector.Hash.New()
+		r = io.TeeReader(r, h)
+		defer func() {
+			*vector.Hash.Sum = h.Sum(nil)
+		}()
+	}
+
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return err
@@ -196,15 +189,16 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	default:
 	}
 
-	if m.diskCache != nil {
-		if err := m.diskCache.Read(ctx, vector); err != nil {
+	for _, cache := range m.caches {
+		cache := cache
+		if err := cache.Read(ctx, vector); err != nil {
 			return err
 		}
 		defer func() {
 			if err != nil {
 				return
 			}
-			err = m.diskCache.Update(ctx, vector, m.asyncUpdate)
+			err = cache.Update(ctx, vector, m.asyncUpdate)
 		}()
 	}
 
@@ -271,7 +265,7 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) (err error) {
 			}
 		}
 
-		if err := entry.setObjectBytesFromData(); err != nil {
+		if err := entry.setCachedData(); err != nil {
 			return err
 		}
 
@@ -281,7 +275,7 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	return nil
 }
 
-func (m *MemoryFS) Preload(ctx context.Context, filePath string) error {
+func (m *MemoryFS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	return nil
 }
 

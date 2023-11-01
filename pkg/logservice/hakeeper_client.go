@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math/rand"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -30,6 +31,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
+const (
+	defaultBackendReadTimeout = time.Second * 8
+)
+
 type basicHAKeeperClient interface {
 	// Close closes the hakeeper client.
 	Close() error
@@ -39,7 +44,7 @@ type basicHAKeeperClient interface {
 	AllocateIDByKey(ctx context.Context, key string) (uint64, error)
 	// AllocateIDByKey allocate a globally unique ID by key.
 	AllocateIDByKeyWithBatch(ctx context.Context, key string, batch uint64) (uint64, error)
-	// GetClusterDetails queries the HAKeeper and return CN and DN nodes that are
+	// GetClusterDetails queries the HAKeeper and return CN and TN nodes that are
 	// known to the HAKeeper.
 	GetClusterDetails(ctx context.Context) (pb.ClusterDetails, error)
 	// GetClusterState queries the cluster state
@@ -54,17 +59,18 @@ type ClusterHAKeeperClient interface {
 // CNHAKeeperClient is the HAKeeper client used by a CN store.
 type CNHAKeeperClient interface {
 	basicHAKeeperClient
+	BRHAKeeperClient
 	// SendCNHeartbeat sends the specified heartbeat message to the HAKeeper.
 	SendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeartbeat) (pb.CommandBatch, error)
 }
 
-// DNHAKeeperClient is the HAKeeper client used by a DN store.
-type DNHAKeeperClient interface {
+// TNHAKeeperClient is the HAKeeper client used by a TN store.
+type TNHAKeeperClient interface {
 	basicHAKeeperClient
-	// SendDNHeartbeat sends the specified heartbeat message to the HAKeeper. The
+	// SendTNHeartbeat sends the specified heartbeat message to the HAKeeper. The
 	// returned CommandBatch contains Schedule Commands to be executed by the local
-	// DN store.
-	SendDNHeartbeat(ctx context.Context, hb pb.DNStoreHeartbeat) (pb.CommandBatch, error)
+	// TN store.
+	SendTNHeartbeat(ctx context.Context, hb pb.TNStoreHeartbeat) (pb.CommandBatch, error)
 }
 
 // LogHAKeeperClient is the HAKeeper client used by a Log store.
@@ -83,12 +89,25 @@ type ProxyHAKeeperClient interface {
 	GetCNState(ctx context.Context) (pb.CNState, error)
 	// UpdateCNLabel updates the labels of CN.
 	UpdateCNLabel(ctx context.Context, label pb.CNStoreLabel) error
+	// UpdateCNWorkState updates the work state of CN.
+	UpdateCNWorkState(ctx context.Context, state pb.CNWorkState) error
+	// PatchCNStore updates the work state and labels of CN.
+	PatchCNStore(ctx context.Context, stateLabel pb.CNStateLabel) error
+	// DeleteCNStore deletes a CN store from HAKeeper.
+	DeleteCNStore(ctx context.Context, cnStore pb.DeleteCNStore) error
+	// SendProxyHeartbeat sends the heartbeat of proxy to HAKeeper.
+	SendProxyHeartbeat(ctx context.Context, hb pb.ProxyHeartbeat) (pb.CommandBatch, error)
+}
+
+// BRHAKeeperClient is the HAKeeper client for backup and restore.
+type BRHAKeeperClient interface {
+	GetBackupData(ctx context.Context) ([]byte, error)
 }
 
 // TODO: HAKeeper discovery to be implemented
 
 var _ CNHAKeeperClient = (*managedHAKeeperClient)(nil)
-var _ DNHAKeeperClient = (*managedHAKeeperClient)(nil)
+var _ TNHAKeeperClient = (*managedHAKeeperClient)(nil)
 var _ LogHAKeeperClient = (*managedHAKeeperClient)(nil)
 var _ ProxyHAKeeperClient = (*managedHAKeeperClient)(nil)
 
@@ -103,11 +122,11 @@ func NewCNHAKeeperClient(ctx context.Context,
 	return newManagedHAKeeperClient(ctx, cfg)
 }
 
-// NewDNHAKeeperClient creates a HAKeeper client to be used by a DN node.
+// NewTNHAKeeperClient creates a HAKeeper client to be used by a TN node.
 //
 // NB: caller could specify options for morpc.Client via ctx.
-func NewDNHAKeeperClient(ctx context.Context,
-	cfg HAKeeperClientConfig) (DNHAKeeperClient, error) {
+func NewTNHAKeeperClient(ctx context.Context,
+	cfg HAKeeperClientConfig) (TNHAKeeperClient, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -262,6 +281,7 @@ func (c *managedHAKeeperClient) AllocateIDByKeyWithBatch(
 	}
 
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	allocIDs, ok := c.mu.allocIDByKey[key]
 	if !ok {
 		allocIDs = &allocID{nextID: 0, lastID: 0}
@@ -271,7 +291,6 @@ func (c *managedHAKeeperClient) AllocateIDByKeyWithBatch(
 	if allocIDs.nextID != allocIDs.lastID {
 		v := allocIDs.nextID
 		allocIDs.nextID++
-		c.mu.Unlock()
 		return v, nil
 	}
 
@@ -289,7 +308,6 @@ func (c *managedHAKeeperClient) AllocateIDByKeyWithBatch(
 
 		allocIDs.nextID = firstID + 1
 		allocIDs.lastID = firstID + batch - 1
-		c.mu.Unlock()
 		return firstID, err
 	}
 }
@@ -311,13 +329,13 @@ func (c *managedHAKeeperClient) SendCNHeartbeat(ctx context.Context,
 	}
 }
 
-func (c *managedHAKeeperClient) SendDNHeartbeat(ctx context.Context,
-	hb pb.DNStoreHeartbeat) (pb.CommandBatch, error) {
+func (c *managedHAKeeperClient) SendTNHeartbeat(ctx context.Context,
+	hb pb.TNStoreHeartbeat) (pb.CommandBatch, error) {
 	for {
 		if err := c.prepareClient(ctx); err != nil {
 			return pb.CommandBatch{}, err
 		}
-		cb, err := c.getClient().sendDNHeartbeat(ctx, hb)
+		cb, err := c.getClient().sendTNHeartbeat(ctx, hb)
 		if err != nil {
 			c.resetClient()
 		}
@@ -376,6 +394,91 @@ func (c *managedHAKeeperClient) UpdateCNLabel(ctx context.Context, label pb.CNSt
 			continue
 		}
 		return err
+	}
+}
+
+// UpdateCNWorkState implements the ProxyHAKeeperClient interface.
+func (c *managedHAKeeperClient) UpdateCNWorkState(ctx context.Context, state pb.CNWorkState) error {
+	for {
+		if err := c.prepareClient(ctx); err != nil {
+			return err
+		}
+		err := c.getClient().updateCNWorkState(ctx, state)
+		if err != nil {
+			c.resetClient()
+		}
+		if c.isRetryableError(err) {
+			continue
+		}
+		return err
+	}
+}
+
+// PatchCNStore implements the ProxyHAKeeperClient interface.
+func (c *managedHAKeeperClient) PatchCNStore(ctx context.Context, stateLabel pb.CNStateLabel) error {
+	for {
+		if err := c.prepareClient(ctx); err != nil {
+			return err
+		}
+		err := c.getClient().patchCNStore(ctx, stateLabel)
+		if err != nil {
+			c.resetClient()
+		}
+		if c.isRetryableError(err) {
+			continue
+		}
+		return err
+	}
+}
+
+// DeleteCNStore implements the ProxyHAKeeperClient interface.
+func (c *managedHAKeeperClient) DeleteCNStore(ctx context.Context, cnStore pb.DeleteCNStore) error {
+	for {
+		if err := c.prepareClient(ctx); err != nil {
+			return err
+		}
+		err := c.getClient().deleteCNStore(ctx, cnStore)
+		if err != nil {
+			c.resetClient()
+		}
+		if c.isRetryableError(err) {
+			continue
+		}
+		return err
+	}
+}
+
+// SendProxyHeartbeat implements the ProxyHAKeeperClient interface.
+func (c *managedHAKeeperClient) SendProxyHeartbeat(ctx context.Context, hb pb.ProxyHeartbeat) (pb.CommandBatch, error) {
+	for {
+		if err := c.prepareClient(ctx); err != nil {
+			return pb.CommandBatch{}, err
+		}
+		cb, err := c.getClient().sendProxyHeartbeat(ctx, hb)
+		if err != nil {
+			c.resetClient()
+		}
+		if c.isRetryableError(err) {
+			continue
+		}
+		return cb, err
+	}
+}
+
+// GetBackupData implements the BRHAKeeperClient interface.
+func (c *managedHAKeeperClient) GetBackupData(ctx context.Context) ([]byte, error) {
+	for {
+		if err := c.prepareClient(ctx); err != nil {
+			return nil, err
+		}
+		s, err := c.getClient().getBackupData(ctx)
+		if err != nil {
+			c.resetClient()
+		}
+		if c.isRetryableError(err) {
+			continue
+		}
+		return s, err
 	}
 }
 
@@ -492,7 +595,15 @@ func connectToHAKeeper(ctx context.Context,
 		addresses[i], addresses[j] = addresses[j], addresses[i]
 	})
 	for _, addr := range addresses {
-		cc, err := getRPCClient(ctx, addr, c.respPool, defaultMaxMessageSize, cfg.EnableCompress, "connectToHAKeeper")
+		cc, err := getRPCClient(
+			ctx,
+			addr,
+			c.respPool,
+			defaultMaxMessageSize,
+			cfg.EnableCompress,
+			defaultBackendReadTimeout,
+			"connectToHAKeeper",
+		)
 		if err != nil {
 			e = err
 			continue
@@ -570,11 +681,11 @@ func (c *hakeeperClient) sendCNAllocateID(ctx context.Context, key string, batch
 	return resp.AllocateID.FirstID, nil
 }
 
-func (c *hakeeperClient) sendDNHeartbeat(ctx context.Context,
-	hb pb.DNStoreHeartbeat) (pb.CommandBatch, error) {
+func (c *hakeeperClient) sendTNHeartbeat(ctx context.Context,
+	hb pb.TNStoreHeartbeat) (pb.CommandBatch, error) {
 	req := pb.Request{
-		Method:      pb.DN_HEARTBEAT,
-		DNHeartbeat: &hb,
+		Method:      pb.TN_HEARTBEAT,
+		TNHeartbeat: &hb,
 	}
 	return c.sendHeartbeat(ctx, req)
 }
@@ -627,6 +738,54 @@ func (c *hakeeperClient) updateCNLabel(ctx context.Context, label pb.CNStoreLabe
 	return nil
 }
 
+func (c *hakeeperClient) updateCNWorkState(ctx context.Context, state pb.CNWorkState) error {
+	req := pb.Request{
+		Method:      pb.UPDATE_CN_WORK_STATE,
+		CNWorkState: &state,
+	}
+	_, err := c.request(ctx, req)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *hakeeperClient) patchCNStore(ctx context.Context, stateLabel pb.CNStateLabel) error {
+	req := pb.Request{
+		Method:       pb.PATCH_CN_STORE,
+		CNStateLabel: &stateLabel,
+	}
+	_, err := c.request(ctx, req)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *hakeeperClient) deleteCNStore(ctx context.Context, cnStore pb.DeleteCNStore) error {
+	req := pb.Request{
+		Method:        pb.DELETE_CN_STORE,
+		DeleteCNStore: &cnStore,
+	}
+	_, err := c.request(ctx, req)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *hakeeperClient) sendProxyHeartbeat(ctx context.Context, hb pb.ProxyHeartbeat) (pb.CommandBatch, error) {
+	req := pb.Request{
+		Method:         pb.PROXY_HEARTBEAT,
+		ProxyHeartbeat: &hb,
+	}
+	cb, err := c.sendHeartbeat(ctx, req)
+	if err != nil {
+		return pb.CommandBatch{}, err
+	}
+	return cb, nil
+}
+
 func (c *hakeeperClient) checkIsHAKeeper(ctx context.Context) (bool, error) {
 	req := pb.Request{
 		Method: pb.CHECK_HAKEEPER,
@@ -672,4 +831,23 @@ func (c *managedHAKeeperClient) getClient() *hakeeperClient {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.mu.client
+}
+
+func (c *hakeeperClient) getBackupData(ctx context.Context) ([]byte, error) {
+	req := pb.Request{
+		Method: pb.GET_CLUSTER_STATE,
+	}
+	resp, err := c.request(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	p := pb.BackupData{
+		NextID:      resp.CheckerState.NextId,
+		NextIDByKey: resp.CheckerState.NextIDByKey,
+	}
+	bs, err := p.Marshal()
+	if err != nil {
+		return nil, err
+	}
+	return bs, nil
 }
