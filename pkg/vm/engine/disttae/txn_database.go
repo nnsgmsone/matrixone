@@ -130,12 +130,27 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		//rel.Lock()
 		//defer rel.Unlock()
 		//rel.proc = p
+		if strings.Contains(name, "sbtest") {
+			if proc == nil {
+				logutil.Infof("txnDatabase.Relation table %q(acc %d db %d) in cache", name, defines.GetAccountId(ctx), db.databaseId)
+			} else {
+				logutil.Infof("txnDatabase.Relation table %q(acc %d db %d) in cache: %v", name, defines.GetAccountId(ctx), db.databaseId,
+					p.TxnOperator.Txn().DebugString())
+			}
+		}
 		rel.proc.Store(p)
 		return rel, nil
 	}
 	// get relation from the txn created tables cache: created by this txn
 	if v, ok := db.txn.createMap.Load(genTableKey(ctx, name, db.databaseId)); ok {
 		//v.(*txnTable).proc = p
+		if strings.Contains(name, "sbtest") {
+			if proc == nil {
+				logutil.Infof("txnDatabase.Relation table %q(acc %d db %d) in create map", name, defines.GetAccountId(ctx), db.databaseId)
+			} else {
+				logutil.Infof("txnDatabase.Relation table %q(acc %d db %d) in create map: %v", name, defines.GetAccountId(ctx), db.databaseId, p.TxnOperator.Txn().DebugString())
+			}
+		}
 		v.(*txnTable).proc.Store(p)
 		return v.(*txnTable), nil
 	}
@@ -165,6 +180,13 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 	}
 	if ok := db.txn.engine.catalog.GetTable(item); !ok {
 		logutil.Debugf("txnDatabase.Relation table %q(acc %d db %d) does not exist", name, defines.GetAccountId(ctx), db.databaseId)
+		if strings.Contains(name, "sbtest") {
+			if proc == nil {
+				logutil.Infof("txnDatabase.Relation table %q(acc %d db %d) does not exist", name, defines.GetAccountId(ctx), db.databaseId)
+			} else {
+				logutil.Infof("txnDatabase.Relation table %q(acc %d db %d) does not exist: %v", name, defines.GetAccountId(ctx), db.databaseId, p.TxnOperator.Txn().DebugString())
+			}
+		}
 		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
 	}
 	tbl := &txnTable{
@@ -190,6 +212,13 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		lastTS: txn.op.SnapshotTS(),
 	}
 	tbl.proc.Store(p)
+	if strings.Contains(name, "sbtest") {
+		if proc == nil {
+			logutil.Infof("txnDatabase.Relation table %q(acc %d db %d) from in logtail", name, defines.GetAccountId(ctx), db.databaseId)
+		} else {
+			logutil.Infof("txnDatabase.Relation table %q(acc %d db %d) from in logtail: %v", name, defines.GetAccountId(ctx), db.databaseId, p.TxnOperator.Txn().DebugString())
+		}
+	}
 
 	db.txn.tableCache.tableMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
 	return tbl, nil
@@ -416,6 +445,10 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 	tbl.getTableDef()
 	key := genTableKey(ctx, name, db.databaseId)
 	db.txn.createMap.Store(key, tbl)
+	if strings.Contains(name, "sbtest") {
+		logutil.Infof("txnDatabase.Create table %q(acc %d db %d): %v", name, accountId, db.databaseId, db.txn.op.Txn().DebugString())
+	}
+
 	//CORNER CASE
 	//begin;
 	//create table t1(a int);
