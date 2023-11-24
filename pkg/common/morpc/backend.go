@@ -553,6 +553,7 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 		}
 	}()
 
+	receiveClosed := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -564,7 +565,9 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 				rb.logger.Error("read from backend failed", zap.Error(err))
 				rb.inactiveReadLoop()
 				rb.cancelActiveStreams()
-				rb.scheduleResetConn()
+				if !receiveClosed {
+					rb.scheduleResetConn()
+				}
 				return
 			}
 			rb.metrics.receiveCounter.Inc()
@@ -574,6 +577,7 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 			if m, ok := msg.Message.(*flagOnlyMessage); ok {
 				switch m.flag {
 				case flagClose:
+					receiveClosed = true
 					_ = rb.conn.Disconnect()
 					continue
 				}
@@ -718,7 +722,7 @@ func (rb *remoteBackend) cancelActiveStreams() {
 	defer rb.mu.Unlock()
 
 	for _, st := range rb.mu.activeStreams {
-		st.done(context.TODO(), RPCMessage{}, true)
+		st.done(context.TODO(), RPCMessage{})
 	}
 }
 
@@ -773,7 +777,7 @@ func (rb *remoteBackend) requestDone(ctx context.Context, id uint64, msg RPCMess
 	} else if st, ok := rb.mu.activeStreams[id]; ok {
 		rb.mu.Unlock()
 		if response != nil {
-			st.done(ctx, msg, false)
+			st.done(ctx, msg)
 		}
 	} else {
 		// future has been removed, e.g. it has timed out.
@@ -1124,8 +1128,7 @@ func (s *stream) ID() uint64 {
 
 func (s *stream) done(
 	ctx context.Context,
-	message RPCMessage,
-	clean bool) {
+	message RPCMessage) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -1133,9 +1136,6 @@ func (s *stream) done(
 		return
 	}
 
-	if clean {
-		s.cleanCLocked()
-	}
 	response := message.Message
 	if message.Cancel != nil {
 		defer message.Cancel()
