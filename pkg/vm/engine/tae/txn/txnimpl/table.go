@@ -446,11 +446,7 @@ func (tbl *txnTable) CreateNonAppendableSegment(is1PC bool, opts *objectio.Creat
 
 func (tbl *txnTable) createSegment(state catalog.EntryState, is1PC bool, opts *objectio.CreateSegOpt) (seg handle.Segment, err error) {
 	var meta *catalog.SegmentEntry
-	var factory catalog.SegmentDataFactory
-	if tbl.store.dataFactory != nil {
-		factory = tbl.store.dataFactory.MakeSegmentFactory()
-	}
-	if meta, err = tbl.entry.CreateSegment(tbl.store.txn, state, factory, opts); err != nil {
+	if meta, err = tbl.entry.CreateSegment(tbl.store.txn, state, opts); err != nil {
 		return
 	}
 	seg = newSegment(tbl, meta)
@@ -1262,15 +1258,6 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM)
 					continue
 				}
 			}
-			segData := seg.GetSegmentData()
-			// TODO: Add a new batch dedup method later
-			if err = segData.BatchDedup(tbl.store.txn, pks); moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-				return
-			}
-			if err == nil {
-				segIt.Next()
-				continue
-			}
 			var shouldSkip bool
 			err = nil
 			blkIt := seg.MakeBlockIt(false)
@@ -1347,7 +1334,6 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode
 				continue
 			}
 		}
-		segData := seg.GetSegmentData()
 
 		//TODO::load ZM/BF index first, then load PK column if necessary.
 		if pks == nil {
@@ -1358,14 +1344,6 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode
 			colV.ApplyDeletes()
 			pks = colV.Orphan()
 			defer pks.Close()
-		}
-		// TODO: Add a new batch dedup method later
-		if err = segData.BatchDedup(tbl.store.txn, pks); moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-			return err
-		}
-		if err == nil {
-			segIt.Next()
-			continue
 		}
 		var shouldSkip bool
 		err = nil
