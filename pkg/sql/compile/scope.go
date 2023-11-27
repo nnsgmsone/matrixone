@@ -882,6 +882,7 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 			return nil
 		case val, ok = <-receiveCh:
 			if val == nil || !ok {
+				logutil.Errorf("receiveMessage failed: stream closed")
 				return moerr.NewStreamClosedNoCtx()
 			}
 		}

@@ -17,8 +17,9 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/google/uuid"
 	"sync"
+
+	"github.com/google/uuid"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
@@ -335,6 +336,7 @@ func (th *TxnHandler) CommitTxn() error {
 	if txnOp != nil {
 		th.ses.SetTxnId(txnOp.Txn().ID)
 		err = txnOp.Commit(ctx2)
+		logutil.Infof("transaction commit: %s: session: %s\n", txnOp.Txn().DebugString(), th.ses.uuid.String())
 		if err != nil {
 			txnId := txnOp.Txn().DebugString()
 			th.SetTxnOperatorInvalid()

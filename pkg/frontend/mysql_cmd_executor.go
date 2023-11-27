@@ -2701,7 +2701,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				_ = doRevokePrivilegeImplicitly(requestCtx, ses, st)
 			}
 			if st, ok := cw.GetAst().(*tree.CreateTable); ok && strings.Contains(string(st.Table.Name()), "sbtest") {
-				logutil.Infof("send response to client: %s: create table %v\n", ses.txnHandler.txnOperator.Txn().DebugString(), st.Table.Name())
+				logutil.Infof("send response to client: %s: create table %v\n", ses.uuid.String(), st.Table.Name())
 			}
 
 			if err2 := mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
