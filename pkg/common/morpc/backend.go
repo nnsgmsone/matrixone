@@ -128,22 +128,23 @@ func WithBackendMetrics(metrics *metrics) BackendOption {
 }
 
 type remoteBackend struct {
-	remote       string
-	metrics      *metrics
-	logger       *zap.Logger
-	codec        Codec
-	conn         goetty.IOSession
-	writeC       chan *Future
-	stopWriteC   chan struct{}
-	resetConnC   chan struct{}
-	stopper      *stopper.Stopper
-	readStopper  *stopper.Stopper
-	closeOnce    sync.Once
-	ctx          context.Context
-	cancel       context.CancelFunc
-	cancelOnce   sync.Once
-	pingTimer    *time.Timer
-	lastPingTime time.Time
+	remote           string
+	metrics          *metrics
+	logger           *zap.Logger
+	codec            Codec
+	conn             goetty.IOSession
+	writeC           chan *Future
+	stopWriteC       chan struct{}
+	resetConnC       chan struct{}
+	stopper          *stopper.Stopper
+	readStopper      *stopper.Stopper
+	closeOnce        sync.Once
+	ctx              context.Context
+	cancel           context.CancelFunc
+	cancelOnce       sync.Once
+	pingTimer        *time.Timer
+	lastPingTime     time.Time
+	lastPingWaitTime time.Duration
 
 	options struct {
 		hasPayloadResponse bool
@@ -450,7 +451,10 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 			getLogger().Warn("system is busy, write loop schedule interval is too large",
 				zap.Duration("interval", interval),
 				zap.Time("last-ping-trigger-time", rb.lastPingTime),
+				zap.Duration("last-ping-trigger-wait-time", rb.lastPingWaitTime),
 				zap.Duration("ping-interval", rb.getPingTimeout()))
+			// dump all goroutines to stderr
+			profile.ProfileGoroutine(os.Stderr, 2)
 		}
 		if len(messages) > 0 {
 			rb.metrics.sendingBatchSizeGauge.Set(float64(len(messages)))
@@ -622,13 +626,18 @@ func (rb *remoteBackend) fetch(messages []*Future, maxFetchCount int) ([]*Future
 		}
 	}
 
+	t := time.Now()
 	select {
 	case <-rb.pingTimer.C:
+		rb.lastPingWaitTime = time.Since(t)
 		doHeartbeat()
 	case f := <-rb.writeC:
+		rb.lastPingWaitTime = time.Since(t)
 		handleHeartbeat()
 		messages = append(messages, f)
 	case <-rb.resetConnC:
+		getLogger().Warn("reset remote connection")
+		rb.lastPingWaitTime = time.Since(t)
 		// If the connect needs to be reset, then all futures in the waiting response state will never
 		// get the response and need to be notified of an error immediately.
 		rb.makeAllWaitingFutureFailed()

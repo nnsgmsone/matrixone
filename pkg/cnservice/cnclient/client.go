@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	defaultRPCTimeout = 10 * time.Second
+	defaultRPCTimeout = time.Minute
 )
 
 // client each node will hold only one client.

@@ -1465,8 +1465,8 @@ github.com/matrixorigin/goutils v1.3.1-0.20220604063047-388d67b4dbc4 h1:+SmZP2bG
 github.com/matrixorigin/goutils v1.3.1-0.20220604063047-388d67b4dbc4/go.mod h1:LIHvF0fflR+zyXUQFQOiHPpKANf3UIr7DFIv5CBPOoU=
 github.com/matrixorigin/memberlist v0.5.1-0.20230322082342-95015c95ee76 h1:MpmqMPooJ0Ea7W4ldIGbQV4D3z+sEiCu6C6aTibiwiQ=
 github.com/matrixorigin/memberlist v0.5.1-0.20230322082342-95015c95ee76/go.mod h1:yvyXLpo0QaGE59Y7hDTsTzDD25JYBZ4mHgHUZ8lrOI0=
-github.com/matrixorigin/mocache v0.0.0-20231120073506-02271e7d8751 h1:dGm+5+9mPVdDZ8exXdYhrVlPmM2VHjOpfTuQ/761O6Q=
-github.com/matrixorigin/mocache v0.0.0-20231120073506-02271e7d8751/go.mod h1:CTKL3nM2Z5Hz3Dk8X9wuGXsazExuH+9aFK7mrLVRRF4=
+github.com/matrixorigin/mocache v0.0.0-20231127085151-2b9b76f8adf2 h1:OuoNPiWgIt1REWZjI5dE9iDNy1cuYV3Aw7nprSVmPdE=
+github.com/matrixorigin/mocache v0.0.0-20231127085151-2b9b76f8adf2/go.mod h1:CTKL3nM2Z5Hz3Dk8X9wuGXsazExuH+9aFK7mrLVRRF4=
 github.com/matrixorigin/simdcsv v0.0.0-20230210060146-09b8e45209dd h1:DvqhuH3kOpsE6vXZA5WEaRNAUUUcf44S1p5VInbjdfU=
 github.com/matrixorigin/simdcsv v0.0.0-20230210060146-09b8e45209dd/go.mod h1:79jCHry8mER+PwqF5EMG3ZE4b0lflH1IE/zF3Zs6lR8=
 github.com/matrixorigin/vfs v0.2.1-0.20220616104132-8852fd867376 h1:1XpEh8nPx1yFTeTFMj/aMipEiilDhQToQS8gjEU2HxM=
