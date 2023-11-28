@@ -49,7 +49,7 @@ const (
 	maxMessageSizeToMoRpc = 64 * mpool.MB
 
 	// need to fix this in the future. for now, increase it to make tpch1T can run on 3 CN
-	HandleNotifyTimeout = 300 * time.Second
+	HandleNotifyTimeout = 600 * time.Second
 )
 
 // cnInformation records service information to help handle messages.
