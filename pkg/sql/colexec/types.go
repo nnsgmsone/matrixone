@@ -108,3 +108,7 @@ type RuntimeFilterChan struct {
 	Spec *plan.RuntimeFilterSpec
 	Chan chan *pipeline.RuntimeFilter
 }
+
+const (
+	DefaultBatchSize = 8192
+)

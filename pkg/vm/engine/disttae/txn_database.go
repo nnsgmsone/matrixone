@@ -189,6 +189,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		}
 		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
 	}
+
 	tbl := &txnTable{
 		db:            db,
 		tableId:       item.Id,
@@ -442,7 +443,7 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 	tbl.defs = defs
 	tbl.tableName = name
 	tbl.tableId = tableId
-	tbl.getTableDef()
+	tbl.GetTableDef(ctx)
 	key := genTableKey(ctx, name, db.databaseId)
 	db.txn.createMap.Store(key, tbl)
 	if strings.Contains(name, "sbtest") {
@@ -471,7 +472,7 @@ func (db *txnDatabase) openSysTable(p *process.Process, key tableKey, id uint64,
 		primarySeqnum: -1,
 		clusterByIdx:  -1,
 	}
-	tbl.getTableDef()
+	tbl.GetTableDef(context.TODO())
 	tbl.proc.Store(p)
 	return tbl
 }

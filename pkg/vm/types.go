@@ -67,7 +67,7 @@ const (
 	Deletion
 	Insert
 	External
-	Stream
+	Source
 
 	Minus
 	Intersect
@@ -85,7 +85,6 @@ const (
 	MergeDelete
 	Right
 	OnDuplicateKey
-	FuzzyFilter
 	PreInsert
 	PreInsertUnique
 	PreInsertSecondaryIndex

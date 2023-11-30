@@ -194,7 +194,7 @@ func NewRemoteBackend(
 		readStopper: stopper.NewStopper(fmt.Sprintf("backend-read-%s", remote)),
 		remote:      remote,
 		codec:       codec,
-		resetConnC:  make(chan struct{}),
+		resetConnC:  make(chan struct{}, 1),
 		stopWriteC:  make(chan struct{}),
 	}
 
@@ -935,10 +935,7 @@ func (rb *remoteBackend) scheduleResetConn() {
 	select {
 	case rb.resetConnC <- struct{}{}:
 		rb.logger.Debug("schedule reset remote connection")
-	case <-time.After(time.Second * 10):
-		// dump all goroutines to stderr
-		profile.ProfileGoroutine(os.Stderr, 2)
-		rb.logger.Fatal("BUG: schedule reset remote connection timeout")
+	default:
 	}
 }
 
