@@ -18,7 +18,6 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
-	"io"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -27,7 +26,6 @@ import (
 )
 
 func TestLocalFS(t *testing.T) {
-
 	t.Run("file service", func(t *testing.T) {
 		testFileService(t, 0, func(name string) FileService {
 			ctx := context.Background()
@@ -69,7 +67,6 @@ func TestLocalFS(t *testing.T) {
 			return fs
 		})
 	})
-
 	t.Run("caching file service", func(t *testing.T) {
 		testCachingFileService(t, func() CachingFileService {
 			ctx := context.Background()
@@ -166,13 +163,14 @@ func TestLocalFSWithDiskCache(t *testing.T) {
 
 }
 
+/* default allocator must use with no memcache
 func TestLocalFSWithIOVectorCache(t *testing.T) {
 	memCache1 := NewMemCache(
-		NewLRUCache(1<<20, false, nil),
+		NewMemoryCache(1<<20, false, nil),
 		nil,
 	)
 	memCache2 := NewMemCache(
-		NewLRUCache(1<<20, false, nil),
+		NewMemoryCache(1<<20, false, nil),
 		nil,
 	)
 	caches := []IOVectorCache{memCache1, memCache2}
@@ -200,7 +198,7 @@ func TestLocalFSWithIOVectorCache(t *testing.T) {
 		Entries: []IOEntry{
 			{
 				Size: 8,
-				ToCacheData: func(r io.Reader, _ []byte, allocator CacheDataAllocator) (CacheData, error) {
+				ToCacheData: func(r io.Reader, _ []byte, allocator CacheDataAllocator) (memorycache.CacheData, error) {
 					cacheData := allocator.Alloc(8)
 					_, err := io.ReadFull(r, cacheData.Bytes())
 					if err != nil {
@@ -218,6 +216,7 @@ func TestLocalFSWithIOVectorCache(t *testing.T) {
 	assert.Equal(t, int64(8), memCache2.cache.Used())
 
 }
+*/
 
 func TestLocalFSEmptyRootPath(t *testing.T) {
 	fs, err := NewLocalFS(

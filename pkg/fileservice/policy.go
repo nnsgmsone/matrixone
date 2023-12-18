@@ -17,6 +17,7 @@ package fileservice
 type Policy uint64
 
 const (
+	DefaultCachePolicy   = 0
 	SkipMemoryCacheReads = 1 << iota
 	SkipMemoryCacheWrites
 	SkipDiskCacheReads

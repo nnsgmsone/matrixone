@@ -39,7 +39,8 @@ func ReadExtent(
 	ioVec := &fileservice.IOVector{
 		FilePath: name,
 		Entries:  make([]fileservice.IOEntry, 1),
-		Policy:   policy,
+		// if use the memory cache, when to call release?
+		Policy: policy | fileservice.Policy(fileservice.SkipMemoryCache),
 	}
 
 	ioVec.Entries[0] = fileservice.IOEntry{

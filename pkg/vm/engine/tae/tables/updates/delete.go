@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
@@ -261,25 +262,31 @@ func (node *DeleteNode) setPersistedRows() {
 	if node.nt != NT_Persisted {
 		panic("unsupport")
 	}
-	bat, err := blockio.LoadTombstoneColumns(
+	bat, iovec, err := blockio.LoadTombstoneColumns(
 		node.Txn.GetContext(),
 		[]uint16{0},
 		nil,
 		node.chain.Load().mvcc.meta.GetBlockData().GetFs().Service,
 		node.deltaloc,
 		nil,
+		fileservice.Policy(0),
 	)
+	defer iovec.Release()
 	if err != nil {
+		var deleteIoVec *fileservice.IOVector
+
 		for {
 			logutil.Warnf(fmt.Sprintf("load deletes failed, deltaloc: %s, err: %v", node.deltaloc.String(), err))
-			bat, err = blockio.LoadTombstoneColumns(
+			bat, deleteIoVec, err = blockio.LoadTombstoneColumns(
 				node.Txn.GetContext(),
 				[]uint16{0},
 				nil,
 				node.chain.Load().mvcc.meta.GetBlockData().GetFs().Service,
 				node.deltaloc,
 				nil,
+				fileservice.Policy(0),
 			)
+			deleteIoVec.Release()
 			if err == nil {
 				break
 			}

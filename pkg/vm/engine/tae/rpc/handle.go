@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -1094,13 +1095,14 @@ func (h *Handle) HandleWrite(
 			}
 			var ok bool
 			var bat *batch.Batch
-			bat, err = blockio.LoadTombstoneColumns(
+			bat, _, err = blockio.LoadTombstoneColumns(
 				ctx,
 				[]uint16{uint16(rowidIdx), uint16(pkIdx)},
 				nil,
 				h.db.Runtime.Fs.Service,
 				location,
 				nil,
+				fileservice.Policy(fileservice.SkipMemoryCache),
 			)
 			if err != nil {
 				return

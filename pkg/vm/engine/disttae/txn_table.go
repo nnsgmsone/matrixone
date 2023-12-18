@@ -476,13 +476,15 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 			if err != nil {
 				return err
 			}
-			rowIdBat, err := blockio.LoadTombstoneColumns(
+			rowIdBat, iovec, err := blockio.LoadTombstoneColumns(
 				tbl.db.txn.proc.Ctx,
 				[]uint16{0},
 				nil,
 				tbl.db.txn.engine.fs,
 				location,
-				tbl.db.txn.proc.GetMPool())
+				tbl.db.txn.proc.GetMPool(),
+				fileservice.Policy(0),
+			)
 			if err != nil {
 				return err
 			}
@@ -491,6 +493,7 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 				_, offset := rowId.Decode()
 				*offsets = append(*offsets, int64(offset))
 			}
+			iovec.Release()
 		}
 	}
 	return nil
@@ -513,7 +516,7 @@ func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 				if err != nil {
 					return err
 				}
-				rowIdBat, err := blockio.LoadColumns(
+				rowIdBat, iovec, err := blockio.LoadColumns(
 					tbl.db.txn.proc.Ctx,
 					[]uint16{0},
 					nil,
@@ -530,7 +533,7 @@ func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 						deletesRowId[rowId] = 0
 					}
 				}
-				rowIdBat.Clean(tbl.db.txn.proc.GetMPool())
+				iovec.Release()
 			}
 		}
 

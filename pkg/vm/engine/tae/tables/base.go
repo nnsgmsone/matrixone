@@ -17,9 +17,10 @@ package tables
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -185,14 +186,14 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 	if location.IsEmpty() {
 		return
 	}
-	bat, err := blockio.LoadColumns(
+	bat, _, err := blockio.LoadColumns(
 		context.Background(),
 		[]uint16{objectio.SEQNUM_COMMITTS},
 		nil,
 		blk.rt.Fs.Service,
 		location,
 		nil,
-		fileservice.Policy(0),
+		fileservice.Policy(fileservice.SkipMemoryCache),
 	)
 	if err != nil {
 		return

@@ -49,10 +49,11 @@ func ReadByFilter(
 	fs fileservice.FileService,
 	mp *mpool.MPool,
 ) (sels []int32, err error) {
-	bat, err := LoadColumns(ctx, columns, colTypes, fs, info.MetaLocation(), mp, fileservice.Policy(0))
+	bat, iovec, err := LoadColumns(ctx, columns, colTypes, fs, info.MetaLocation(), mp, fileservice.Policy(0))
 	if err != nil {
 		return
 	}
+	defer iovec.Release()
 	var deleteMask *nulls.Nulls
 
 	// merge persisted deletes
@@ -60,10 +61,12 @@ func ReadByFilter(
 		now := time.Now()
 		var persistedDeletes *batch.Batch
 		var persistedByCN bool
+		var deleteIOVec *fileservice.IOVector
 		// load from storage
-		if persistedDeletes, persistedByCN, err = ReadBlockDelete(ctx, info.DeltaLocation(), fs); err != nil {
+		if persistedDeletes, deleteIOVec, persistedByCN, err = ReadBlockDelete(ctx, info.DeltaLocation(), fs, fileservice.Policy(0)); err != nil {
 			return
 		}
+		defer deleteIOVec.Release()
 		readcost := time.Since(now)
 		var rows *nulls.Nulls
 		var bisect time.Duration
@@ -180,10 +183,11 @@ func BlockCompactionRead(
 	mp *mpool.MPool,
 ) (*batch.Batch, error) {
 
-	loaded, err := LoadColumns(ctx, seqnums, colTypes, fs, location, mp, fileservice.Policy(0))
+	loaded, iovec, err := LoadColumns(ctx, seqnums, colTypes, fs, location, mp, fileservice.Policy(0))
 	if err != nil {
 		return nil, err
 	}
+	defer iovec.Release()
 	if len(deletes) == 0 {
 		return loaded, nil
 	}
@@ -227,14 +231,16 @@ func BlockReadInner(
 		deletedRows []int64
 		deleteMask  nulls.Bitmap
 		loaded      *batch.Batch
+		iovec       *fileservice.IOVector
 	)
 
 	// read block data from storage specified by meta location
-	if loaded, rowidPos, deleteMask, err = readBlockData(
+	if loaded, iovec, rowidPos, deleteMask, err = readBlockData(
 		ctx, columns, colTypes, info, ts, fs, mp, vp, policy,
 	); err != nil {
 		return
 	}
+	defer iovec.Release()
 
 	// assemble result batch for return
 	result = batch.NewWithSize(len(loaded.Vecs))
@@ -280,13 +286,15 @@ func BlockReadInner(
 
 	// read deletes from storage specified by delta location
 	if !info.DeltaLocation().IsEmpty() {
+		var deleteIOVec *fileservice.IOVector
 		var deletes *batch.Batch
 		var persistedByCN bool
 		now := time.Now()
 		// load from storage
-		if deletes, persistedByCN, err = ReadBlockDelete(ctx, info.DeltaLocation(), fs); err != nil {
+		if deletes, deleteIOVec, persistedByCN, err = ReadBlockDelete(ctx, info.DeltaLocation(), fs, fileservice.Policy(0)); err != nil {
 			return
 		}
+		defer deleteIOVec.Release()
 		readcost := time.Since(now)
 
 		// eval delete rows by timestamp
@@ -442,7 +450,7 @@ func readBlockData(
 	m *mpool.MPool,
 	vp engine.VectorPool,
 	policy fileservice.Policy,
-) (bat *batch.Batch, rowidPos int, deleteMask nulls.Bitmap, err error) {
+) (bat *batch.Batch, iovec *fileservice.IOVector, rowidPos int, deleteMask nulls.Bitmap, err error) {
 	rowidPos, idxes, typs := getRowsIdIndex(colIndexes, colTypes)
 
 	readColumns := func(cols []uint16) (result *batch.Batch, loaded *batch.Batch, err error) {
@@ -453,7 +461,7 @@ func readBlockData(
 			return
 		}
 
-		if loaded, err = LoadColumns(ctx, cols, typs, fs, info.MetaLocation(), m, policy); err != nil {
+		if loaded, iovec, err = LoadColumns(ctx, cols, typs, fs, info.MetaLocation(), m, policy); err != nil {
 			return
 		}
 
@@ -500,19 +508,19 @@ func readBlockData(
 
 	return
 }
-func ReadBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService) (bat *batch.Batch, isPersistedByCN bool, err error) {
+func ReadBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService, cachePolicy fileservice.Policy) (bat *batch.Batch, iovec *fileservice.IOVector, isPersistedByCN bool, err error) {
 	isPersistedByCN, err = persistedByCN(ctx, deltaloc, fs)
 	if err != nil {
 		return
 	}
 	if isPersistedByCN {
-		bat, err = LoadTombstoneColumns(ctx, []uint16{0, 1}, nil, fs, deltaloc, nil)
+		bat, iovec, err = LoadTombstoneColumns(ctx, []uint16{0, 1}, nil, fs, deltaloc, nil, cachePolicy)
 		if err != nil {
 			return
 		}
 		return
 	} else {
-		bat, err = LoadTombstoneColumns(ctx, []uint16{0, 1, 2, 3}, nil, fs, deltaloc, nil)
+		bat, iovec, err = LoadTombstoneColumns(ctx, []uint16{0, 1, 2, 3}, nil, fs, deltaloc, nil, cachePolicy)
 		if err != nil {
 			return
 		}

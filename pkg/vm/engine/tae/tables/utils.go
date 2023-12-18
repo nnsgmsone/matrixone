@@ -16,6 +16,7 @@ package tables
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -42,13 +43,14 @@ func LoadPersistedColumnData(
 	if def.IsPhyAddr() {
 		return model.PreparePhyAddrData(&id.BlockID, 0, location.Rows(), rt.VectorPool.Transient)
 	}
-	bat, err := blockio.LoadColumns(
+	// if use memory cache, please call release
+	bat, _, err := blockio.LoadColumns(
 		ctx, []uint16{uint16(def.SeqNum)},
 		[]types.Type{def.Type},
 		rt.Fs.Service,
 		location,
 		nil,
-		fileservice.Policy(0))
+		fileservice.Policy(fileservice.SkipMemoryCache))
 	if err != nil {
 		return
 	}
@@ -85,13 +87,13 @@ func LoadPersistedColumnDatas(
 	if len(cols) == 0 {
 		return vectors, nil
 	}
-	bat, err := blockio.LoadColumns(
+	bat, _, err := blockio.LoadColumns(
 		ctx, cols,
 		typs,
 		rt.Fs.Service,
 		location,
 		nil,
-		fileservice.Policy(0))
+		fileservice.Policy(fileservice.SkipMemoryCache))
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +118,8 @@ func LoadPersistedDeletes(
 	location objectio.Location,
 	mp *mpool.MPool,
 ) (bat *containers.Batch, isPersistedByCN bool, err error) {
-	movbat, isPersistedByCN, err := blockio.ReadBlockDelete(ctx, location, fs.Service)
+	// if use memory cache, please call release
+	movbat, _, isPersistedByCN, err := blockio.ReadBlockDelete(ctx, location, fs.Service, fileservice.Policy(fileservice.SkipMemoryCache))
 	if err != nil {
 		return
 	}

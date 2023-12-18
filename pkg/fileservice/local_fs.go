@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -44,6 +45,7 @@ type LocalFS struct {
 	sync.RWMutex
 	dirFiles map[string]*os.File
 
+	allocator   CacheDataAllocator
 	memCache    *MemCache
 	diskCache   *DiskCache
 	remoteCache *RemoteCache
@@ -102,6 +104,11 @@ func NewLocalFS(
 	if err := fs.initCaches(ctx, cacheConfig); err != nil {
 		return nil, err
 	}
+	if fs.memCache != nil {
+		fs.allocator = fs.memCache
+	} else {
+		fs.allocator = DefaultCacheDataAllocator
+	}
 
 	return fs, nil
 }
@@ -121,7 +128,7 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 
 	if *config.MemoryCapacity > DisableCacheCapacity { // 1 means disable
 		l.memCache = NewMemCache(
-			NewLRUCache(int64(*config.MemoryCapacity), true, &config.CacheCallbacks),
+			NewMemoryCache(int64(*config.MemoryCapacity), true, &config.CacheCallbacks),
 			l.perfCounterSets,
 		)
 		logutil.Info("fileservice: memory cache initialized",
@@ -461,7 +468,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 					R: r,
 					C: counter,
 				}
-				var bs CacheData
+				var bs memorycache.CacheData
 				bs, err = entry.ToCacheData(cr, nil, DefaultCacheDataAllocator)
 				if err != nil {
 					return err
@@ -521,7 +528,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 					r: io.TeeReader(r, buf),
 					closeFunc: func() error {
 						defer file.Close()
-						var bs CacheData
+						var bs memorycache.CacheData
 						bs, err = entry.ToCacheData(buf, buf.Bytes(), DefaultCacheDataAllocator)
 						if err != nil {
 							return err
@@ -574,8 +581,14 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 				}
 			}
 
-			if err = entry.setCachedData(); err != nil {
-				return err
+			if vector.Policy.Any(SkipMemoryCache) {
+				if err = entry.setCachedData(DefaultCacheDataAllocator); err != nil {
+					return err
+				}
+			} else {
+				if err = entry.setCachedData(l.allocator); err != nil {
+					return err
+				}
 			}
 
 			vector.Entries[i] = entry

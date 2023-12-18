@@ -17,9 +17,10 @@ package txnimpl
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"runtime/trace"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
@@ -693,14 +694,15 @@ func (tbl *txnTable) addBlksWithMetaLoc(ctx context.Context, stats objectio.Obje
 		if dedupType == txnif.FullDedup {
 			//TODO::parallel load pk.
 			for _, loc := range metaLocs {
-				bat, err := blockio.LoadColumns(
+				// if use memory cache, please call release
+				bat, _, err := blockio.LoadColumns(
 					ctx,
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
 					nil,
 					tbl.store.rt.Fs.Service,
 					loc,
 					nil,
-					fileservice.Policy(0),
+					fileservice.Policy(fileservice.SkipMemoryCache),
 				)
 				if err != nil {
 					return err
@@ -1214,14 +1216,15 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 			//TODO::laod zm index first, then load pk column if necessary.
 			_, ok := loaded[i]
 			if !ok {
-				bat, err := blockio.LoadColumns(
+				// if use memory cache, please call release
+				bat, _, err := blockio.LoadColumns(
 					ctx,
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
 					nil,
 					tbl.store.rt.Fs.Service,
 					loc,
 					nil,
-					fileservice.Policy(0),
+					fileservice.Policy(fileservice.SkipMemoryCache),
 				)
 				if err != nil {
 					return err

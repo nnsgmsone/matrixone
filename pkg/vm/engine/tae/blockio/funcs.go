@@ -34,7 +34,7 @@ func LoadColumnsData(
 	location objectio.Location,
 	m *mpool.MPool,
 	policy fileservice.Policy,
-) (bat *batch.Batch, err error) {
+) (bat *batch.Batch, iovec *fileservice.IOVector, err error) {
 	name := location.Name()
 	var meta objectio.ObjectMeta
 	var ioVectors *fileservice.IOVector
@@ -50,12 +50,13 @@ func LoadColumnsData(
 	for i := range cols {
 		obj, err = objectio.Decode(ioVectors.Entries[i].CachedData.Bytes())
 		if err != nil {
+			ioVectors.Release()
 			return
 		}
 		bat.Vecs[i] = obj.(*vector.Vector)
 		bat.SetRowCount(bat.Vecs[i].Length())
 	}
-	//TODO call CachedData.Release
+	iovec = ioVectors
 	return
 }
 
@@ -67,7 +68,7 @@ func LoadColumns(
 	location objectio.Location,
 	m *mpool.MPool,
 	policy fileservice.Policy,
-) (bat *batch.Batch, err error) {
+) (bat *batch.Batch, iovec *fileservice.IOVector, err error) {
 	return LoadColumnsData(ctx, objectio.SchemaData, cols, typs, fs, location, m, policy)
 }
 
@@ -78,8 +79,9 @@ func LoadTombstoneColumns(
 	fs fileservice.FileService,
 	location objectio.Location,
 	m *mpool.MPool,
-) (bat *batch.Batch, err error) {
-	return LoadColumnsData(ctx, objectio.SchemaTombstone, cols, typs, fs, location, m, fileservice.Policy(0))
+	cachePolicy fileservice.Policy,
+) (bat *batch.Batch, iovec *fileservice.IOVector, err error) {
+	return LoadColumnsData(ctx, objectio.SchemaTombstone, cols, typs, fs, location, m, cachePolicy)
 }
 
 func LoadOneBlock(

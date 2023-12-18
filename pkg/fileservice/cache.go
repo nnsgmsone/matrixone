@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/cacheservice/client"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/cache"
 	"github.com/matrixorigin/matrixone/pkg/pb/gossip"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
@@ -50,7 +51,7 @@ type CacheCallbacks struct {
 	PostEvict []CacheCallbackFunc
 }
 
-type CacheCallbackFunc = func(CacheKey, CacheData)
+type CacheCallbackFunc = func(CacheKey, memorycache.CacheData)
 
 func (c *CacheConfig) setDefaults() {
 	if c.MemoryCapacity == nil {
@@ -79,7 +80,7 @@ func (c *CacheConfig) SetRemoteCacheCallback() {
 	}
 	c.InitKeyRouter = &sync.Once{}
 	c.CacheCallbacks.PostSet = append(c.CacheCallbacks.PostSet,
-		func(key CacheKey, data CacheData) {
+		func(key CacheKey, data memorycache.CacheData) {
 			c.InitKeyRouter.Do(func() {
 				c.KeyRouter = c.KeyRouterFactory()
 			})
@@ -90,7 +91,7 @@ func (c *CacheConfig) SetRemoteCacheCallback() {
 		},
 	)
 	c.CacheCallbacks.PostEvict = append(c.CacheCallbacks.PostEvict,
-		func(key CacheKey, data CacheData) {
+		func(key CacheKey, data memorycache.CacheData) {
 			c.InitKeyRouter.Do(func() {
 				c.KeyRouter = c.KeyRouterFactory()
 			})
@@ -130,8 +131,8 @@ type CacheKey = pb.CacheKey
 
 // DataCache caches IOEntry.CachedData
 type DataCache interface {
-	Set(ctx context.Context, key CacheKey, value CacheData)
-	Get(ctx context.Context, key CacheKey) (value CacheData, ok bool)
+	Set(ctx context.Context, key CacheKey, value memorycache.CacheData)
+	Get(ctx context.Context, key CacheKey) (value memorycache.CacheData, ok bool)
 	Flush()
 	Capacity() int64
 	Used() int64
