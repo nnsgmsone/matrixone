@@ -1102,7 +1102,7 @@ func (h *Handle) HandleWrite(
 				h.db.Runtime.Fs.Service,
 				location,
 				nil,
-				fileservice.Policy(fileservice.SkipMemoryCache),
+				fileservice.Policy(0),
 			)
 			if err != nil {
 				return

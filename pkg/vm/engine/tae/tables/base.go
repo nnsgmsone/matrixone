@@ -193,7 +193,7 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 		blk.rt.Fs.Service,
 		location,
 		nil,
-		fileservice.Policy(fileservice.SkipMemoryCache),
+		fileservice.Policy(0),
 	)
 	if err != nil {
 		return

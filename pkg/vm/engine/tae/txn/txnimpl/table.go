@@ -694,7 +694,6 @@ func (tbl *txnTable) addBlksWithMetaLoc(ctx context.Context, stats objectio.Obje
 		if dedupType == txnif.FullDedup {
 			//TODO::parallel load pk.
 			for _, loc := range metaLocs {
-				// if use memory cache, please call release
 				bat, _, err := blockio.LoadColumns(
 					ctx,
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
@@ -702,7 +701,7 @@ func (tbl *txnTable) addBlksWithMetaLoc(ctx context.Context, stats objectio.Obje
 					tbl.store.rt.Fs.Service,
 					loc,
 					nil,
-					fileservice.Policy(fileservice.SkipMemoryCache),
+					fileservice.Policy(0),
 				)
 				if err != nil {
 					return err
@@ -1216,7 +1215,6 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 			//TODO::laod zm index first, then load pk column if necessary.
 			_, ok := loaded[i]
 			if !ok {
-				// if use memory cache, please call release
 				bat, _, err := blockio.LoadColumns(
 					ctx,
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
@@ -1224,7 +1222,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 					tbl.store.rt.Fs.Service,
 					loc,
 					nil,
-					fileservice.Policy(fileservice.SkipMemoryCache),
+					fileservice.Policy(0),
 				)
 				if err != nil {
 					return err

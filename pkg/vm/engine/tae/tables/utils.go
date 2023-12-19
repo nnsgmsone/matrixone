@@ -43,14 +43,13 @@ func LoadPersistedColumnData(
 	if def.IsPhyAddr() {
 		return model.PreparePhyAddrData(&id.BlockID, 0, location.Rows(), rt.VectorPool.Transient)
 	}
-	// if use memory cache, please call release
 	bat, _, err := blockio.LoadColumns(
 		ctx, []uint16{uint16(def.SeqNum)},
 		[]types.Type{def.Type},
 		rt.Fs.Service,
 		location,
 		nil,
-		fileservice.Policy(fileservice.SkipMemoryCache))
+		fileservice.Policy(0))
 	if err != nil {
 		return
 	}
@@ -93,7 +92,7 @@ func LoadPersistedColumnDatas(
 		rt.Fs.Service,
 		location,
 		nil,
-		fileservice.Policy(fileservice.SkipMemoryCache))
+		fileservice.Policy(0))
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +118,7 @@ func LoadPersistedDeletes(
 	mp *mpool.MPool,
 ) (bat *containers.Batch, isPersistedByCN bool, err error) {
 	// if use memory cache, please call release
-	movbat, _, isPersistedByCN, err := blockio.ReadBlockDelete(ctx, location, fs.Service, fileservice.Policy(fileservice.SkipMemoryCache))
+	movbat, _, isPersistedByCN, err := blockio.ReadBlockDelete(ctx, location, fs.Service, fileservice.Policy(0))
 	if err != nil {
 		return
 	}

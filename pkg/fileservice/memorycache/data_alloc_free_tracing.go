@@ -22,10 +22,14 @@ package memorycache
 import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"os"
 	"runtime"
 	"sync/atomic"
+	"unsafe"
 )
+
+//go:linkname throw runtime.throw
+func throw(s string)
 
 func newData(n int, size *atomic.Int64) *Data {
 	if n == 0 {
@@ -37,8 +41,9 @@ func newData(n int, size *atomic.Int64) *Data {
 	d.ref.init(1)
 	runtime.SetFinalizer(d, func(d *Data) {
 		if d.buf != nil {
-			logutil.Fatal(fmt.Sprintf("data %p is not freed: refs:%d\n%s",
-				d, d.refs(), d.ref.dump()))
+			fmt.Fprintf(os.Stderr, "data (%p,%p) is not freed: refs:%d\n%s",
+				d, unsafe.Pointer(&d.buf[0]), d.refs(), d.ref.dump())
+			throw("data is not freed")
 		}
 	})
 	return d
