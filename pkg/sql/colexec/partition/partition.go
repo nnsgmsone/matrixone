@@ -16,6 +16,7 @@ package partition
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -68,7 +69,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := arg
 	ctr := ap.ctr
 
-	anal := proc.GetAnalyze(arg.info.Idx)
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	anal.Start()
 	defer anal.Stop()
 	result := vm.NewCallResult()
@@ -90,6 +91,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 		case eval:
+
+			if len(ctr.batchList) == 0 {
+				result.Status = vm.ExecStop
+				return result, nil
+			}
+
 			ok, err := ctr.pickAndSend(proc, &result)
 			if ok {
 				result.Status = vm.ExecStop

@@ -58,6 +58,9 @@ const (
 
 var (
 	selectOriginTableConstraintFormat = "select serial(%s) from %s.%s group by serial(%s) having count(*) > 1 and serial(%s) is not null;"
+	// see the comment in fuzzyCheck func genCondition for the reason why has to be two SQLs
+	fuzzyNonCompoundCheck = "select %s from %s.%s where %s in (%s) group by %s having count(*) > 1 limit 1;"
+	fuzzyCompoundCheck    = "select serial(%s) from %s.%s where %s group by serial(%s) having count(*) > 1 limit 1;"
 )
 
 var (
@@ -127,6 +130,9 @@ func genCreateIndexTableSqlForIvfIndex(indexTableDef *plan.TableDef, indexDef *p
 	var sql string
 	planCols := indexTableDef.GetCols()
 	for i, planCol := range planCols {
+		if planCol.Name == catalog.CPrimaryKeyColName {
+			continue
+		}
 		if i >= 1 {
 			sql += ","
 		}
@@ -214,8 +220,8 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 		case *engine.IndexDef:
 			for _, indexdef := range def.Indexes {
 				ctx, cancelFunc := context.WithTimeout(proc.Ctx, time.Second*30)
-				defer cancelFunc()
 				index_id, err := eg.AllocateIDByKey(ctx, ALLOCID_INDEX_KEY)
+				cancelFunc()
 				if err != nil {
 					return "", err
 				}
@@ -292,8 +298,8 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 			}
 		case *engine.PrimaryKeyDef:
 			ctx, cancelFunc := context.WithTimeout(proc.Ctx, time.Second*30)
-			defer cancelFunc()
 			index_id, err := eg.AllocateIDByKey(ctx, ALLOCID_INDEX_KEY)
+			cancelFunc()
 			if err != nil {
 				return "", err
 			}

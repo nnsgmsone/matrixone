@@ -1418,6 +1418,8 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			indexDef, tableDef, err = buildRegularSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
 		case tree.INDEX_TYPE_IVFFLAT:
 			indexDef, tableDef, err = buildIvfFlatSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
+		default:
+			return moerr.NewInvalidInputNoCtx("unsupported index type: %s", indexInfo.KeyType.ToString())
 		}
 
 		if err != nil {
@@ -1640,7 +1642,8 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 
 		// 1.d PK def
 		tableDefs[0].Pkey = &PrimaryKeyDef{
-			Names: []string{catalog.SystemSI_IVFFLAT_TblCol_Metadata_key},
+			Names:       []string{catalog.SystemSI_IVFFLAT_TblCol_Metadata_key},
+			PkeyColName: catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
 		}
 	}
 
@@ -1654,7 +1657,7 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		tableDefs[1] = &TableDef{
 			Name:      indexTableName,
 			TableType: catalog.SystemSI_IVFFLAT_TblType_Centroids,
-			Cols:      make([]*ColDef, 3),
+			Cols:      make([]*ColDef, 4),
 		}
 
 		// 2.b indexDefs[1] init
@@ -1700,16 +1703,21 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 				Width: colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Width,
 			},
 			Default: &plan.Default{
-				NullAbility:  false,
+				NullAbility:  true,
 				Expr:         nil,
 				OriginString: "",
 			},
 		}
+		tableDefs[1].Cols[3] = MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+		tableDefs[1].Cols[3].Alg = plan.CompressType_Lz4
+		tableDefs[1].Cols[3].Primary = true
 
 		// 2.d PK def
 		tableDefs[1].Pkey = &PrimaryKeyDef{
 			Names: []string{catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
 				catalog.SystemSI_IVFFLAT_TblCol_Centroids_id},
+			PkeyColName: catalog.CPrimaryKeyColName,
+			CompPkeyCol: tableDefs[1].Cols[3],
 		}
 	}
 
@@ -1723,7 +1731,7 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		tableDefs[2] = &TableDef{
 			Name:      indexTableName,
 			TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-			Cols:      make([]*ColDef, 3),
+			Cols:      make([]*ColDef, 4),
 		}
 
 		// 3.b indexDefs[2] init
@@ -1771,11 +1779,16 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 				OriginString: "",
 			},
 		}
+		tableDefs[2].Cols[3] = MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+		tableDefs[2].Cols[3].Alg = plan.CompressType_Lz4
+		tableDefs[2].Cols[3].Primary = true
 
 		// 3.d PK def
 		tableDefs[2].Pkey = &PrimaryKeyDef{
 			Names: []string{catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
 				catalog.SystemSI_IVFFLAT_TblCol_Entries_pk},
+			PkeyColName: catalog.CPrimaryKeyColName,
+			CompPkeyCol: tableDefs[2].Cols[3],
 		}
 	}
 
@@ -1892,6 +1905,13 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 				// We only handle truncate on regular index. For other indexes such as IVF, we don't handle truncate now.
 				if indexdef.TableExist && catalog.IsRegularIndexAlgo(indexdef.IndexAlgo) {
 					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
+				} else if indexdef.TableExist && catalog.IsIvfIndexAlgo(indexdef.IndexAlgo) {
+					if indexdef.IndexAlgoTableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
+						//TODO: check with @feng on how to handle truncate on IVF index
+						// Right now, we are only clearing the entries. Should we empty the centroids and metadata as well?
+						// Ideally, after truncate the user is expected to run re-index.
+						truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
+					}
 				}
 			}
 		}
@@ -2065,6 +2085,7 @@ func buildCreateDatabase(stmt *tree.CreateDatabase, ctx CompilerContext) (*Plan,
 			Publication: string(stmt.SubscriptionOption.Publication),
 		}
 	}
+	createDB.Sql = stmt.Sql
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{

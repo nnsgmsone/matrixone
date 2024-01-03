@@ -217,6 +217,10 @@ func (s *StorageTxnOperator) Status() txn.TxnStatus {
 	panic("unimplemented")
 }
 
+func (s *StorageTxnOperator) PKDedupCount() int {
+	panic("unimplemented")
+}
+
 func (s *StorageTxnOperator) TxnRef() *txn.TxnMeta {
 	return &s.meta
 }
@@ -301,5 +305,9 @@ func (s *StorageTxnOperator) RemoveWaitLock(key uint64) {
 }
 
 func (s *StorageTxnOperator) GetOverview() client.TxnOverview {
+	panic("should not call")
+}
+
+func (s *StorageTxnOperator) LockSkipped(tableID uint64, mode lock.LockMode) bool {
 	panic("should not call")
 }

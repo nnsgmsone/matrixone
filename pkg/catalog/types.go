@@ -30,13 +30,8 @@ const (
 	Row_ID           = "__mo_rowid"
 	PrefixPriColName = "__mo_cpkey_"
 	PrefixCBColName  = "__mo_cbkey_"
-	// Compound primary key column name, which is a hidden column
-	CPrimaryKeyColName = "__mo_cpkey_col"
-	// FakePrimaryKeyColName for tables without a primary key, a new hidden primary key column
-	// is added, which will not be sorted or used for any other purpose, but will only be used to add
-	// locks to the Lock operator in pessimistic transaction mode.
-	FakePrimaryKeyColName = "__mo_fake_pk_col"
-	ExternalFilePath      = "__mo_filepath"
+
+	ExternalFilePath = "__mo_filepath"
 
 	// MOAutoIncrTable mo auto increment table name
 	MOAutoIncrTable = "mo_increment_columns"
@@ -233,6 +228,12 @@ const (
 	IndexTableIndexColName   = "__mo_index_idx_col"
 	IndexTablePrimaryColName = "__mo_index_pri_col"
 
+	CPrimaryKeyColName = "__mo_cpkey_col" // Compound primary key column name, which is a hidden column
+	// FakePrimaryKeyColName for tables without a primary key, a new hidden primary key column
+	// is added, which will not be sorted or used for any other purpose, but will only be used to add
+	// locks to the Lock operator in pessimistic transaction mode.
+	FakePrimaryKeyColName = "__mo_fake_pk_col"
+
 	/************ 1. IVF_FLAT Secondary Index ************/
 
 	// IVF_FLAT Table Types
@@ -261,6 +262,9 @@ const (
 	MO_DATABASE_ID = 1
 	MO_TABLES_ID   = 2
 	MO_COLUMNS_ID  = 3
+
+	// MO_RESERVED_MAX is the max reserved table ID.
+	MO_RESERVED_MAX = 100
 )
 
 // index use to update constraint
@@ -338,45 +342,6 @@ const (
 )
 
 type ObjectLocation [objectio.LocationLen]byte
-
-// ProtoSize is used by gogoproto.
-func (m *ObjectLocation) ProtoSize() int {
-	return objectio.LocationLen
-}
-
-// MarshalTo is used by gogoproto.
-func (m *ObjectLocation) MarshalTo(data []byte) (int, error) {
-	size := m.ProtoSize()
-	return m.MarshalToSizedBuffer(data[:size])
-}
-
-// MarshalToSizedBuffer is used by gogoproto.
-func (m *ObjectLocation) MarshalToSizedBuffer(data []byte) (int, error) {
-	if len(data) < m.ProtoSize() {
-		panic("invalid byte slice")
-	}
-	n := copy(data, m[:])
-	return n, nil
-}
-
-// Marshal is used by gogoproto.
-func (m *ObjectLocation) Marshal() ([]byte, error) {
-	data := make([]byte, m.ProtoSize())
-	n, err := m.MarshalToSizedBuffer(data)
-	if err != nil {
-		return nil, err
-	}
-	return data[:n], err
-}
-
-// Unmarshal is used by gogoproto.
-func (m *ObjectLocation) Unmarshal(data []byte) error {
-	if len(data) < m.ProtoSize() {
-		panic("invalid byte slice")
-	}
-	copy(m[:], data)
-	return nil
-}
 
 const (
 	BlockInfoSize = unsafe.Sizeof(BlockInfo{})

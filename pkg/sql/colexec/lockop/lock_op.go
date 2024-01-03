@@ -105,7 +105,7 @@ func callNonBlocking(
 		return result, err
 	}
 
-	anal := proc.GetAnalyze(arg.info.Idx)
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	anal.Start()
 	defer anal.Stop()
 
@@ -131,7 +131,7 @@ func callBlocking(
 	isFirst bool,
 	isLast bool) (vm.CallResult, error) {
 
-	anal := proc.GetAnalyze(arg.info.Idx)
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	anal.Start()
 	defer anal.Stop()
 
@@ -198,6 +198,9 @@ func performLock(
 	arg *Argument) error {
 	needRetry := false
 	for idx, target := range arg.targets {
+		if proc.TxnOperator.LockSkipped(target.tableID, target.mode) {
+			return nil
+		}
 		getLogger().Debug("lock",
 			zap.Uint64("table", target.tableID),
 			zap.Bool("filter", target.filter != nil),
@@ -212,6 +215,7 @@ func performLock(
 			proc.Ctx,
 			arg.block,
 			arg.engine,
+			nil,
 			target.tableID,
 			proc,
 			priVec,
@@ -294,6 +298,7 @@ func LockTable(
 		proc.Ctx,
 		false,
 		eng,
+		nil,
 		tableID,
 		proc,
 		nil,
@@ -316,10 +321,13 @@ func LockTable(
 func LockRows(
 	eng engine.Engine,
 	proc *process.Process,
+	rel engine.Relation,
 	tableID uint64,
 	vec *vector.Vector,
 	pkType types.Type,
 	lockMode lock.LockMode,
+	sharding lock.Sharding,
+	group uint32,
 ) error {
 	if !proc.TxnOperator.Txn().IsPessimistic() {
 		return nil
@@ -330,12 +338,15 @@ func LockRows(
 
 	opts := DefaultLockOptions(parker).
 		WithLockTable(false, false).
+		WithLockSharding(sharding).
 		WithLockMode(lockMode).
+		WithLockGroup(group).
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
 	_, defChanged, refreshTS, err := doLock(
 		proc.Ctx,
 		false,
 		eng,
+		rel,
 		tableID,
 		proc,
 		vec,
@@ -362,6 +373,7 @@ func doLock(
 	ctx context.Context,
 	blocking bool,
 	eng engine.Engine,
+	rel engine.Relation,
 	tableID uint64,
 	proc *process.Process,
 	vec *vector.Vector,
@@ -411,6 +423,8 @@ func doLock(
 		Policy:          lock.WaitPolicy_Wait,
 		Mode:            opts.mode,
 		TableDefChanged: opts.changeDef,
+		Sharding:        opts.sharding,
+		Group:           opts.group,
 	}
 	if txn.Mirror {
 		options.ForwardTo = txn.LockService
@@ -464,7 +478,7 @@ func doLock(
 		}
 
 		// if [snapshotTS, newSnapshotTS] has been modified, need retry at new snapshot ts
-		changed, err := fn(proc, tableID, eng, vec, snapshotTS, newSnapshotTS)
+		changed, err := fn(proc, rel, tableID, eng, vec, snapshotTS, newSnapshotTS)
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
 		}
@@ -517,6 +531,18 @@ func DefaultLockOptions(parker *types.Packer) LockOptions {
 		maxCountPerLock: 0,
 		parker:          parker,
 	}
+}
+
+// WithLockSharding set lock sharding
+func (opts LockOptions) WithLockSharding(sharding lock.Sharding) LockOptions {
+	opts.sharding = sharding
+	return opts
+}
+
+// WithLockGroup set lock group
+func (opts LockOptions) WithLockGroup(group uint32) LockOptions {
+	opts.group = group
+	return opts
 }
 
 // WithLockMode set lock mode, Exclusive or Shared
@@ -776,6 +802,7 @@ func getRowsFilter(
 // 2. otherwise return true, changed
 func hasNewVersionInRange(
 	proc *process.Process,
+	rel engine.Relation,
 	tableID uint64,
 	eng engine.Engine,
 	vec *vector.Vector,
@@ -784,13 +811,16 @@ func hasNewVersionInRange(
 		return false, nil
 	}
 
-	txnOp := proc.TxnOperator
-	_, _, rel, err := eng.GetRelationById(proc.Ctx, txnOp, tableID)
-	if err != nil {
-		if strings.Contains(err.Error(), "can not find table by id") {
-			return false, nil
+	if rel == nil {
+		var err error
+		txnOp := proc.TxnOperator
+		_, _, rel, err = eng.GetRelationById(proc.Ctx, txnOp, tableID)
+		if err != nil {
+			if strings.Contains(err.Error(), "can not find table by id") {
+				return false, nil
+			}
+			return false, err
 		}
-		return false, err
 	}
 	fromTS := types.BuildTS(from.PhysicalTime, from.LogicalTime)
 	toTS := types.BuildTS(to.PhysicalTime, to.LogicalTime)

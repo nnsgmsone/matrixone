@@ -16,10 +16,11 @@ package compile
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"hash/crc32"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
@@ -88,7 +89,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -209,7 +209,7 @@ func Test_receiveMessageFromCnServer(t *testing.T) {
 		false,
 		[]types.Type{types.T_int64.ToType()},
 		types.T_int64.ToType(),
-		0, 0,
+		0,
 	)
 	require.Nil(t, err)
 
@@ -277,13 +277,14 @@ func Test_EncodeProcessInfo(t *testing.T) {
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOperator.EXPECT().Snapshot().Return(([]byte)("test"), nil)
 
+	a := reuse.Alloc[process.AnalyzeInfo](nil)
 	proc := &process.Process{
 		Id:          "1",
 		Lim:         process.Limitation{},
 		UnixTime:    1000000,
 		Ctx:         context.TODO(),
 		TxnOperator: txnOperator,
-		AnalInfos:   []*process.AnalyzeInfo{{NodeId: 1}},
+		AnalInfos:   []*process.AnalyzeInfo{a},
 		SessionInfo: process.SessionInfo{
 			Account:        "",
 			User:           "",
@@ -529,7 +530,7 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		regs:     nil,
 	}
 	for _, instruction := range instructions {
-		_, _, err := convertToPipelineInstruction(instruction, ctx, 1, engine.Node{})
+		_, _, err := convertToPipelineInstruction(instruction, ctx, 1)
 		require.Nil(t, err)
 	}
 }
@@ -601,7 +602,8 @@ func Test_convertToVmInstruction(t *testing.T) {
 
 func Test_mergeAnalyseInfo(t *testing.T) {
 	target := newAnaylze()
-	target.analInfos = []*process.AnalyzeInfo{{}}
+	a := reuse.Alloc[process.AnalyzeInfo](nil)
+	target.analInfos = []*process.AnalyzeInfo{a}
 	ana := &pipeline.AnalysisList{
 		List: []*plan2.AnalyzeInfo{
 			{},
@@ -645,7 +647,8 @@ func Test_convertToProcessSessionInfo(t *testing.T) {
 }
 
 func Test_convertToPlanAnalyzeInfo(t *testing.T) {
-	info := &process.AnalyzeInfo{InputRows: 100}
+	info := reuse.Alloc[process.AnalyzeInfo](nil)
+	info.InputRows = 100
 	analyzeInfo := convertToPlanAnalyzeInfo(info)
 	require.Equal(t, analyzeInfo.InputRows, int64(100))
 }
@@ -669,7 +672,7 @@ func Test_decodeBatch(t *testing.T) {
 		false,
 		[]types.Type{types.T_int64.ToType()},
 		types.T_int64.ToType(),
-		0, 0,
+		0,
 	)
 	require.Nil(t, err)
 

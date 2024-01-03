@@ -92,6 +92,9 @@ func (c *Cache) Set(ctx context.Context, key cache.CacheKey, value CacheData) er
 func (c *Cache) Flush() {
 }
 
+func (c *Cache) DeletePaths(ctx context.Context, paths []string) {
+}
+
 func (c *Cache) Size() int64 {
 	return c.size.Load()
 }

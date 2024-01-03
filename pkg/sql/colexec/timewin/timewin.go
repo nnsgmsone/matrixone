@@ -91,7 +91,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.info.Idx)
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	anal.Start()
 	defer anal.Stop()
 	ap := arg
@@ -147,7 +147,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			ctr.aggs = make([]agg.Agg[any], len(ap.Aggs))
 			for i, ag := range ap.Aggs {
-				if ctr.aggs[i], err = agg.NewAggWithConfig(ag.Op, ag.Dist, []types.Type{ap.Types[i]}, ag.Config, nil); err != nil {
+				if ctr.aggs[i], err = agg.NewAggWithConfig(ag.Op, ag.Dist, []types.Type{ap.Types[i]}, ag.Config); err != nil {
 					return result, err
 				}
 			}
@@ -192,7 +192,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			ctr.aggs = make([]agg.Agg[any], len(ap.Aggs))
 			for i, ag := range ap.Aggs {
-				if ctr.aggs[i], err = agg.NewAggWithConfig(ag.Op, ag.Dist, []types.Type{ap.Types[i]}, ag.Config, nil); err != nil {
+				if ctr.aggs[i], err = agg.NewAggWithConfig(ag.Op, ag.Dist, []types.Type{ap.Types[i]}, ag.Config); err != nil {
 					return result, err
 				}
 			}
@@ -279,7 +279,7 @@ func eval[T constraints.Integer](ctr *container, ap *Argument, proc *process.Pro
 				}
 				ctr.aggs = make([]agg.Agg[any], len(ap.Aggs))
 				for i, ag := range ap.Aggs {
-					if ctr.aggs[i], err = agg.NewAggWithConfig(ag.Op, ag.Dist, []types.Type{ap.Types[i]}, ag.Config, nil); err != nil {
+					if ctr.aggs[i], err = agg.NewAggWithConfig(ag.Op, ag.Dist, []types.Type{ap.Types[i]}, ag.Config); err != nil {
 						return err
 					}
 				}
@@ -519,6 +519,18 @@ func (ctr *container) firstWindow(ap *Argument, proc *process.Process) (err erro
 		ctr.end = int64(end)
 	case types.T_timestamp:
 		ts := vector.MustFixedCol[types.Timestamp](vec)[0]
+
+		itv, err := doTimestampAdd(proc.SessionInfo.TimeZone, ts, ap.Interval.Val, ap.Interval.Typ)
+		if err != nil {
+			return err
+		}
+		sld, err := doTimestampAdd(proc.SessionInfo.TimeZone, ts, m.Val, m.Typ)
+		if err != nil {
+			return err
+		}
+		if sld > itv {
+			return moerr.NewInvalidInput(proc.Ctx, "sliding value should be smaller than the interval value")
+		}
 
 		start, err := roundTimestamp(proc.SessionInfo.TimeZone, ts, ap.Interval.Val, ap.Interval.Typ, proc)
 		if err != nil {

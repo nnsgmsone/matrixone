@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"io"
 	"math"
 	"net/http/httptrace"
@@ -28,6 +29,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -308,7 +310,9 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 	}
 	metric.FSWriteS3Counter.Add(float64(len(vector.Entries)))
 
-	ctx = addGetConnMetric(ctx)
+	tp := reuse.Alloc[tracePoint](nil)
+	defer reuse.Free(tp, nil)
+	ctx = httptrace.WithClientTrace(ctx, tp.getClientTrace())
 
 	var bytesWritten int
 	start := time.Now()
@@ -399,7 +403,9 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		return err
 	}
 
-	ctx = addGetConnMetric(ctx)
+	tp := reuse.Alloc[tracePoint](nil)
+	defer reuse.Free(tp, nil)
+	ctx = httptrace.WithClientTrace(ctx, tp.getClientTrace())
 
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
@@ -416,7 +422,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 
 	for _, cache := range vector.Caches {
 		cache := cache
-		if err := cache.Read(ctx, vector); err != nil {
+		if err := readCache(ctx, cache, vector); err != nil {
 			return err
 		}
 		defer func() {
@@ -428,7 +434,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	if s.memCache != nil {
-		if err := s.memCache.Read(ctx, vector); err != nil {
+		if err := readCache(ctx, s.memCache, vector); err != nil {
 			return err
 		}
 		defer func() {
@@ -440,7 +446,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	if s.diskCache != nil {
-		if err := s.diskCache.Read(ctx, vector); err != nil {
+		if err := readCache(ctx, s.diskCache, vector); err != nil {
 			return err
 		}
 		// try to cache IOEntry if not caching the full file
@@ -455,7 +461,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	if s.remoteCache != nil {
-		if err := s.remoteCache.Read(ctx, vector); err != nil {
+		if err := readCache(ctx, s.remoteCache, vector); err != nil {
 			return err
 		}
 	}
@@ -483,7 +489,7 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 
 	for _, cache := range vector.Caches {
 		cache := cache
-		if err := cache.Read(ctx, vector); err != nil {
+		if err := readCache(ctx, cache, vector); err != nil {
 			return err
 		}
 		defer func() {
@@ -495,7 +501,7 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	if s.memCache != nil {
-		if err := s.memCache.Read(ctx, vector); err != nil {
+		if err := readCache(ctx, s.memCache, vector); err != nil {
 			return err
 		}
 	}
@@ -770,7 +776,27 @@ func (s *S3FS) Delete(ctx context.Context, filePaths ...string) error {
 		keys = append(keys, s.pathToKey(path.File))
 	}
 
-	return s.storage.Delete(ctx, keys...)
+	return errors.Join(
+		s.storage.Delete(ctx, keys...),
+		func() error {
+			if s.memCache == nil {
+				return nil
+			}
+			return s.memCache.DeletePaths(ctx, filePaths)
+		}(),
+		func() error {
+			if s.diskCache == nil {
+				return nil
+			}
+			return s.diskCache.DeletePaths(ctx, filePaths)
+		}(),
+		func() error {
+			if s.remoteCache == nil {
+				return nil
+			}
+			return s.remoteCache.DeletePaths(ctx, filePaths)
+		}(),
+	)
 }
 
 var _ ETLFileService = new(S3FS)
@@ -789,44 +815,74 @@ func (s *S3FS) SetAsyncUpdate(b bool) {
 	s.asyncUpdate = b
 }
 
-func addGetConnMetric(ctx context.Context) context.Context {
-	var start time.Time
-	var dnsStart time.Time
-	var connectStart time.Time
-	var tlsHandshakeStart time.Time
-	return httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
-		GetConn: func(hostPort string) {
-			start = time.Now()
-		},
+type tracePoint struct {
+	start             time.Time
+	dnsStart          time.Time
+	connectStart      time.Time
+	tlsHandshakeStart time.Time
+	ct                *httptrace.ClientTrace
+}
 
-		GotConn: func(info httptrace.GotConnInfo) {
-			metric.S3GetConnDurationHistogram.Observe(time.Since(start).Seconds())
-		},
+func newTracePoint() *tracePoint {
+	tp := &tracePoint{
+		ct: &httptrace.ClientTrace{},
+	}
+	tp.ct.GetConn = tp.getConnPoint
+	tp.ct.GotConn = tp.gotConnPoint
+	tp.ct.DNSStart = tp.dnsStartPoint
+	tp.ct.DNSDone = tp.dnsDonePoint
+	tp.ct.ConnectStart = tp.connectStartPoint
+	tp.ct.ConnectDone = tp.connectDonePoint
+	tp.ct.TLSHandshakeStart = tp.tlsHandshakeStartPoint
+	tp.ct.TLSHandshakeDone = tp.tlsHandshakeDonePoint
+	return tp
+}
 
-		DNSStart: func(di httptrace.DNSStartInfo) {
-			metric.S3DNSResolveCounter.Inc()
-			dnsStart = time.Now()
-		},
+func (tp tracePoint) Name() string {
+	return "fileservice.tracePoint"
+}
 
-		DNSDone: func(di httptrace.DNSDoneInfo) {
-			metric.S3DNSResolveDurationHistogram.Observe(time.Since(dnsStart).Seconds())
-		},
+func resetTracePoint(tp *tracePoint) {
+	tp.start = time.Time{}
+	tp.dnsStart = time.Time{}
+	tp.connectStart = time.Time{}
+	tp.tlsHandshakeStart = time.Time{}
+}
 
-		ConnectStart: func(network, addr string) {
-			metric.S3ConnectCounter.Inc()
-			connectStart = time.Now()
-		},
+func (tp *tracePoint) getClientTrace() *httptrace.ClientTrace {
+	return tp.ct
+}
 
-		ConnectDone: func(network, addr string, err error) {
-			metric.S3ConnectDurationHistogram.Observe(time.Since(connectStart).Seconds())
-		},
+func (tp *tracePoint) getConnPoint(hostPort string) {
+	tp.start = time.Now()
+}
 
-		TLSHandshakeStart: func() {
-			tlsHandshakeStart = time.Now()
-		},
+func (tp *tracePoint) gotConnPoint(info httptrace.GotConnInfo) {
+	metric.S3GetConnDurationHistogram.Observe(time.Since(tp.start).Seconds())
+}
 
-		TLSHandshakeDone: func(cs tls.ConnectionState, err error) {
-			metric.S3TLSHandshakeDurationHistogram.Observe(time.Since(tlsHandshakeStart).Seconds())
-		},
-	})
+func (tp *tracePoint) dnsStartPoint(di httptrace.DNSStartInfo) {
+	metric.S3DNSResolveCounter.Inc()
+	tp.dnsStart = time.Now()
+}
+
+func (tp *tracePoint) dnsDonePoint(di httptrace.DNSDoneInfo) {
+	metric.S3DNSResolveDurationHistogram.Observe(time.Since(tp.dnsStart).Seconds())
+}
+
+func (tp *tracePoint) connectStartPoint(network, addr string) {
+	metric.S3ConnectCounter.Inc()
+	tp.connectStart = time.Now()
+}
+
+func (tp *tracePoint) connectDonePoint(network, addr string, err error) {
+	metric.S3ConnectDurationHistogram.Observe(time.Since(tp.connectStart).Seconds())
+}
+
+func (tp *tracePoint) tlsHandshakeStartPoint() {
+	tp.tlsHandshakeStart = time.Now()
+}
+
+func (tp *tracePoint) tlsHandshakeDonePoint(cs tls.ConnectionState, err error) {
+	metric.S3TLSHandshakeDurationHistogram.Observe(time.Since(tp.tlsHandshakeStart).Seconds())
 }

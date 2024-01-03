@@ -18,10 +18,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
+	"unsafe"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -40,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fuzzyfilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
@@ -93,7 +98,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
-	"time"
 )
 
 // CnServerMessageHandler is responsible for processing the cn-client message received at cn-server.
@@ -142,40 +146,57 @@ func CnServerMessageHandler(
 func cnMessageHandle(receiver *messageReceiverOnServer) error {
 	switch receiver.messageTyp {
 	case pipeline.Method_PrepareDoneNotifyMessage: // notify the dispatch executor
-		opProc, err := receiver.GetProcByUuid(receiver.messageUuid)
-		if err != nil || opProc == nil {
+		dispatchProc, err := receiver.GetProcByUuid(receiver.messageUuid)
+		if err != nil || dispatchProc == nil {
 			return err
 		}
 
-		putCtx, putCancel := context.WithTimeout(context.Background(), HandleNotifyTimeout)
-		defer putCancel()
-		doneCh := make(chan struct{})
-		info := process.WrapCs{
-			MsgId:  receiver.messageId,
-			Uid:    receiver.messageUuid,
-			Cs:     receiver.clientSession,
-			DoneCh: doneCh,
+		infoToDispatchOperator := process.WrapCs{
+			MsgId: receiver.messageId,
+			Uid:   receiver.messageUuid,
+			Cs:    receiver.clientSession,
+			Err:   make(chan error, 1),
+		}
+
+		timeLimit, cancel := context.WithTimeout(context.TODO(), HandleNotifyTimeout)
+
+		succeed := false
+		select {
+		case <-timeLimit.Done():
+			err = moerr.NewInternalError(receiver.ctx, "send notify msg to dispatch operator timeout")
+
+		case dispatchProc.DispatchNotifyCh <- infoToDispatchOperator:
+			succeed = true
+		case <-receiver.ctx.Done():
+		case <-dispatchProc.Ctx.Done():
+		}
+		cancel()
+
+		if err != nil || !succeed {
+			dispatchProc.Cancel()
+			return err
 		}
 
 		select {
-		case <-putCtx.Done():
-			return moerr.NewInternalError(receiver.ctx, "send notify msg to dispatch operator timeout")
 		case <-receiver.ctx.Done():
-			//logutil.Errorf("receiver conctx done during send notify to dispatch operator")
-		case <-opProc.Ctx.Done():
-			//logutil.Errorf("dispatch operator context done")
-		case opProc.DispatchNotifyCh <- info:
-			// TODO: need fix. It may hung here if dispatch operator receive the info but
-			// end without close doneCh
-			<-doneCh
+			dispatchProc.Cancel()
+
+		// there is no need to check the dispatchProc.Ctx.Done() here.
+		// because we need to receive the error from dispatchProc.DispatchNotifyCh.
+		case err = <-infoToDispatchOperator.Err:
 		}
-		return nil
+		return err
 
 	case pipeline.Method_PipelineMessage:
 		c := receiver.newCompile()
-
 		// decode and rewrite the scope.
 		s, err := decodeScope(receiver.scopeData, c.proc, true, c.e)
+		defer func() {
+			c.proc.AnalInfos = nil
+			c.anal.analInfos = nil
+			c.Release()
+			s.release()
+		}()
 		if err != nil {
 			return err
 		}
@@ -193,6 +214,15 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.DeleteMulti.Load()
 
 			receiver.finalAnalysisInfo = c.proc.AnalInfos
+		} else {
+			// there are 3 situations to release analyzeInfo
+			// 1 is free analyzeInfo of Local CN when release analyze
+			// 2 is free analyzeInfo of remote CN before transfer back
+			// 3 is free analyzeInfo of remote CN when errors happen before transfer back
+			// this is situation 3
+			for i := range c.proc.AnalInfos {
+				reuse.Free[process.AnalyzeInfo](c.proc.AnalInfos[i], nil)
+			}
 		}
 		c.proc.FreeVectors()
 		c.proc.CleanValueScanBatchs()
@@ -209,7 +239,7 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 	var end bool
 	var err error
 
-	lastAnalyze := c.proc.GetAnalyze(lastInstruction.Idx)
+	lastAnalyze := c.proc.GetAnalyze(lastInstruction.Idx, -1, false)
 	if sender.receiveCh == nil {
 		sender.receiveCh, err = sender.streamSender.Receive()
 		if err != nil {
@@ -334,11 +364,12 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		regs:   make(map[*process.WaitRegister]int32),
 	}
 	ctx.root = ctx
-	s, err := generateScope(proc, p, ctx, nil, isRemote)
+	s, err := generateScope(proc, p, ctx, proc.AnalInfos, isRemote)
 	if err != nil {
 		return nil, err
 	}
-	if err := fillInstructionsForScope(s, ctx, p, eng); err != nil {
+	if err = fillInstructionsForScope(s, ctx, p, eng); err != nil {
+		s.release()
 		return nil, err
 	}
 
@@ -507,7 +538,7 @@ func fillInstructionsForPipeline(s *Scope, ctx *scopeContext, p *pipeline.Pipeli
 	// Instructions
 	p.InstructionList = make([]*pipeline.Instruction, len(s.Instructions))
 	for i := range p.InstructionList {
-		if ctxId, p.InstructionList[i], err = convertToPipelineInstruction(&s.Instructions[i], ctx, ctxId, s.NodeInfo); err != nil {
+		if ctxId, p.InstructionList[i], err = convertToPipelineInstruction(&s.Instructions[i], ctx, ctxId); err != nil {
 			return ctxId, err
 		}
 	}
@@ -550,19 +581,26 @@ func convertScopeRemoteReceivInfo(s *Scope) (ret []*pipeline.UuidToRegIdx) {
 func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContext,
 	analNodes []*process.AnalyzeInfo, isRemote bool) (*Scope, error) {
 	var err error
+	var s *Scope
+	defer func() {
+		if err != nil {
+			s.release()
+		}
+	}()
+
 	if p.Qry != nil {
 		ctx.plan = p.Qry
 	}
 
-	s := newScope(magicType(p.GetPipelineType()))
+	s = newScope(magicType(p.GetPipelineType()))
 	s.IsEnd = p.IsEnd
 	s.IsJoin = p.IsJoin
 	s.IsLoad = p.IsLoad
 	s.IsRemote = isRemote
 	s.BuildIdx = int(p.BuildIdx)
 	s.ShuffleCnt = int(p.ShuffleCnt)
-	if err := convertPipelineUuid(p, s); err != nil {
-		return s, err
+	if err = convertPipelineUuid(p, s); err != nil {
+		return nil, err
 	}
 	dsc := p.GetDataSource()
 	if dsc != nil {
@@ -579,7 +617,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		}
 		if len(dsc.Block) > 0 {
 			bat := new(batch.Batch)
-			if err := types.Decode([]byte(dsc.Block), bat); err != nil {
+			if err = types.Decode([]byte(dsc.Block), bat); err != nil {
 				return nil, err
 			}
 			bat.Cnt = 1
@@ -642,7 +680,7 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 
 // convert vm.Instruction to pipeline.Instruction
 // todo: bad design, need to be refactored. and please refer to how sample operator do.
-func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId int32, nodeInfo engine.Node) (int32, *pipeline.Instruction, error) {
+func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId int32) (int32, *pipeline.Instruction, error) {
 	in := &pipeline.Instruction{Op: int32(opr.Op), Idx: int32(opr.Idx), IsFirst: opr.IsFirst, IsLast: opr.IsLast}
 	switch t := opr.Arg.(type) {
 	case *insert.Argument:
@@ -678,6 +716,13 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			TableDef:        t.TableDef,
 			OnDuplicateIdx:  t.OnDuplicateIdx,
 			OnDuplicateExpr: t.OnDuplicateExpr,
+		}
+	case *fuzzyfilter.Argument:
+		in.FuzzyFilter = &pipeline.FuzzyFilter{
+			N:                      float32(t.N),
+			PkName:                 t.PkName,
+			PkTyp:                  plan2.DeepCopyType(t.PkTyp),
+			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
 		}
 	case *preinsert.Argument:
 		in.PreInsert = &pipeline.PreInsert{
@@ -953,6 +998,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.Agg = &pipeline.Group{
 			NeedEval: t.NeedEval,
 		}
+		EncodeMergeGroup(t, in.Agg)
 	case *mergelimit.Argument:
 		in.Limit = t.Limit
 	case *mergeoffset.Argument:
@@ -1105,6 +1151,14 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			OnDuplicateIdx:  t.OnDuplicateIdx,
 			OnDuplicateExpr: t.OnDuplicateExpr,
 			IsIgnore:        t.IsIgnore,
+		}
+	case vm.FuzzyFilter:
+		t := opr.GetFuzzyFilter()
+		v.Arg = &fuzzyfilter.Argument{
+			N:                  float64(t.N),
+			PkName:             t.PkName,
+			PkTyp:              t.PkTyp,
+			RuntimeFilterSpecs: t.RuntimeFilterBuildList,
 		}
 	case vm.Anti:
 		t := opr.GetAnti()
@@ -1385,6 +1439,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		v.Arg = &mergegroup.Argument{
 			NeedEval: opr.Agg.NeedEval,
 		}
+		DecodeMergeGroup(v.Arg.(*mergegroup.Argument), opr.Agg)
 	case vm.MergeLimit:
 		v.Arg = &mergelimit.Argument{
 			Limit: opr.Limit,
@@ -1602,7 +1657,7 @@ func convertToProcessSessionInfo(sei *pipeline.SessionInfo) (process.SessionInfo
 }
 
 func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
-	return &plan.AnalyzeInfo{
+	a := &plan.AnalyzeInfo{
 		InputRows:        info.InputRows,
 		OutputRows:       info.OutputRows,
 		InputSize:        info.InputSize,
@@ -1618,6 +1673,14 @@ func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 		ScanTime:         info.ScanTime,
 		InsertTime:       info.InsertTime,
 	}
+	info.DeepCopyArray(a)
+	// there are 3 situations to release analyzeInfo
+	// 1 is free analyzeInfo of Local CN when release analyze
+	// 2 is free analyzeInfo of remote CN before transfer back
+	// 3 is free analyzeInfo of remote CN when errors happen before transfer back
+	// this is situation 2
+	reuse.Free[process.AnalyzeInfo](info, nil)
+	return a
 }
 
 // func decodeBatch(proc *process.Process, data []byte) (*batch.Batch, error) {
@@ -1687,4 +1750,206 @@ func (ctx *scopeContext) findRegister(reg *process.WaitRegister) (int32, *scopeC
 		}
 	}
 	return -1, nil
+}
+
+func EncodeMergeGroup(merge *mergegroup.Argument, pipe *pipeline.Group) {
+	if !merge.NeedEval || merge.PartialResults == nil {
+		return
+	}
+	pipe.PartialResultTypes = make([]uint32, len(merge.PartialResultTypes))
+	pipe.PartialResults = make([]byte, 0)
+	for i := range pipe.PartialResultTypes {
+		pipe.PartialResultTypes[i] = uint32(merge.PartialResultTypes[i])
+		switch merge.PartialResultTypes[i] {
+		case types.T_bool:
+			result := merge.PartialResults[i].(bool)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_int8:
+			result := merge.PartialResults[i].(int8)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_int16:
+			result := merge.PartialResults[i].(int16)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_int32:
+			result := merge.PartialResults[i].(int32)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_int64:
+			result := merge.PartialResults[i].(int64)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_uint8:
+			result := merge.PartialResults[i].(uint8)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_uint16:
+			result := merge.PartialResults[i].(uint16)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_uint32:
+			result := merge.PartialResults[i].(uint32)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_uint64:
+			result := merge.PartialResults[i].(uint64)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_float32:
+			result := merge.PartialResults[i].(float32)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_float64:
+			result := merge.PartialResults[i].(float64)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_date:
+			result := merge.PartialResults[i].(types.Date)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_time:
+			result := merge.PartialResults[i].(types.Time)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_datetime:
+			result := merge.PartialResults[i].(types.Datetime)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_timestamp:
+			result := merge.PartialResults[i].(types.Timestamp)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_enum:
+			result := merge.PartialResults[i].(types.Enum)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_decimal64:
+			result := merge.PartialResults[i].(types.Decimal64)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_decimal128:
+			result := merge.PartialResults[i].(types.Decimal128)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_uuid:
+			result := merge.PartialResults[i].(types.Uuid)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_TS:
+			result := merge.PartialResults[i].(types.TS)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_Rowid:
+			result := merge.PartialResults[i].(types.Rowid)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_Blockid:
+			result := merge.PartialResults[i].(types.Blockid)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		}
+	}
+}
+
+func DecodeMergeGroup(merge *mergegroup.Argument, pipe *pipeline.Group) {
+	if !pipe.NeedEval || pipe.PartialResults == nil {
+		return
+	}
+	merge.PartialResultTypes = make([]types.T, len(pipe.PartialResultTypes))
+	merge.PartialResults = make([]any, 0)
+	for i := range merge.PartialResultTypes {
+		merge.PartialResultTypes[i] = types.T(pipe.PartialResultTypes[i])
+		switch merge.PartialResultTypes[i] {
+		case types.T_bool:
+			result := *(*bool)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_int8:
+			result := *(*int8)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_int16:
+			result := *(*int16)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_int32:
+			result := *(*int32)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_int64:
+			result := *(*int64)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_uint8:
+			result := *(*uint8)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_uint16:
+			result := *(*uint16)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_uint32:
+			result := *(*uint32)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_uint64:
+			result := *(*uint64)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_float32:
+			result := *(*float32)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_float64:
+			result := *(*float64)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_date:
+			result := *(*types.Date)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_time:
+			result := *(*types.Time)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_datetime:
+			result := *(*types.Datetime)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_timestamp:
+			result := *(*types.Timestamp)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_enum:
+			result := *(*types.Enum)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_decimal64:
+			result := *(*types.Decimal64)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_decimal128:
+			result := *(*types.Decimal128)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_uuid:
+			result := *(*types.Uuid)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_TS:
+			result := *(*types.TS)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_Rowid:
+			result := *(*types.Rowid)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_Blockid:
+			result := *(*types.Blockid)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		}
+	}
 }

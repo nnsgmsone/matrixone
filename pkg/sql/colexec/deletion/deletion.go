@@ -57,7 +57,7 @@ func (arg *Argument) Prepare(_ *process.Process) error {
 		ap.ctr.state = vm.Build
 		ap.ctr.blockId_type = make(map[string]int8)
 		ap.ctr.blockId_bitmap = make(map[string]*nulls.Nulls)
-		ap.ctr.pool = &BatchPool{pools: make([]*batch.Batch, 0, options.DefaultBlocksPerSegment)}
+		ap.ctr.pool = &BatchPool{pools: make([]*batch.Batch, 0, options.DefaultBlocksPerObject)}
 		ap.ctr.partitionId_blockId_rowIdBatch = make(map[int]map[string]*batch.Batch)
 		ap.ctr.partitionId_blockId_deltaLoc = make(map[int]map[string]*batch.Batch)
 	}
@@ -78,7 +78,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (arg *Argument) remote_delete(proc *process.Process) (vm.CallResult, error) {
 
-	anal := proc.GetAnalyze(arg.info.Idx)
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	anal.Start()
 	defer func() {
 		anal.Stop()
@@ -180,7 +180,7 @@ func (arg *Argument) normal_delete(proc *process.Process) (vm.CallResult, error)
 		return result, nil
 	}
 
-	anal := proc.GetAnalyze(arg.info.Idx)
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	anal.Start()
 	defer anal.Stop()
 

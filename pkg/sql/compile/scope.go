@@ -17,11 +17,12 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"hash/crc32"
 	goruntime "runtime"
 	"runtime/debug"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -66,12 +67,24 @@ func newScope(magic magicType) *Scope {
 	return s
 }
 
+func ReleaseScopes(ss []*Scope) {
+	for i := range ss {
+		ss[i].release()
+	}
+}
+
 func (s *Scope) withPlan(pn *plan.Plan) *Scope {
 	s.Plan = pn
 	return s
 }
 
 func (s *Scope) release() {
+	if s == nil {
+		return
+	}
+	for i := range s.PreScopes {
+		s.PreScopes[i].release()
+	}
 	reuse.Free[Scope](s, nil)
 }
 
@@ -130,7 +143,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 	for i := range s.PreScopes {
 		wg.Add(1)
 		scope := s.PreScopes[i]
-		ants.Submit(func() {
+		errSubmit := ants.Submit(func() {
 			defer func() {
 				if e := recover(); e != nil {
 					err := moerr.ConvertPanicError(c.ctx, e)
@@ -152,6 +165,10 @@ func (s *Scope) MergeRun(c *Compile) error {
 				errChan <- scope.ParallelRun(c, scope.IsRemote)
 			}
 		})
+		if errSubmit != nil {
+			errChan <- errSubmit
+			wg.Done()
+		}
 	}
 	defer wg.Wait()
 
@@ -498,6 +515,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 	}
 	newScope, err := newParallelScope(s, ss)
 	if err != nil {
+		ReleaseScopes(ss)
 		return err
 	}
 	newScope.SetContextRecursively(s.Proc.Ctx)
@@ -534,6 +552,7 @@ func (s *Scope) JoinRun(c *Compile) error {
 	var err error
 	s, err = newParallelScope(s, ss)
 	if err != nil {
+		ReleaseScopes(ss)
 		return err
 	}
 
@@ -601,6 +620,7 @@ func (s *Scope) LoadRun(c *Compile) error {
 	}
 	newScope, err := newParallelScope(s, ss)
 	if err != nil {
+		ReleaseScopes(ss)
 		return err
 	}
 
@@ -697,11 +717,10 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 					Idx:     in.Idx,
 					IsFirst: in.IsFirst,
 					Arg: &group.Argument{
-						Aggs:           arg.Aggs,
-						Exprs:          arg.Exprs,
-						Types:          arg.Types,
-						MultiAggs:      arg.MultiAggs,
-						PartialResults: arg.PartialResults,
+						Aggs:      arg.Aggs,
+						Exprs:     arg.Exprs,
+						Types:     arg.Types,
+						MultiAggs: arg.MultiAggs,
 					},
 				})
 			}
@@ -833,7 +852,10 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 			// if context has done, it means other pipeline stop the query normally.
 			closeWithError := func(err error) {
 				if reg != nil {
-					reg.Ch <- nil
+					select {
+					case <-s.Proc.Ctx.Done():
+					case reg.Ch <- nil:
+					}
 					close(reg.Ch)
 				}
 
@@ -933,8 +955,12 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 				// used for delete
 				proc.SetInputBatch(bat)
 			} else {
-				// used for BroadCastJoin
-				forwardCh <- bat
+				select {
+				case <-proc.Ctx.Done():
+					logutil.Warnf("proc ctx done during forward")
+					return nil
+				case forwardCh <- bat:
+				}
 			}
 			dataBuffer = nil
 		}

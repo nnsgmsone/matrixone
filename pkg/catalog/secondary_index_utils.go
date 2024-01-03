@@ -58,11 +58,11 @@ func IsIvfIndexAlgo(algo string) bool {
 
 // ------------------------[START] IndexAlgoParams------------------------
 const (
-	IndexAlgoParamLists      = "lists"
-	IndexAlgoParamOpType     = "op_type"
-	IndexAlgoParamOpType_ip  = "vector_ip_ops"
-	IndexAlgoParamOpType_l2  = "vector_l2_ops"
-	IndexAlgoParamOpType_cos = "vector_cosine_ops"
+	IndexAlgoParamLists     = "lists"
+	IndexAlgoParamOpType    = "op_type"
+	IndexAlgoParamOpType_l2 = "vector_l2_ops"
+	//IndexAlgoParamOpType_ip  = "vector_ip_ops"
+	//IndexAlgoParamOpType_cos = "vector_cosine_ops"
 )
 
 const (
@@ -76,7 +76,7 @@ func CalcSampleCount(lists, totalCnt int64) (sampleCnt int64) {
 		sampleCnt = lists * KmeansSamplePerList
 	}
 	if totalCnt > 10_000 && sampleCnt < 10_000 {
-		sampleCnt = 10000
+		sampleCnt = 10_000
 	}
 	return sampleCnt
 }
@@ -99,13 +99,14 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 
 	if opType, ok := result[IndexAlgoParamOpType]; ok {
 		opType = ToLower(opType)
-		if opType != IndexAlgoParamOpType_ip &&
-			opType != IndexAlgoParamOpType_l2 &&
-			opType != IndexAlgoParamOpType_cos {
-			return "", moerr.NewInternalErrorNoCtx("invalid op_type. not of type '%s', '%s', '%s'",
-				IndexAlgoParamOpType_ip, IndexAlgoParamOpType_l2, IndexAlgoParamOpType_cos)
+		if opType != IndexAlgoParamOpType_l2 {
+			//	opType != IndexAlgoParamOpType_ip &&
+			//	opType != IndexAlgoParamOpType_cos
+			return "", moerr.NewInternalErrorNoCtx("invalid op_type. not of type '%s'", IndexAlgoParamOpType_l2)
+			//IndexAlgoParamOpType_ip, , IndexAlgoParamOpType_cos)
 
 		}
+
 		res += fmt.Sprintf(" %s '%s' ", IndexAlgoParamOpType, opType)
 	}
 
@@ -166,16 +167,21 @@ func indexParamsToMap(def *tree.Index) (map[string]string, error) {
 
 		if len(def.IndexOption.AlgoParamVectorOpType) > 0 {
 			opType := ToLower(def.IndexOption.AlgoParamVectorOpType)
-			if opType != IndexAlgoParamOpType_ip &&
-				opType != IndexAlgoParamOpType_l2 &&
-				opType != IndexAlgoParamOpType_cos {
-				return nil, moerr.NewInternalErrorNoCtx("invalid op_type. not of type '%s', '%s', '%s'",
-					IndexAlgoParamOpType_ip, IndexAlgoParamOpType_l2, IndexAlgoParamOpType_cos)
+			if opType != IndexAlgoParamOpType_l2 {
+				//opType != IndexAlgoParamOpType_ip &&
+				//opType != IndexAlgoParamOpType_cos &&
+
+				return nil, moerr.NewInternalErrorNoCtx("invalid op_type. not of type '%s'",
+					IndexAlgoParamOpType_l2,
+					//IndexAlgoParamOpType_ip, IndexAlgoParamOpType_cos,
+				)
 			}
 			res[IndexAlgoParamOpType] = def.IndexOption.AlgoParamVectorOpType
 		} else {
 			res[IndexAlgoParamOpType] = IndexAlgoParamOpType_l2 // set l2 as default
 		}
+	default:
+		return nil, moerr.NewInternalErrorNoCtx("invalid index type")
 	}
 	return res, nil
 }

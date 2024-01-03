@@ -16,7 +16,9 @@ package fileservice
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
@@ -132,6 +134,15 @@ type IOEntry struct {
 
 	// fromCache indicates which cache filled the entry
 	fromCache IOVectorCache
+}
+
+func (i IOEntry) String() string {
+	buf := new(strings.Builder)
+	buf.WriteString("IOEntry(")
+	fmt.Fprintf(buf, "offset = %v", i.Offset)
+	fmt.Fprintf(buf, ", size = %v", i.Size)
+	buf.WriteString(")")
+	return buf.String()
 }
 
 type CacheDataAllocator interface {

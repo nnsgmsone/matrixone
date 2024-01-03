@@ -250,6 +250,8 @@ type BindContext struct {
 
 	// sample function related.
 	sampleFunc SampleFuncCtx
+
+	tmpGroups []*plan.Expr
 }
 
 type NameTuple struct {
@@ -368,3 +370,15 @@ const (
 	maxLengthOfTableComment  int = 2048
 	maxLengthOfColumnComment int = 1024
 )
+
+// fuzzy filter need to get partial unique key attrs name and its origin table name
+// for Decimal type, we need colDef to get the scale
+type OriginTableMessageForFuzzy struct {
+	ParentTableName  string
+	ParentUniqueCols []*ColDef
+}
+
+type MultiTableIndex struct {
+	IndexAlgo string
+	IndexDefs map[string]*plan.IndexDef
+}

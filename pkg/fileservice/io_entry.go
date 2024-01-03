@@ -37,34 +37,34 @@ func (e *IOEntry) setCachedData(allocator CacheDataAllocator) error {
 	return nil
 }
 
-func (e *IOEntry) ReadFromOSFile(file *os.File) error {
-	r := io.LimitReader(file, e.Size)
+func (i *IOEntry) ReadFromOSFile(file *os.File) error {
+	r := io.LimitReader(file, i.Size)
 
-	if len(e.Data) < int(e.Size) {
-		e.Data = make([]byte, e.Size)
+	if len(i.Data) < int(i.Size) {
+		i.Data = make([]byte, i.Size)
 	}
 
-	n, err := io.ReadFull(r, e.Data)
+	n, err := io.ReadFull(r, i.Data)
 	if err != nil {
 		return err
 	}
-	if n != int(e.Size) {
+	if n != int(i.Size) {
 		return io.ErrUnexpectedEOF
 	}
 
-	if e.WriterForRead != nil {
-		if _, err := e.WriterForRead.Write(e.Data); err != nil {
+	if i.WriterForRead != nil {
+		if _, err := i.WriterForRead.Write(i.Data); err != nil {
 			return err
 		}
 	}
-	if e.ReadCloserForRead != nil {
-		*e.ReadCloserForRead = io.NopCloser(bytes.NewReader(e.Data))
+	if i.ReadCloserForRead != nil {
+		*i.ReadCloserForRead = io.NopCloser(bytes.NewReader(i.Data))
 	}
-	if err := e.setCachedData(DefaultCacheDataAllocator); err != nil {
+	if err := i.setCachedData(DefaultCacheDataAllocator); err != nil {
 		return err
 	}
 
-	e.done = true
+	i.done = true
 
 	return nil
 }

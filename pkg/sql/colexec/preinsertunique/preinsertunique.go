@@ -16,7 +16,6 @@ package preinsertunique
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -50,7 +49,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	if err != nil {
 		return result, err
 	}
-	analy := proc.GetAnalyze(arg.info.Idx)
+	analy := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	analy.Start()
 	defer analy.Stop()
 

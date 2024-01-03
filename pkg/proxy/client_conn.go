@@ -17,6 +17,7 @@ package proxy
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -132,6 +133,8 @@ type clientConn struct {
 	redoStmts []internalStmt
 	// tlsConfig is the config of TLS.
 	tlsConfig *tls.Config
+	// tlsConnectTimeout is the TLS connect timeout value.
+	tlsConnectTimeout time.Duration
 	// ipNetList is the list of ip net, which is parsed from CIDRs.
 	ipNetList []*net.IPNet
 	// testHelper is used for testing.
@@ -180,6 +183,8 @@ func newClientConn(
 			originIP: originIP,
 		},
 		ipNetList: ipNetList,
+		// set the connection timeout value.
+		tlsConnectTimeout: cfg.TLSConnectTimeout.Duration,
 	}
 	c.connID, err = c.genConnID()
 	if err != nil {
@@ -329,6 +334,11 @@ func (c *clientConn) connAndExec(cn *CNServer, stmt string, resp chan<- []byte) 
 func (c *clientConn) handleKillQuery(e *killQueryEvent, resp chan<- []byte) error {
 	cn, err := c.router.SelectByConnID(e.connID)
 	if err != nil {
+		// If no server found, means that the query has been terminated.
+		if errors.Is(err, noCNServerErr) {
+			sendResp(makeOKPacket(8), resp)
+			return nil
+		}
 		c.log.Error("failed to select CN server", zap.Error(err))
 		c.sendErr(err, resp)
 		return err
@@ -414,7 +424,12 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 				c.log.Warn("failed to connect to CN server, will retry",
 					zap.String("current server uuid", cn.uuid),
 					zap.String("current server address", cn.addr),
-					zap.Any("bad backend servers", badCNServers))
+					zap.Any("bad backend servers", badCNServers),
+					zap.String("client->proxy",
+						fmt.Sprintf("%s -> %s", c.RawConn().RemoteAddr(),
+							c.RawConn().LocalAddr())),
+					zap.Error(err),
+				)
 				continue
 			} else {
 				v2.ProxyConnectCommonFailCounter.Inc()

@@ -330,6 +330,10 @@ func (o *testOperator) Txn() txn.TxnMeta {
 	return txn.TxnMeta{}
 }
 
+func (o *testOperator) PKDedupCount() int {
+	panic("should not call")
+}
+
 func (o *testOperator) SnapshotTS() timestamp.Timestamp {
 	panic("should not call")
 }
@@ -387,5 +391,9 @@ func (o *testOperator) RemoveWaitLock(key uint64) {
 }
 
 func (o *testOperator) GetOverview() client.TxnOverview {
+	panic("should not call")
+}
+
+func (o *testOperator) LockSkipped(tableID uint64, mode lock.LockMode) bool {
 	panic("should not call")
 }
