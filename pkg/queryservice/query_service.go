@@ -84,7 +84,12 @@ func NewQueryService(serviceID string, address string, cfg morpc.Config) (QueryS
 		handler:   h,
 		pool:      pool,
 	}
+	qs.initHandleFunc()
 	return qs, nil
+}
+
+func (s *queryService) initHandleFunc() {
+	s.AddHandleFunc(pb.CmdMethod_CoreDumpConfig, handleLeakConfig, false)
 }
 
 // AddHandleFunc implements the QueryService interface.

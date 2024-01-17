@@ -51,6 +51,16 @@ enum CmdMethod {
   GetCommit = 9;
 
   RunTask = 13;
+
+  CoreDumpConfig = 12;
+}
+
+message CoreDumpConfigRequest {
+	// enable or disable
+	string Action = 1;
+}
+
+message CoreDumpConfigResponse {
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -125,6 +135,8 @@ message Request {
   GetCommitRequest        GetCommit           = 12;
 
   RunTaskRequest RunTask = 16;
+
+  CoreDumpConfigRequest CoreDumpConfig = 17;
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -159,6 +171,8 @@ message Response {
   GetCommitResponse         GetCommit         = 12;
 
   RunTaskResponse RunTask = 16;
+
+  CoreDumpConfigResponse CoreDumpConfig = 17;
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.

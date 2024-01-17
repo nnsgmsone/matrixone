@@ -29,7 +29,10 @@ const (
 	DefaultGCInterval = 1 * time.Second
 )
 
+var Enable bool
+
 func init() {
+	Enable = false
 	go func() {
 		ticker := time.Tick(DefaultGCInterval)
 		for {
@@ -51,18 +54,20 @@ func alloc(sz, requiredSpaceWithoutHeader int, mp *MPool) []byte {
 		mp.details.recordAlloc(int64(pHdr.allocSz))
 	}
 	b := pHdr.ToSlice(sz, requiredSpaceWithoutHeader)
-	stack := string(debug.Stack())
-	runtime.SetFinalizer(&b, func(ptr *[]byte) {
-		d := *ptr
-		hdr := unsafe.Add((unsafe.Pointer)(&d[0]), -kMemHdrSz)
-		pHdr := (*memHdr)(unsafe.Pointer(hdr))
-		if allocSz := atomic.LoadInt32(&pHdr.allocSz); allocSz >= 0 {
-			logutil.Error("memory leak detected",
-				zap.Any("ptr", pHdr),
-				zap.Int("size", int(allocSz)),
-				zap.String("stack", stack),
-			)
-		}
-	})
+	if Enable {
+		stack := string(debug.Stack())
+		runtime.SetFinalizer(&b, func(ptr *[]byte) {
+			d := *ptr
+			hdr := unsafe.Add((unsafe.Pointer)(&d[0]), -kMemHdrSz)
+			pHdr := (*memHdr)(unsafe.Pointer(hdr))
+			if allocSz := atomic.LoadInt32(&pHdr.allocSz); allocSz >= 0 {
+				logutil.Error("memory leak detected",
+					zap.Any("ptr", pHdr),
+					zap.Int("size", int(allocSz)),
+					zap.String("stack", stack),
+				)
+			}
+		})
+	}
 	return b
 }
