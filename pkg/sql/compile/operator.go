@@ -1257,7 +1257,7 @@ func constructDeleteDispatchAndLocal(
 	// And then Dispatcher will use this clientSession to dispatch batches to remoteCN.
 	// When remoteCn get the batches, it should know send it to where by itself.
 	for i := 0; i < len(ss); i++ {
-		if i != currentIdx {
+		if i != currentIdx && !isSameCN(ss[i].NodeInfo.Addr, ss[currentIdx].NodeInfo.Addr) {
 			// just use this uuid in dispatch, we need to
 			// use it in the prepare func (store the map [uuid -> proc.DispatchNotifyCh])
 			arg.RemoteRegs = append(
