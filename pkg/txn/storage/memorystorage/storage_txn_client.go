@@ -135,6 +135,14 @@ func (s *StorageTxnOperator) IsOpenLog() bool {
 	panic("unimplemented")
 }
 
+func (s *StorageTxnOperator) SetOpenDump(_ bool) {
+	panic("unimplemented")
+}
+
+func (s *StorageTxnOperator) IsOpenDump() bool {
+	panic("unimplemented")
+}
+
 func (s *StorageTxnOperator) AppendEventCallback(event client.EventType, callbacks ...func(txn.TxnMeta)) {
 	panic("unimplemented")
 }

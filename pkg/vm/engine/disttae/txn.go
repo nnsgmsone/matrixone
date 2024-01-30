@@ -912,7 +912,6 @@ func (txn *Transaction) getCachedTable(
 func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	logDebugf(txn.op.Txn(), "Transaction.Commit")
 	txn.IncrStatementID(ctx, true)
-	defer txn.delTransaction()
 	if txn.readOnly.Load() {
 		return nil, nil
 	}

@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
+	moutil "github.com/matrixorigin/matrixone/pkg/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
@@ -204,6 +205,7 @@ type txnOperator struct {
 		callbacks    map[EventType][]func(txn.TxnMeta)
 		retry        bool
 		openlog      bool
+		opendump     bool
 
 		lockSeq   uint64
 		waitLocks map[uint64]Lock
@@ -589,6 +591,18 @@ func (tc *txnOperator) IsOpenLog() bool {
 	return tc.mu.openlog
 }
 
+func (tc *txnOperator) SetOpenDump(opendump bool) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	tc.mu.opendump = opendump
+}
+
+func (tx *txnOperator) IsOpenDump() bool {
+	tx.mu.RLock()
+	defer tx.mu.RUnlock()
+	return tx.mu.opendump
+}
+
 func (tc *txnOperator) PKDedupCount() int {
 	return tc.option.PKDedupCount
 }
@@ -631,7 +645,11 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 	var payload []txn.TxnRequest
 	if commit {
 		if tc.workspace != nil {
+			defer tc.workspace.Rollback(ctx)
 			reqs, err := tc.workspace.Commit(ctx)
+			if tc.IsOpenDump() && moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+				moutil.CoreDump()
+			}
 			if err != nil {
 				return nil, errors.Join(err, tc.Rollback(ctx))
 			}
@@ -688,7 +706,11 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 				Disable1PCOpt: tc.option.disable1PCOpt,
 			}})
 	}
-	return tc.trimResponses(tc.handleError(tc.doSend(ctx, requests, commit)))
+	resp, err := tc.trimResponses(tc.handleError(tc.doSend(ctx, requests, commit)))
+	if tc.mu.opendump && moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+		moutil.CoreDump()
+	}
+	return resp, err
 }
 
 func (tc *txnOperator) updateWritePartitions(requests []txn.TxnRequest, locked bool) {

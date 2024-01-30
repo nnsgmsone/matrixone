@@ -245,6 +245,9 @@ func (e *Engine) Database(ctx context.Context, name string,
 	if txn == nil || txn.op.Status() == txn2.TxnStatus_Aborted {
 		return nil, moerr.NewTxnClosedNoCtx(op.Txn().ID)
 	}
+	if strings.HasPrefix(name, "tpcc") {
+		op.SetOpenDump(true)
+	}
 	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return nil, err

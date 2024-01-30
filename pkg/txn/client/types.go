@@ -160,6 +160,9 @@ type TxnOperator interface {
 	SetOpenLog(bool)
 	IsOpenLog() bool
 
+	SetOpenDump(bool)
+	IsOpenDump() bool
+
 	// AppendEventCallback append callback. All append callbacks will be called sequentially
 	// if event happen.
 	AppendEventCallback(event EventType, callbacks ...func(txn.TxnMeta))
