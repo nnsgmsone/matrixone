@@ -17,6 +17,7 @@ package lockop
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -511,6 +513,7 @@ func doLock(
 				tableID,
 				lockedTS,
 				newSnapshotTS)
+			logutil.Info("no-conflict retry", zap.String("txn", hex.EncodeToString(txn.ID)), zap.String("old-ts", txn.SnapshotTS.DebugString()), zap.String("new-ts", newSnapshotTS.DebugString()))
 			if err := txnOp.UpdateSnapshot(ctx, newSnapshotTS); err != nil {
 				return false, false, timestamp.Timestamp{}, err
 			}
@@ -549,6 +552,7 @@ func doLock(
 		proc.TxnOperator,
 		tableID,
 		snapshotTS)
+	logutil.Info("conflict retry", zap.String("txn", hex.EncodeToString(txn.ID)), zap.String("old-ts", txn.SnapshotTS.DebugString()), zap.String("new-ts", snapshotTS.DebugString()))
 	if err := txnOp.UpdateSnapshot(ctx, snapshotTS); err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}

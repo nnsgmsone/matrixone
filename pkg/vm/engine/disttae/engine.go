@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -363,6 +364,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	}
 	var db engine.Database
 	noRepCtx := errutil.ContextWithNoReport(ctx, true)
+	tried_dbs := make([]string, 0)
 	txn.databaseMap.Range(func(k, _ any) bool {
 		key := k.(databaseKey)
 		dbName = key.name
@@ -371,6 +373,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			if err != nil {
 				return false
 			}
+			tried_dbs = append(tried_dbs, key.name)
 			distDb := db.(*txnDatabase)
 			tableName, rel, err = distDb.getRelationById(noRepCtx, tableId)
 			if err != nil {
@@ -384,12 +387,15 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	})
 
 	if rel == nil {
+		logutil.Infof("first try %v", tried_dbs)
+		tried_dbs = tried_dbs[:0]
 		dbNames := e.catalog.Databases(accountId, txn.op.SnapshotTS())
 		for _, dbName = range dbNames {
 			db, err = e.Database(noRepCtx, dbName, op)
 			if err != nil {
 				return "", "", nil, err
 			}
+			tried_dbs = append(tried_dbs, dbName)
 			distDb := db.(*txnDatabase)
 			tableName, rel, err = distDb.getRelationById(noRepCtx, tableId)
 			if err != nil {
@@ -408,6 +414,11 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			logutil.Errorf("tables: %v, tableIds: %v", tbls, tblIds)
 			util.CoreDump()
 		}
+		logutil.Infof("second try %v %v, %v", tried_dbs, txn.op.SnapshotTS().DebugString(), op.SnapshotTS().DebugString())
+		logutil.Errorf("can not find table by id %d: accountId: %v", tableId, accountId)
+		tbls, tblIds := e.catalog.Tables(accountId, 1, op.SnapshotTS())
+		logutil.Errorf("tables: %v, tableIds: %v", tbls, tblIds)
+		loguitl.Errorf("stack: %v", debug.Stack())
 		return "", "", nil, moerr.NewInternalError(ctx, "can not find table by id %d", tableId)
 	}
 	return
