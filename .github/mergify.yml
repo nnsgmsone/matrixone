@@ -1,87 +1,81 @@
 queue_rules:
   - name: default
-    conditions: []
-    checks_timeout: 4h
-
-pull_request_rules:
-  - name: Automatic merge on approval
-    conditions:
+    queue_conditions:
       - "#approved-reviews-by>=1"
       - "#changes-requested-reviews-by<=0"
       - "-label=do-not-merge/wip"
       - "check-success=UT Test on Ubuntu/x64"
       - "check-success=e2e BVT Test on Linux/x64(LAUNCH, PUSH, 1CN)"
       - "check-success=Multi-CN e2e BVT Test on Linux/x64(LAUNCH, PROXY, PUSH)"
-      # - "check-success=Multi-CN e2e BVT Test on Linux/x64(LAUNCH, PUSH)"
-      # - "check-success=UT Test on Darwin/x86"
       - "check-success=UT Test on Linux/Arm"
-      # - "check-success=BVT Test on Linux/x64"
-      # - "check-success=BVT Test on Linux/Arm"
-      # - "check-success=BVT Test on Darwin/x86"
       - "check-success=SCA Test on Ubuntu/x64"
-    actions:
-      queue:
-        name: default
-        method: squash
-        commit_message_template: |
-          {{ title }} (#{{ number }})
+    merge_conditions: []
+    checks_timeout: 4h
 
-          {{ body | get_section("## What this PR does / why we need it:") }}
+    commit_message_template: |
+      {{ title }} (#{{ number }})
 
-          Approved by: @{{ approved_reviews_by | join(', @') }}
-          
+      {{ body | get_section("## What this PR does / why we need it:") }}
+
+      Approved by: @{{ approved_reviews_by | join(', @') }}
+    merge_method: squash
+
+pull_request_rules:
   - name: Auto update branch
     conditions:
       - created-at>=00:10 ago
     actions:
-      update: 
-
+      update:
   - name: label for Bug
-    conditions: 
+    conditions:
       - body~=(?im)- \[x\] BUG
     actions:
       label:
         add:
           - kind/bug
   - name: label for Feature
-    conditions: 
+    conditions:
       - body~=(?im)- \[x\] Feature
     actions:
       label:
         add:
           - kind/feature
   - name: label for Improvement
-    conditions: 
+    conditions:
       - body~=(?im)- \[x\] Improvement
     actions:
       label:
         add:
           - kind/enhancement
   - name: label for Documentation
-    conditions: 
+    conditions:
       - body~=(?im)- \[x\] Documentation
     actions:
       label:
         add:
           - kind/documentation
   - name: label for Test and CI
-    conditions: 
+    conditions:
       - body~=(?im)- \[x\] Test and CI
     actions:
       label:
         add:
           - kind/test-ci
   - name: label for Code Refactoring
-    conditions: 
+    conditions:
       - body~=(?im)- \[x\] Code Refactoring
     actions:
       label:
         add:
           - kind/refactor
   - name: label for API-change
-    conditions: 
+    conditions:
       - body~=(?im)- \[x\] API-change
     actions:
       label:
         add:
           - kind/api-change
+  - name: Automatic merge on approval
+    conditions: []
+    actions:
+      queue:
